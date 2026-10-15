@@ -12,8 +12,8 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
   const p = parseInput(CommitInput, input);
   const subject = p.message.split('\n')[0] ?? '';
 
-  const touched = new Map<string, { name: string; files: string[] }>();
-  await withTx(ctx, async (tx) => {
+  return withTx(ctx, async (tx) => {
+    const touched = new Map<string, { name: string; files: string[] }>();
     for (const claim of await listActiveClaims(tx, actor.teamId)) {
       if (claim.agentId === actor.id) continue;
       const files = p.files.filter((f) => globMatches(claim.glob, f));
@@ -38,9 +38,8 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
         body: `${actor.name} committed ${p.sha.slice(0, 7)} on ${p.branch} touching files you claimed: ${shown}${more} — "${subject}"`,
       });
     }
+    return { notified: [...touched.values()].map((t) => t.name) };
   });
-
-  return { notified: [...touched.values()].map((t) => t.name) };
 }
 
 export async function getChanges(ctx: HubContext, actor: Actor, input: ChangesQuery = {}): Promise<CommitView[]> {

@@ -38,6 +38,28 @@ describe('recordCommit', () => {
     expect(await readInbox(env.ctx, ash)).toEqual([]);
   });
 
+  it('sends one notice to an agent whose several claims match, and skips non-matching claims', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, dylan, { globs: ['src/**'], exclusive: false });
+    await claimFiles(env.ctx, dylan, { globs: ['src/auth/**'], exclusive: false });
+    await claimFiles(env.ctx, ronit, { globs: ['docs/**'], exclusive: false });
+    const res = await recordCommit(env.ctx, ash, commit());
+    expect(res.notified).toEqual(['dylan-claude']);
+    expect(await readInbox(env.ctx, dylan)).toHaveLength(1);
+    expect(await readInbox(env.ctx, ronit)).toEqual([]);
+  });
+
+  it('truncates the file list in the notice to 10 names', async () => {
+    const { ash, dylan } = await seedTeam(env);
+    await claimFiles(env.ctx, dylan, { globs: ['src/**'], exclusive: false });
+    const files = Array.from({ length: 12 }, (_, i) => `src/file${String(i + 1).padStart(2, '0')}.ts`);
+    await recordCommit(env.ctx, ash, commit({ files }));
+    const [msg] = await readInbox(env.ctx, dylan);
+    expect(msg!.body).toContain('src/file10.ts');
+    expect(msg!.body).toContain('and 2 more');
+    expect(msg!.body).not.toContain('src/file11.ts');
+  });
+
   it('rejects malformed input', async () => {
     const { ash } = await seedTeam(env);
     await expect(recordCommit(env.ctx, ash, commit({ sha: 'not-a-sha' }))).rejects.toMatchObject({ code: 'invalid' });
@@ -52,5 +74,14 @@ describe('getChanges', () => {
     expect((await getChanges(env.ctx, ash)).map((c) => c.sha)).toEqual(['bbbbbbb', 'aaaaaaa']);
     const mine = await getChanges(env.ctx, ash, { agent: 'ash-codex' });
     expect(mine).toEqual([expect.objectContaining({ sha: 'aaaaaaa', agent: 'ash-codex', files: ['src/auth/callback.ts'] })]);
+  });
+
+  it('filters by since, normalising non-millisecond timestamps', async () => {
+    const { ash } = await seedTeam(env);
+    await recordCommit(env.ctx, ash, commit({ sha: 'aaaaaaa' }));
+    env.advance(500);
+    await recordCommit(env.ctx, ash, commit({ sha: 'bbbbbbb' }));
+    const recent = await getChanges(env.ctx, ash, { since: '2026-01-01T00:00:00Z' });
+    expect(recent.map((c) => c.sha)).toEqual(['bbbbbbb']);
   });
 });
