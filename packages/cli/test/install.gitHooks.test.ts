@@ -1,11 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { realExec } from '../src/deps.js';
 import { installGitHooks } from '../src/install/gitHooks.js';
-import { shellQuote } from '../src/paths.js';
 
 const ENV = {
   GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@example.com',
@@ -17,6 +16,16 @@ let tmp: string;
 let repo: string;
 let standin: string;
 let command: string;
+const commitFile = async (n = 'a.txt') => {
+  writeFileSync(join(repo, n), `${n}\n`);
+  await git(repo, 'add', n);
+  return realExec('git', ['commit', '-q', '-m', 'x'], { cwd: repo });
+};
+const mkStandin = (name: string, body: string) => {
+  const p = join(tmp, name);
+  writeFileSync(p, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return p;
+};
 
 const git = async (cwd: string, ...args: string[]) => {
   const r = await realExec('git', args, { cwd });
@@ -33,7 +42,7 @@ beforeEach(async () => {
   await git(repo, 'init', '-q', '-b', 'main');
   standin = join(tmp, 'standin.sh');
   writeFileSync(standin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  command = shellQuote(standin);
+  command = standin;
 });
 afterEach(async () => {
   for (const k of Object.keys(ENV)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
@@ -69,7 +78,7 @@ describe('installGitHooks', () => {
     expect((await realExec(pre, [], { cwd: repo })).code).toBe(3); // the hook propagates the prev's code
   });
 
-  it('lets a commit through when the user hook passes and the stand-in exits 0', async () => {
+  it('lets a commit through when the stand-in target exits 0', async () => {
     await installGitHooks(deps, repo, { command });
     writeFileSync(join(repo, 'a.txt'), 'a\n');
     await git(repo, 'add', 'a.txt');
@@ -110,7 +119,68 @@ describe('installGitHooks', () => {
     await installGitHooks(deps, repo, { command });
     const other = join(tmp, 'other.sh');
     writeFileSync(other, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    expect((await installGitHooks(deps, repo, { command: shellQuote(other) })).status).toBe('installed');
+    expect((await installGitHooks(deps, repo, { command: other })).status).toBe('installed');
     expect(existsSync(join(repo, '.git/hooks/pre-commit.agentteams-prev'))).toBe(false);
+    expect(readFileSync(join(repo, '.git/hooks/pre-commit'), 'utf8')).toContain(other);
+    expect(readFileSync(join(repo, '.git/hooks/pre-commit'), 'utf8')).not.toContain(standin);
+  });
+
+  it('reports a one-line note, and unchanged detail says "already installed"', async () => {
+    expect((await installGitHooks(deps, repo, { command })).status).toBe('installed');
+    expect((await installGitHooks(deps, repo, { command })).detail).toBe('already installed');
+    await git(repo, 'config', 'core.hooksPath', '.githooks');
+    expect((await installGitHooks(deps, repo, { command })).detail).not.toMatch(/\n/);
+  });
+
+  it('never blocks a commit when the target is missing', async () => {
+    await installGitHooks(deps, repo, { command: join(tmp, 'gone.sh') });
+    expect((await commitFile()).code).toBe(0);
+  });
+
+  it('default node/bin targets are guarded so a missing bin does not block', async () => {
+    await installGitHooks(deps, repo);
+    const pre = join(repo, '.git/hooks/pre-commit');
+    expect(readFileSync(pre, 'utf8')).toMatch(/if \[ -x '.*' \] && \[ -f '.*' \]; then exec /);
+    expect(readFileSync(pre, 'utf8').trimEnd().endsWith('exit 0')).toBe(true);
+  });
+
+  it('pre-commit blocks when the target exits 1; post-commit failure leaves the commit', async () => {
+    const failing = mkStandin('fail.sh', 'exit 1');
+    await installGitHooks(deps, repo, { command: failing });
+    expect((await commitFile()).code).not.toBe(0);
+    rmSync(join(repo, '.git/hooks/pre-commit'));
+    expect((await commitFile()).code).toBe(0);
+    expect((await realExec('git', ['rev-parse', '--verify', 'HEAD'], { cwd: repo })).code).toBe(0);
+  });
+
+  it('chains a user post-commit hook, moving it to prev', async () => {
+    const marker = join(tmp, 'ran');
+    const post = join(repo, '.git/hooks/post-commit');
+    writeFileSync(post, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    await installGitHooks(deps, repo, { command });
+    expect(existsSync(`${post}.agentteams-prev`)).toBe(true);
+    expect(readFileSync(post, 'utf8')).toContain('# agentteams-managed');
+    expect((await commitFile()).code).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('works when the command path contains a space and a single quote', async () => {
+    const dir = join(tmp, "it's a dir");
+    mkdirSync(dir);
+    const log = join(tmp, 'invoked');
+    const odd = join(dir, 'cli.sh');
+    writeFileSync(odd, `#!/bin/sh\necho "$@" >> '${log}'\nexit 0\n`, { mode: 0o755 });
+    await installGitHooks(deps, repo, { command: odd });
+    expect((await commitFile()).code).toBe(0);
+    expect(readFileSync(log, 'utf8')).toContain('git-hook pre-commit');
+  });
+
+  it('restores the user hook if writing the managed one fails', async () => {
+    const hooks = join(repo, '.git/hooks');
+    writeFileSync(join(hooks, 'pre-commit'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+    mkdirSync(join(hooks, 'post-commit')); // a directory makes the post-commit write fail
+    await expect(installGitHooks(deps, repo, { command })).rejects.toThrow();
+    expect(existsSync(join(hooks, 'pre-commit.agentteams-prev'))).toBe(false);
+    expect(readFileSync(join(hooks, 'pre-commit'), 'utf8')).toContain('exit 3');
   });
 });

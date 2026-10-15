@@ -1,34 +1,51 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CliDeps } from '../deps.js';
+import { oneLine } from '../format.js';
 import { gitPath, hooksPathConfigured } from '../git.js';
-import { cliCommand } from '../paths.js';
+import { cliArgv, shellQuote } from '../paths.js';
 import { MANAGED_MARKER } from './hooksConfig.js';
 
 export type GitHookName = 'pre-commit' | 'post-commit';
 export interface GitHooksResult { status: 'installed' | 'unchanged' | 'skipped'; detail: string }
 export interface GitHooksOptions {
-  /** Shell fragment that re-invokes the CLI (default: quoted node + bin). Overridden by tests only. */
+  /** Path of a single executable to exec instead of node + bin. Used by tests only. */
   command?: string;
 }
 
 const HOOKS: readonly GitHookName[] = ['pre-commit', 'post-commit'];
 const FILE_MARKER = '# agentteams-managed';
 
-/** Pure: the managed hook script. `cli` is e.g. `'<node>' '<bin>'`. */
-export function managedScript(name: GitHookName, cli: string): string {
+/** What the hook execs: node plus the CLI entry point, or (tests) a single executable. */
+export type HookTarget = { node: string; bin: string } | { command: string };
+
+const targetParts = (t: HookTarget): { argv: string; guard: string } => {
+  if ('command' in t) return { argv: shellQuote(t.command), guard: `[ -x ${shellQuote(t.command)} ]` };
+  const [node, bin] = [shellQuote(t.node), shellQuote(t.bin)];
+  return { argv: `${node} ${bin}`, guard: `[ -x ${node} ] && [ -f ${bin} ]` };
+};
+
+/**
+ * Pure: the managed hook script. The final invocation is guarded so that a moved or deleted
+ * node/CLI never blocks a commit (the script just exits 0). The injectable test `command` is a
+ * single executable path, guarded with `-x`; the default is guarded on both node (`-x`) and bin (`-f`).
+ */
+export function managedScript(name: GitHookName, target: HookTarget): string {
   const blocking = name === 'pre-commit';
-  const prevTail = blocking ? '|| exit $?' : '|| true';
-  const lastTail = blocking ? '' : ' || true';
+  const { argv, guard } = targetParts(target);
+  const invoke = `${argv} git-hook ${name} ${MANAGED_MARKER}`;
   return [
     '#!/bin/sh',
     FILE_MARKER,
     `prev="$(dirname "$0")/${name}.agentteams-prev"`,
-    `if [ -x "$prev" ]; then "$prev" "$@" ${prevTail}; fi`,
-    `${blocking ? 'exec ' : ''}${cli} git-hook ${name} ${MANAGED_MARKER}${lastTail}`,
+    `if [ -x "$prev" ]; then "$prev" "$@" ${blocking ? '|| exit $?' : '|| true'}; fi`,
+    blocking ? `if ${guard}; then exec ${invoke}; fi` : `if ${guard}; then ${invoke} || true; fi`,
+    'exit 0',
     '',
   ].join('\n');
 }
+
+const oneLinePath = (p: string): string => oneLine(p);
 
 const readOrNull = (p: string): Promise<string | null> =>
   readFile(p, 'utf8').then((s) => s, (e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return null; throw e; });
@@ -38,7 +55,9 @@ export async function installGitHooks(
   repoPath: string,
   opts: GitHooksOptions = {},
 ): Promise<GitHooksResult> {
-  const cli = opts.command ?? cliCommand();
+  const target: HookTarget = opts.command !== undefined
+    ? { command: opts.command }
+    : { node: cliArgv().command, bin: cliArgv().args[0]! };
   let dir: string;
   try {
     dir = await gitPath(deps, repoPath, 'hooks');
@@ -47,10 +66,12 @@ export async function installGitHooks(
   }
   const configured = await hooksPathConfigured(deps, repoPath);
   if (configured) {
-    const lines = HOOKS.map((h) => `  ${h}: ${cli} git-hook ${h} ${MANAGED_MARKER}`);
+    // The two lines a user adds to their hook manager (to be documented in the README, Task 8):
+    //   pre-commit:  agentteams git-hook pre-commit --agentteams-managed
+    //   post-commit: agentteams git-hook post-commit --agentteams-managed || true
     return {
       status: 'skipped',
-      detail: `core.hooksPath is set (${configured}); add these lines to your own hooks:\n${lines.join('\n')}`,
+      detail: `git hooks not installed: core.hooksPath is set (${oneLinePath(configured)}); add 'agentteams git-hook pre-commit' / 'post-commit' to your hook manager — see README`,
     };
   }
 
@@ -58,7 +79,7 @@ export async function installGitHooks(
   const plan: { name: GitHookName; path: string; script: string; moveExisting: boolean }[] = [];
   for (const name of HOOKS) {
     const path = join(dir, name);
-    const script = managedScript(name, cli);
+    const script = managedScript(name, target);
     const existing = await readOrNull(path);
     if (existing === script) continue;
     let moveExisting = false;
@@ -70,13 +91,19 @@ export async function installGitHooks(
     }
     plan.push({ name, path, script, moveExisting });
   }
-  if (plan.length === 0) return { status: 'unchanged', detail: 'git hooks already installed' };
+  if (plan.length === 0) return { status: 'unchanged', detail: 'already installed' };
 
   await mkdir(dir, { recursive: true });
   for (const step of plan) {
-    if (step.moveExisting) await rename(step.path, `${step.path}.agentteams-prev`);
-    await writeFile(step.path, step.script, { mode: 0o755 });
-    await chmod(step.path, 0o755);
+    const prev = `${step.path}.agentteams-prev`;
+    if (step.moveExisting) await rename(step.path, prev);
+    try {
+      await writeFile(step.path, step.script, { mode: 0o755 });
+      await chmod(step.path, 0o755);
+    } catch (err) {
+      if (step.moveExisting) await rename(prev, step.path).catch(() => undefined); // restore the user's hook
+      throw err;
+    }
   }
   return { status: 'installed', detail: `installed ${plan.map((s) => s.name).join(', ')} in ${dir}` };
 }

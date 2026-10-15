@@ -80,7 +80,8 @@ describe('runPreCommit', () => {
     await saveCredential(mkDeps(), cred(ronitKey, 'http://127.0.0.1:1'));
     await stage('src/a.ts');
     expect(await runPreCommit(mkDeps())).toBe(0);
-    expect(err.join('\n')).toContain('agentteams: warning: could not check file claims');
+    expect(err).toHaveLength(1);
+    expect(err[0]).toContain('agentteams: warning: could not check file claims');
     expect(err.join('\n')).toContain('committing anyway');
   });
 
@@ -110,6 +111,15 @@ describe('runPreCommit', () => {
     expect(err.join('\n')).toContain('committing over claims held by ash-codex');
     const events = await new HubClient(hub.url, { apiKey: ronitKey }).activity({ limit: 50 });
     expect(events.filter((e) => e.type === 'claim_overridden')).toHaveLength(1);
+  });
+
+  it.each(['true', '0', ''])('does not override when AGENTTEAMS_ALLOW=%j', async (v) => {
+    await saveCredential(mkDeps(), cred(ronitKey));
+    await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
+    await stage('src/a.ts');
+    expect(await runPreCommit(mkDeps({ AGENTTEAMS_ALLOW: v }))).toBe(1);
+    const events = await new HubClient(hub.url, { apiKey: ronitKey }).activity({ limit: 50 });
+    expect(events.filter((e) => e.type === 'claim_overridden')).toHaveLength(0);
   });
 
   it('allows a non-exclusive claim', async () => {
@@ -162,7 +172,8 @@ describe('runPostCommit', () => {
     await saveCredential(mkDeps(), cred(ronitKey, 'http://127.0.0.1:1'));
     await commit();
     expect(await runPostCommit(mkDeps())).toBe(0);
-    expect(err.join('\n')).toContain('agentteams: warning');
+    expect(err).toHaveLength(1);
+    expect(err[0]).toContain('agentteams: warning');
   });
 
   it('returns 0 silently with no credential', async () => {

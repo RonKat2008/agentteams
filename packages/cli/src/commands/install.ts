@@ -16,7 +16,7 @@ export async function runInstallers(deps: CliDeps, cred: Credential): Promise<In
   const git = await installGitHooks(deps, cred.repoPath).catch((e: unknown) => ({
     status: 'skipped' as const, detail: e instanceof Error ? e.message : String(e),
   }));
-  if (git.status === 'skipped') report.warnings.push(`git hooks skipped: ${git.detail}`);
+  if (git.status === 'skipped') report.warnings.push(git.detail.startsWith('git hooks') ? git.detail : `git hooks not installed: ${git.detail}`);
   else report.done.push(`git: ${git.detail}`);
   return report;
 }
