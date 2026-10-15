@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTestContext, seedTeam, type TestEnv } from './helpers.js';
 import { readInbox, sendMessage } from '../src/services/messages.js';
-import { authenticate, joinTeam } from '../src/services/teams.js';
+import { authenticate, joinTeam, setOrchestrator } from '../src/services/teams.js';
 import { getActivity } from '../src/services/activity.js';
 
 let env: TestEnv;
@@ -30,6 +30,20 @@ describe('direct messages', () => {
     const { ash, dylan } = await seedTeam(env);
     await sendMessage(env.ctx, dylan, { to: 'ronit-claude', body: 'private' });
     expect(await readInbox(env.ctx, ash)).toEqual([]);
+  });
+});
+
+describe('from_role', () => {
+  it('is frozen at send time and survives an orchestrator change', async () => {
+    const { ronit, dylan, ash } = await seedTeam(env);
+    await sendMessage(env.ctx, dylan, { to: 'ash-codex', body: 'peer note', kind: 'fyi' });
+    await sendMessage(env.ctx, ronit, { to: 'ash-codex', body: 'do it', kind: 'command' });
+    await setOrchestrator(env.ctx, ronit, { agent: 'dylan-claude' });
+    const inbox = await readInbox(env.ctx, ash);
+    expect(inbox.map((m) => [m.from, m.fromRole])).toEqual([
+      ['dylan-claude', 'peer'],
+      ['ronit-claude', 'orchestrator'],
+    ]);
   });
 });
 

@@ -32,6 +32,7 @@ export interface MessagesTable {
   team_id: string;
   from_agent_id: string;
   to_agent_id: string | null; // null = broadcast to all
+  from_role: 'orchestrator' | 'peer'; // frozen at send time
   kind: MessageKind;
   body: string;
   created_at: string;

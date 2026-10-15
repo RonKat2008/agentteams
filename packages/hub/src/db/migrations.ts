@@ -38,6 +38,7 @@ const migrations: Record<string, Migration> = {
         .addColumn('team_id', 'text', (c) => c.notNull())
         .addColumn('from_agent_id', 'text', (c) => c.notNull())
         .addColumn('to_agent_id', 'text')
+        .addColumn('from_role', 'text', (c) => c.notNull())
         .addColumn('kind', 'text', (c) => c.notNull())
         .addColumn('body', 'text', (c) => c.notNull())
         .addColumn('created_at', 'text', (c) => c.notNull())

@@ -12,9 +12,11 @@ export async function insertMessage(
   m: { teamId: string; fromId: string; toId: string | null; kind: MessageKind; body: string },
 ): Promise<string> {
   const id = ctx.newId();
+  const team = await getTeamRow(ctx, m.teamId);
+  const fromRole = m.fromId === team.orchestrator_agent_id ? 'orchestrator' : 'peer';
   await ctx.db.insertInto('messages').values({
     id, team_id: m.teamId, from_agent_id: m.fromId, to_agent_id: m.toId,
-    kind: m.kind, body: m.body, created_at: ctx.now().toISOString(),
+    from_role: fromRole, kind: m.kind, body: m.body, created_at: ctx.now().toISOString(),
   }).execute();
   return id;
 }
@@ -39,13 +41,12 @@ export async function sendMessage(ctx: HubContext, actor: Actor, input: SendMess
 
 export async function readInbox(ctx: HubContext, actor: Actor, input: ReadInboxInput = {}): Promise<InboxMessage[]> {
   const p = parseInput(ReadInboxInput, input);
-  const team = await getTeamRow(ctx, actor.teamId);
   const me = await ctx.db.selectFrom('agents').select('created_at').where('id', '=', actor.id).executeTakeFirstOrThrow();
 
   const rows = await ctx.db.selectFrom('messages as m')
     .innerJoin('agents as a', 'a.id', 'm.from_agent_id')
     .leftJoin('message_reads as r', (join) => join.onRef('r.message_id', '=', 'm.id').on('r.agent_id', '=', actor.id))
-    .select(['m.id', 'm.kind', 'm.body', 'm.created_at', 'm.to_agent_id', 'a.id as from_id', 'a.name as from_name'])
+    .select(['m.id', 'm.kind', 'm.body', 'm.created_at', 'm.to_agent_id', 'm.from_role', 'a.name as from_name'])
     .where('m.team_id', '=', actor.teamId)
     .where('m.from_agent_id', '!=', actor.id)
     .where('r.message_id', 'is', null)
@@ -67,7 +68,7 @@ export async function readInbox(ctx: HubContext, actor: Actor, input: ReadInboxI
   return rows.map((r) => ({
     id: r.id,
     from: r.from_name,
-    fromRole: r.from_id === team.orchestrator_agent_id ? 'orchestrator' : 'peer',
+    fromRole: r.from_role,
     to: r.to_agent_id ? actor.name : 'all',
     kind: r.kind,
     body: r.body,
