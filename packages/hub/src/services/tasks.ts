@@ -172,7 +172,9 @@ export async function markMerged(ctx: HubContext, actor: Actor, input: MarkMerge
     if (task.status !== 'done') throw new DomainError('conflict', `task #${task.number} is not done yet`);
     if (task.merged_at) throw new DomainError('conflict', `task #${task.number} is already merged`);
     const nowIso = tx.now().toISOString();
-    await tx.db.updateTable('tasks').set({ merged_at: nowIso, updated_at: nowIso }).where('id', '=', task.id).execute();
+    const updated = await tx.db.updateTable('tasks').set({ merged_at: nowIso, updated_at: nowIso })
+      .where('id', '=', task.id).where('merged_at', 'is', null).executeTakeFirst();
+    if (Number(updated.numUpdatedRows) === 0) throw new DomainError('conflict', `task #${task.number} is already merged`);
     await logEvent(tx, actor.teamId, actor.id, 'merged', {
       task: task.number, branch: task.branch, ...(p.pr ? { pr: p.pr } : {}),
     });

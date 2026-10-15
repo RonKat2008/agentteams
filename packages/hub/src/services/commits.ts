@@ -27,11 +27,13 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
       entry.files.push(...files.filter((f) => !entry.files.includes(f)));
       touched.set(claim.agentId, entry);
     }
-    await tx.db.insertInto('commits').values({
+    const inserted = await tx.db.insertInto('commits').values({
       id: tx.newId(), team_id: actor.teamId, agent_id: actor.id, sha: p.sha, branch: p.branch,
       message: p.message, files_json: JSON.stringify(p.files), insertions: p.insertions, deletions: p.deletions,
       created_at: tx.now().toISOString(),
-    }).execute();
+    }).onConflict((oc) => oc.columns(['team_id', 'sha', 'branch']).doNothing()).executeTakeFirst();
+    // A concurrent identical commit won the race: treat as a duplicate, with no event or messages.
+    if (Number(inserted.numInsertedOrUpdatedRows ?? 0) === 0) return { notified: [], duplicate: true };
     await logEvent(tx, actor.teamId, actor.id, 'commit', {
       sha: p.sha, branch: p.branch, subject, files: p.files.length, insertions: p.insertions, deletions: p.deletions,
     });

@@ -3,6 +3,7 @@ import { Migrator, type Migration, type MigrationProvider } from 'kysely/migrati
 import type { Database } from './schema.js';
 
 // Only portable column types (text, integer) so the same migrations run on SQLite and Postgres.
+// Keys are sorted as strings. The next key must be `003_...`; use 3-digit prefixes from here on.
 const migrations: Record<string, Migration> = {
   '0001_init': {
     async up(db: Kysely<any>) {

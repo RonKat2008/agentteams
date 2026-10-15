@@ -4,6 +4,7 @@ import { assignTask, claimTask, completeTask, createTask, listTasks, markMerged,
 import { readInbox } from '../src/services/messages.js';
 import { getTeamStatus } from '../src/services/teams.js';
 import { getActivity } from '../src/services/activity.js';
+import { authenticate, createTeam } from '../src/services/teams.js';
 
 let env: TestEnv;
 beforeEach(async () => { env = await makeTestContext(); });
@@ -179,5 +180,15 @@ describe('markMerged', () => {
   it('exposes mergedAt as null on unmerged tasks', async () => {
     const { ronit } = await doneTask();
     expect((await listTasks(env.ctx, ronit))[0]!.mergedAt).toBeNull();
+  });
+});
+
+describe('markMerged isolation', () => {
+  it('returns not_found for a task number that exists only in another team', async () => {
+    const { ronit } = await seedTeam(env);
+    const t = await createTeam(env.ctx, { name: 'other', member: 'zed', tool: 'claude', repo: { provider: 'local', defaultBranch: 'main' } });
+    const zed = await authenticate(env.ctx, t.apiKey);
+    await createTask(env.ctx, zed, { title: 'Theirs' });
+    await expect(markMerged(env.ctx, ronit, { task: 1 })).rejects.toMatchObject({ code: 'not_found' });
   });
 });

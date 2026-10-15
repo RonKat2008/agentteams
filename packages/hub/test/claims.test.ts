@@ -3,6 +3,7 @@ import { makeTestContext, seedTeam, type TestEnv } from './helpers.js';
 import { checkFiles, claimFiles, globsOverlap, recordClaimOverride, releaseFiles, whoOwns } from '../src/services/claims.js';
 import { readInbox } from '../src/services/messages.js';
 import { getActivity } from '../src/services/activity.js';
+import { createTeam } from '../src/services/teams.js';
 import { getTeamStatus } from '../src/services/teams.js';
 
 let env: TestEnv;
@@ -173,5 +174,35 @@ describe('recordClaimOverride', () => {
     const { dylan, ronit } = await seedTeam(env);
     expect(await recordClaimOverride(env.ctx, dylan, { paths: ['src/a.ts'] })).toEqual({ owners: [] });
     expect((await getActivity(env.ctx, ronit)).filter((e) => e.type === 'claim_overridden')).toEqual([]);
+  });
+});
+
+describe('cross-team isolation and tie-breaks', () => {
+  const otherTeam = async () => {
+    const t = await createTeam(env.ctx, { name: 'other', member: 'zed', tool: 'claude', repo: { provider: 'local', defaultBranch: 'main' } });
+    const { authenticate } = await import('../src/services/teams.js');
+    return authenticate(env.ctx, t.apiKey);
+  };
+
+  it("hides another team's claims from checkFiles and recordClaimOverride", async () => {
+    const { dylan, ronit } = await seedTeam(env);
+    const zed = await otherTeam();
+    await claimFiles(env.ctx, zed, { globs: ['src/**'] });
+    expect((await checkFiles(env.ctx, dylan, { paths: ['src/a.ts'] })).conflicts).toEqual([]);
+    expect(await recordClaimOverride(env.ctx, dylan, { paths: ['src/a.ts'] })).toEqual({ owners: [] });
+    expect((await getActivity(env.ctx, ronit)).filter((e) => e.type === 'claim_overridden')).toEqual([]);
+    expect(await readInbox(env.ctx, zed)).toEqual([]);
+  });
+
+  it('breaks ties on one path by agent name', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['src/**'] });
+    // two agents whose non-overlapping globs both match one path via a broad pattern
+    await env.ctx.db.insertInto('claims').values({
+      id: 'zz-claim', team_id: ronit.teamId, agent_id: dylan.id, glob: '**/a.ts', exclusive: 1,
+      expires_at: '2027-01-01T00:00:00.000Z', created_at: '2026-01-01T00:00:00.000Z',
+    }).execute();
+    const res = await checkFiles(env.ctx, ronit, { paths: ['src/a.ts'] });
+    expect(res.conflicts.map((c) => c.agent)).toEqual(['ash-codex', 'dylan-claude']);
   });
 });

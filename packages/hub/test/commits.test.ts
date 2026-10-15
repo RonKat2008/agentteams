@@ -105,3 +105,14 @@ describe('recordCommit dedupe', () => {
     expect((await recordCommit(env.ctx, ash, commit({ branch: 'other' }))).duplicate).toBe(false);
   });
 });
+
+describe('recordCommit concurrency', () => {
+  it('lets exactly one of two concurrent identical commits through', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, dylan, { globs: ['src/auth/**'], exclusive: false });
+    const results = await Promise.all([recordCommit(env.ctx, ash, commit()), recordCommit(env.ctx, ash, commit())]);
+    expect(results.filter((r) => r.duplicate)).toHaveLength(1);
+    expect((await getActivity(env.ctx, ronit)).filter((e) => e.type === 'commit')).toHaveLength(1);
+    expect(await readInbox(env.ctx, dylan)).toHaveLength(1);
+  });
+});
