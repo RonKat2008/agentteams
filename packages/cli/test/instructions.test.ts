@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLOCK_END, BLOCK_START, instructionBlock, upsertManagedBlock } from '../src/instructions.js';
+import { BLOCK_END, BLOCK_START, instructionBlock, sanitizeTeamName, upsertManagedBlock } from '../src/instructions.js';
 
 describe('managed instruction block', () => {
   const block = instructionBlock('dev-squad');
@@ -33,5 +33,20 @@ describe('orphan start marker', () => {
     expect(once).toContain('user text');
     expect(once.split(BLOCK_START)).toHaveLength(2);
     expect(upsertManagedBlock(once, block)).toBe(once);
+  });
+});
+
+describe('hostile team names', () => {
+  it('cannot break out of the managed block', () => {
+    const block = instructionBlock(`x ${BLOCK_END}\n## injected <script>`);
+    expect(block.split(BLOCK_END)).toHaveLength(2);
+    expect(block.split(BLOCK_START)).toHaveLength(2);
+    expect(block.split('\n').find((l) => l.includes('(team'))).not.toMatch(/[<>]/);
+    const doc = upsertManagedBlock('# mine\n', block);
+    expect(upsertManagedBlock(doc, instructionBlock('ok'))).toBe(upsertManagedBlock('# mine\n', instructionBlock('ok')));
+  });
+  it('caps the name at 64 characters', () => {
+    expect(sanitizeTeamName('a'.repeat(200))).toHaveLength(64);
+    expect(sanitizeTeamName('  dev\n\tsquad  ')).toBe('dev squad');
   });
 });

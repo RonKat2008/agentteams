@@ -4,7 +4,20 @@ import { dirname } from 'node:path';
 export const BLOCK_START = '<!-- agentteams:start -->';
 export const BLOCK_END = '<!-- agentteams:end -->';
 
-export function instructionBlock(teamName: string): string {
+const MAX_TEAM_NAME = 64;
+
+/** Team names come from the hub; never let one break out of the managed block or inject markup. */
+export function sanitizeTeamName(name: string): string {
+  return name
+    .replace(/[\p{Cc}\u2028\u2029<>]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_TEAM_NAME)
+    .trim();
+}
+
+export function instructionBlock(rawTeamName: string): string {
+  const teamName = sanitizeTeamName(rawTeamName);
   return `${BLOCK_START}
 ## agentteams
 
