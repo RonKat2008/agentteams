@@ -15,6 +15,12 @@ import { runMcpProxy } from './mcpProxy.js';
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
 
+function parseLimit(v: string): number {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new Error('--limit must be a positive integer');
+  return n;
+}
+
 const agentOpt = (def?: string) => new Option('--agent <tool>', 'claude | codex | other').choices(TOOLS).default(def);
 
 function buildProgram(deps: CliDeps, exit: { code: number }): Command {
@@ -42,7 +48,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('status').description('Show team status').addOption(agentOpt())
     .action((o) => statusCommand(deps, o));
   sub('log').description('Show team activity').option('-f, --follow').addOption(agentOpt())
-    .option('--limit <n>', 'number of events', (v) => Number.parseInt(v, 10), DEFAULT_LOG_LIMIT)
+    .option('--limit <n>', 'number of events', parseLimit, DEFAULT_LOG_LIMIT)
     .action(async (o: { follow?: boolean; limit: number; agent?: ToolKind }) => {
       const ac = new AbortController();
       const stop = () => ac.abort();

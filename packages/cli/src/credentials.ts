@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { dirname, sep } from 'node:path';
 import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from './deps.js';
@@ -35,7 +35,10 @@ export async function loadCredentials(deps: Deps): Promise<Credential[]> {
 
 const sameSlot = (a: Credential, b: Credential) => a.repoPath === b.repoPath && a.tool === b.tool;
 
-export async function saveCredential(deps: Deps, cred: Credential): Promise<void> {
+const real = (p: string): Promise<string> => realpath(p).catch(() => p);
+
+export async function saveCredential(deps: Deps, input: Credential): Promise<void> {
+  const cred = { ...input, repoPath: await real(input.repoPath) };
   const file = credentialsPath(deps);
   const dir = dirname(file);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -53,8 +56,9 @@ const contains = (repoPath: string, cwd: string) =>
   cwd === repoPath || cwd.startsWith(repoPath.endsWith(sep) ? repoPath : repoPath + sep);
 
 export async function resolveCredential(deps: Deps, cwd: string, tool?: ToolKind): Promise<Credential | null> {
+  const here = await real(cwd);
   const matches = (await loadCredentials(deps))
-    .filter((c) => (tool ? c.tool === tool : true) && contains(c.repoPath, cwd))
+    .filter((c) => (tool ? c.tool === tool : true) && contains(c.repoPath, here))
     .sort((a, b) => b.repoPath.length - a.repoPath.length);
   return matches[0] ?? null;
 }

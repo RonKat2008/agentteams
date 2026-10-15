@@ -28,9 +28,9 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
     repoPath, tool: opts.agent, hubUrl, teamName: res.teamName, agentName: res.agentName,
     apiKey: res.apiKey, createdAt: new Date().toISOString(),
   };
-  await saveCredential(deps, cred);
   deps.out(`Created team "${res.teamName}". You are ${res.agentName} (orchestrator).`);
   deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
   deps.out(`Teammates join with: agentteams join ${res.inviteCode} --hub ${hubUrl}`);
+  await saveCredential(deps, cred);
   if (opts.install) printReport(deps, await runInstallers(deps, cred));
 }

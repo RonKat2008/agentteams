@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHub, type RunningHub } from '@agentteams/hub';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { logCommand } from '../src/commands/log.js';
 import { upCommand } from '../src/commands/up.js';
-import { resolveCredential } from '../src/credentials.js';
+import { resolveCredential, saveCredential } from '../src/credentials.js';
 import { main } from '../src/main.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
@@ -128,6 +128,48 @@ describe('agentteams commands', () => {
     const t = mk();
     expect(await run(t, 'create', 'x', '--hub', 'http://127.0.0.1:1', '--local')).toBe(1);
     expect(t.err.join('\n')).toContain('cannot reach the agentteams hub at http://127.0.0.1:1');
+  });
+
+  it('create prints the invite code before saving, so a save failure keeps it', async () => {
+    const t = mk({}, {});
+    const blocker = join(t.root, 'blocker');
+    writeFileSync(blocker, 'x');
+    t.deps.env = { AGENTTEAMS_HOME: join(blocker, 'sub') };
+    expect(await run(t, 'create', 'savefail', '--hub', hub.url, '--local', '--no-install')).toBe(1);
+    expect(t.out.some((l) => l.startsWith('Invite code: '))).toBe(true);
+  });
+
+  it('refuses to guess between several agents in one repo', async () => {
+    const t = mk({}, { claude: { code: 0 } });
+    expect(await run(t, 'create', 'amb', '--hub', hub.url, '--local', '--no-install')).toBe(0);
+    expect(await run(t, 'join', inviteCodeOf(t), '--agent', 'codex', '--as', 'b', '--hub', hub.url, '--no-install')).toBe(0);
+    for (const args of [['status'], ['log'], ['invite', 'rotate'], ['orchestrator', 'b-codex']]) {
+      t.err.length = 0;
+      expect(await run(t, ...args)).toBe(1);
+      expect(t.err.join('\n')).toContain('multiple agentteams agents in this repo (claude, codex); pass --agent <tool>');
+    }
+    expect(await run(t, 'status', '--agent', 'codex')).toBe(0);
+  });
+
+  it('log rejects a non-positive --limit', async () => {
+    const t = mk();
+    for (const v of ['0', 'abc', '-3']) {
+      t.err.length = 0;
+      expect(await run(t, 'log', '--limit', v)).toBe(1);
+    }
+    expect(t.err.join('\n')).toContain('agentteams: --limit must be a positive integer');
+  });
+
+  it('credentials match across symlinked and real paths', async () => {
+    const t = mk();
+    const real = join(t.root, 'realrepo');
+    const link = join(t.root, 'linkrepo');
+    mkdirSync(real);
+    symlinkSync(real, link);
+    const base = { tool: 'claude' as const, hubUrl: 'h', teamName: 't', agentName: 'a', apiKey: 'k', createdAt: 'x' };
+    await saveCredential(t.deps, { ...base, repoPath: link });
+    expect(await resolveCredential(t.deps, real, 'claude')).not.toBeNull();
+    expect(await resolveCredential(t.deps, link, 'claude')).not.toBeNull();
   });
 
   it('up serves until aborted and then releases the port', async () => {

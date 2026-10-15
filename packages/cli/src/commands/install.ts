@@ -1,4 +1,5 @@
 import type { ToolKind } from '@agentteams/shared';
+import { realpath } from 'node:fs/promises';
 import { loadCredentials, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { installClaude, type InstallReport } from '../install/claude.js';
@@ -18,7 +19,8 @@ export function printReport(deps: CliDeps, report: InstallReport): void {
 }
 
 export async function installCommand(deps: CliDeps, opts: { agent?: ToolKind | 'all' }): Promise<void> {
-  const repo = await repoRoot(deps, deps.cwd);
+  const raw = await repoRoot(deps, deps.cwd);
+  const repo = await realpath(raw).catch(() => raw);
   const wanted = opts.agent && opts.agent !== 'all' ? opts.agent : undefined;
   const creds = (await loadCredentials(deps)).filter((c) => c.repoPath === repo && (!wanted || c.tool === wanted));
   if (creds.length === 0) throw new Error(noCredentialsMessage(repo));

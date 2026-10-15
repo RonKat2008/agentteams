@@ -1,5 +1,5 @@
 import type { ToolKind } from '@agentteams/shared';
-import { resolveCredential, type Credential } from '../credentials.js';
+import { loadCredentials, resolveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
 import { repoRoot } from '../repo.js';
@@ -7,6 +7,13 @@ import { repoRoot } from '../repo.js';
 export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promise<Credential> {
   const cred = await resolveCredential(deps, deps.cwd, agent);
   if (!cred) throw new Error(noCredentialsMessage(await repoRoot(deps, deps.cwd)));
+  if (!agent) {
+    const same = (await loadCredentials(deps)).filter((c) => c.repoPath === cred.repoPath);
+    if (same.length > 1) {
+      const tools = same.map((c) => c.tool).sort().join(', ');
+      throw new Error(`multiple agentteams agents in this repo (${tools}); pass --agent <tool>`);
+    }
+  }
   return cred;
 }
 
