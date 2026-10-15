@@ -66,4 +66,9 @@ describe('hub over real HTTP', () => {
     const res = await fetch(`${hub.url}/api/team/status`, { headers: { authorization: `Bearer ${created.apiKey}` } });
     expect((await res.json()).team.name).toBe('keep');
   });
+
+  it('rejects and releases its database when the port is taken', async () => {
+    const port = Number(new URL(hub.url).port);
+    await expect(startHub({ dbPath: join(dir, 'second.db'), port })).rejects.toMatchObject({ code: 'EADDRINUSE' });
+  });
 });

@@ -14,15 +14,20 @@ pnpm build
 node packages/hub/dist/bin.js          # listens on http://127.0.0.1:4747
 ```
 
+Configuration (environment variables):
+
+- `AGENTTEAMS_HOME` — data directory (default `~/.agentteams`)
+- `AGENTTEAMS_PORT` — listen port (default `4747`)
+
 ## Try it by hand
 
 ```bash
 # create a team (returns inviteCode + your agent's apiKey)
-curl -s localhost:4747/api/teams -H 'content-type: application/json' \
+curl -s http://127.0.0.1:4747/api/teams -H 'content-type: application/json' \
   -d '{"name":"dev-squad","member":"ronit","tool":"claude","repo":{"provider":"local"}}'
 
 # a teammate joins
-curl -s localhost:4747/api/join -H 'content-type: application/json' \
+curl -s http://127.0.0.1:4747/api/join -H 'content-type: application/json' \
   -d '{"inviteCode":"<code>","member":"ash","tool":"codex"}'
 
 # connect Claude Code to the team's MCP tools

@@ -2,14 +2,27 @@
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_HUB_PORT } from '@agentteams/shared';
+import { parsePort } from './config.js';
 import { startHub } from './server.js';
 
 const home = process.env.AGENTTEAMS_HOME ?? join(homedir(), '.agentteams');
 mkdirSync(home, { recursive: true, mode: 0o700 });
-const port = Number(process.env.AGENTTEAMS_PORT ?? DEFAULT_HUB_PORT);
 
-const hub = await startHub({ dbPath: join(home, 'hub.db'), port });
+const fail = (message: string): never => {
+  console.error(`agentteams-hub: ${message}`);
+  process.exit(1);
+};
+
+let port: number;
+try {
+  port = parsePort(process.env.AGENTTEAMS_PORT);
+} catch (err) {
+  port = fail((err as Error).message);
+}
+
+const hub = await startHub({ dbPath: join(home, 'hub.db'), port }).catch((err: Error) =>
+  fail(`failed to start: ${err.message}`),
+);
 console.log(`agentteams hub listening on ${hub.url} (data: ${home})`);
 
 const shutdown = () => {

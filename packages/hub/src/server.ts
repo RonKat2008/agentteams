@@ -34,6 +34,8 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
           }).then(() => db.destroy()),
       });
     });
-    server.once('error', reject);
+    server.once('error', (err) => {
+      db.destroy().then(() => reject(err), () => reject(err));
+    });
   });
 }
