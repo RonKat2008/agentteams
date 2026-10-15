@@ -72,7 +72,7 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'POST') {
       const length = c.req.header('content-length');
-      const hasBody = length !== undefined ? length !== '0' : c.req.raw.body !== null;
+      const hasBody = (length !== undefined && length !== '0') || c.req.header('transfer-encoding') !== undefined;
       const type = (c.req.header('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
       if (hasBody && type !== 'application/json') {
         return c.json({ error: { code: 'invalid', message: 'Content-Type must be application/json' } }, 415);

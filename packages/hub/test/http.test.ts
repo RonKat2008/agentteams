@@ -118,7 +118,7 @@ describe('local hardening', () => {
   it('rejects non-JSON POST bodies with 415', async () => {
     const res = await app.request('/api/teams', {
       method: 'POST',
-      headers: { 'content-type': 'text/plain' },
+      headers: { 'content-type': 'text/plain', 'content-length': '1' },
       body: JSON.stringify({ name: 's', member: 'ronit', tool: 'claude', repo: { provider: 'local' } }),
     });
     expect(res.status).toBe(415);
