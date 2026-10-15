@@ -4,13 +4,21 @@ import { loadCredentials, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { installClaude, type InstallReport } from '../install/claude.js';
 import { installCodex } from '../install/codex.js';
+import { installGitHooks } from '../install/gitHooks.js';
 import { repoRoot } from '../repo.js';
 import { noCredentialsMessage } from './shared.js';
 
 export async function runInstallers(deps: CliDeps, cred: Credential): Promise<InstallReport> {
-  if (cred.tool === 'claude') return installClaude(deps, cred);
-  if (cred.tool === 'codex') return installCodex(deps, cred);
-  return { tool: cred.tool, done: [], warnings: [`no installer for tool "${cred.tool}"`] };
+  const report: InstallReport =
+    cred.tool === 'claude' ? await installClaude(deps, cred)
+    : cred.tool === 'codex' ? await installCodex(deps, cred)
+    : { tool: cred.tool, done: [], warnings: [`no installer for tool "${cred.tool}"`] };
+  const git = await installGitHooks(deps, cred.repoPath).catch((e: unknown) => ({
+    status: 'skipped' as const, detail: e instanceof Error ? e.message : String(e),
+  }));
+  if (git.status === 'skipped') report.warnings.push(`git hooks skipped: ${git.detail}`);
+  else report.done.push(`git: ${git.detail}`);
+  return report;
 }
 
 export function printReport(deps: CliDeps, report: InstallReport): void {

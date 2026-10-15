@@ -9,6 +9,7 @@ import { orchestratorCommand } from './commands/orchestrator.js';
 import { statusCommand } from './commands/status.js';
 import { upCommand } from './commands/up.js';
 import { realDeps, type CliDeps } from './deps.js';
+import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 import { runMcpProxy } from './mcpProxy.js';
 
@@ -69,6 +70,12 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       const res = await runHook(event, await deps.readStdin(), o.tool, deps);
       if (res.stdout) deps.write(res.stdout);
       exit.code = 0;
+    });
+  sub('git-hook').description('(internal) git hook entry point')
+    .addArgument(new Argument('<name>').choices(['pre-commit', 'post-commit']))
+    .option('--agentteams-managed', '(marker identifying installer-managed hooks; ignored)')
+    .action(async (name: 'pre-commit' | 'post-commit') => {
+      exit.code = name === 'pre-commit' ? await runPreCommit(deps) : await runPostCommit(deps);
     });
   sub('mcp').description('(internal) stdio MCP proxy')
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
