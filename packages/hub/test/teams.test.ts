@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { INVITE_TTL_MS } from '@agentteams/shared';
 import { makeTestContext, seedTeam, type TestEnv } from './helpers.js';
 import {
-  authenticate, createTeam, getTeamStatus, joinTeam, revokeInvite, rotateInvite, setOrchestrator,
+  authenticate, createTeam, getTeamStatus, joinTeam, previewInvite, revokeInvite, rotateInvite, setOrchestrator,
 } from '../src/services/teams.js';
 
 let env: TestEnv;
@@ -136,5 +136,26 @@ describe('setOrchestrator', () => {
       code: 'not_found',
       message: expect.stringContaining('nobody-claude'),
     });
+  });
+});
+
+describe('previewInvite', () => {
+  it('returns the team name and repo without creating an agent', async () => {
+    const { inviteCode, ronit } = await seedTeam(env);
+    const before = (await getTeamStatus(env.ctx, ronit)).agents.length;
+    expect(await previewInvite(env.ctx, { inviteCode })).toEqual({ teamName: 'dev-squad', repo: githubRepo });
+    expect((await getTeamStatus(env.ctx, ronit)).agents).toHaveLength(before);
+  });
+
+  it('fails like join for unknown, revoked and expired codes', async () => {
+    const { inviteCode, ronit } = await seedTeam(env);
+    await expect(previewInvite(env.ctx, { inviteCode: 'zzzz-zzzz-zzzz-zzzz' })).rejects.toMatchObject({ code: 'not_found' });
+    env.advance(INVITE_TTL_MS + 1);
+    await expect(previewInvite(env.ctx, { inviteCode })).rejects.toMatchObject({
+      code: 'forbidden', message: expect.stringContaining('expired'),
+    });
+    const fresh = await rotateInvite(env.ctx, ronit);
+    await revokeInvite(env.ctx, ronit);
+    await expect(previewInvite(env.ctx, { inviteCode: fresh.inviteCode })).rejects.toMatchObject({ code: 'forbidden' });
   });
 });

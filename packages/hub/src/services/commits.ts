@@ -8,11 +8,16 @@ import { findAgent } from './lookup.js';
 
 const MAX_FILES_IN_NOTICE = 10;
 
-export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitInput): Promise<{ notified: string[] }> {
+export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitInput): Promise<{ notified: string[]; duplicate: boolean }> {
   const p = parseInput(CommitInput, input);
   const subject = p.message.split('\n')[0] ?? '';
 
   return withTx(ctx, async (tx) => {
+    const existing = await tx.db.selectFrom('commits').select('id')
+      .where('team_id', '=', actor.teamId).where('sha', '=', p.sha).where('branch', '=', p.branch)
+      .executeTakeFirst();
+    if (existing) return { notified: [], duplicate: true };
+
     const touched = new Map<string, { name: string; files: string[] }>();
     for (const claim of await listActiveClaims(tx, actor.teamId)) {
       if (claim.agentId === actor.id) continue;
@@ -38,7 +43,7 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
         body: `${actor.name} committed ${p.sha.slice(0, 7)} on ${p.branch} touching files you claimed: ${shown}${more} — "${subject}"`,
       });
     }
-    return { notified: [...touched.values()].map((t) => t.name) };
+    return { notified: [...touched.values()].map((t) => t.name), duplicate: false };
   });
 }
 

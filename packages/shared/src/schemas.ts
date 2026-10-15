@@ -62,12 +62,17 @@ export const CreateTeamInput = z.object({
 });
 export type CreateTeamInput = z.input<typeof CreateTeamInput>;
 
+const InviteCode = z.string().trim().min(1).max(64);
+
 export const JoinTeamInput = z.object({
-  inviteCode: z.string().trim().min(1).max(64),
+  inviteCode: InviteCode,
   member: MemberName,
   tool: ToolKind,
 });
 export type JoinTeamInput = z.input<typeof JoinTeamInput>;
+
+export const InvitePreviewInput = z.object({ inviteCode: InviteCode });
+export type InvitePreviewInput = z.input<typeof InvitePreviewInput>;
 
 export const SetOrchestratorInput = z.object({ agent: AgentName });
 export type SetOrchestratorInput = z.input<typeof SetOrchestratorInput>;
@@ -135,6 +140,18 @@ export type ReleaseFilesInput = z.input<typeof ReleaseFilesInput>;
 
 export const WhoOwnsInput = z.object({ path: RepoGlob });
 export type WhoOwnsInput = z.input<typeof WhoOwnsInput>;
+
+export const CheckFilesInput = z.object({ paths: z.array(RepoGlob).min(1).max(1000) });
+export type CheckFilesInput = z.input<typeof CheckFilesInput>;
+
+export const ClaimOverrideInput = z.object({
+  paths: z.array(RepoGlob).min(1).max(1000),
+  sha: z.string().regex(/^[0-9a-f]{7,40}$/, 'sha must be 7-40 lowercase hex characters').optional(),
+});
+export type ClaimOverrideInput = z.input<typeof ClaimOverrideInput>;
+
+export const MarkMergedInput = z.object({ task: TaskNumber, pr: z.string().url().max(500).optional() });
+export type MarkMergedInput = z.input<typeof MarkMergedInput>;
 
 export const ActivityQuery = z.object({
   since: z.iso.datetime({ offset: true }).optional(),

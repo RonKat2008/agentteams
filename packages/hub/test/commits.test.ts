@@ -85,3 +85,23 @@ describe('getChanges', () => {
     expect(recent.map((c) => c.sha)).toEqual(['bbbbbbb']);
   });
 });
+
+describe('recordCommit dedupe', () => {
+  it('treats a repeated sha+branch as a no-op duplicate', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, dylan, { globs: ['src/auth/**'], exclusive: false });
+    const first = await recordCommit(env.ctx, ash, commit());
+    const second = await recordCommit(env.ctx, ash, commit());
+    expect(first).toEqual({ notified: ['dylan-claude'], duplicate: false });
+    expect(second).toEqual({ notified: [], duplicate: true });
+    expect((await getActivity(env.ctx, ronit)).filter((e) => e.type === 'commit')).toHaveLength(1);
+    expect(await readInbox(env.ctx, dylan)).toHaveLength(1);
+    expect(await getChanges(env.ctx, ronit)).toHaveLength(1);
+  });
+
+  it('records the same sha on a different branch', async () => {
+    const { ash } = await seedTeam(env);
+    await recordCommit(env.ctx, ash, commit());
+    expect((await recordCommit(env.ctx, ash, commit({ branch: 'other' }))).duplicate).toBe(false);
+  });
+});

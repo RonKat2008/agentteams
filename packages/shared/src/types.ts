@@ -34,6 +34,7 @@ export interface TaskView {
   assignee: string | null;
   branch: string | null;
   summary: string | null;
+  mergedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,4 +69,20 @@ export interface CommitView {
   insertions: number;
   deletions: number;
   createdAt: string;
+}
+
+export interface FileConflict {
+  path: string;
+  agent: string;
+  glob: string;
+  expiresAt: string;
+}
+
+export interface CheckFilesResult {
+  conflicts: FileConflict[];
+}
+
+export interface InvitePreview {
+  teamName: string;
+  repo: RepoLink;
 }
