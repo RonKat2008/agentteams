@@ -47,4 +47,23 @@ describe('HubClient', () => {
     expect((err as HubError).message).toContain('agentteams up');
     expect(Date.now() - started).toBeLessThan(2000);
   });
+
+  describe('response handling (stubbed fetch)', () => {
+    const stub = (res: () => Response) => new HubClient('http://127.0.0.1:1', { fetch: (async () => res()) as unknown as typeof fetch });
+
+    it('maps a body stream failure to unreachable', async () => {
+      const c = stub(() => new Response(new ReadableStream({ start(ctl) { ctl.error(new Error('reset')); } }), { status: 200 }));
+      await expect(c.status()).rejects.toMatchObject({ name: 'HubError', code: 'unreachable', status: 0 });
+    });
+
+    it('maps a non-JSON error body to internal', async () => {
+      const c = stub(() => new Response('<html>bad gateway</html>', { status: 502 }));
+      await expect(c.status()).rejects.toMatchObject({ code: 'internal', status: 502, message: 'hub returned HTTP 502' });
+    });
+
+    it('rejects an empty 2xx body as internal', async () => {
+      const c = stub(() => new Response('', { status: 200 }));
+      await expect(c.status()).rejects.toMatchObject({ code: 'internal', status: 200 });
+    });
+  });
 });

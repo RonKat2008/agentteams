@@ -35,6 +35,7 @@ export class HubClient {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.opts.apiKey) headers.authorization = `Bearer ${this.opts.apiKey}`;
     let res: Response;
+    let text: string;
     try {
       res = await this.fetchFn(`${this.baseUrl}${path}`, {
         method,
@@ -42,14 +43,16 @@ export class HubClient {
         body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
+      text = await res.text();
     } catch {
       throw new HubError('unreachable', `cannot reach the agentteams hub at ${this.baseUrl} — is it running? (start it with: agentteams up)`, 0);
     }
-    const data = parseJson(await res.text());
+    const data = parseJson(text);
     if (!res.ok) {
       const e = (data as { error?: { code?: string; message?: string } } | undefined)?.error;
       throw new HubError(e?.code ?? 'internal', e?.message ?? `hub returned HTTP ${res.status}`, res.status);
     }
+    if (data === undefined) throw new HubError('internal', 'hub returned an invalid response', res.status);
     return data as T;
   }
 
