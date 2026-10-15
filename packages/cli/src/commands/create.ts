@@ -3,7 +3,7 @@ import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
 import { hubUrlFrom } from '../paths.js';
-import { defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
+import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
@@ -19,6 +19,7 @@ async function resolveRepoLink(deps: CliDeps, opts: CreateOpts): Promise<RepoLin
 }
 
 export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<void> {
+  await checkTeamDir(deps, deps.cwd);
   const repoPath = await repoRoot(deps, deps.cwd);
   const repo = await resolveRepoLink(deps, opts);
   const hubUrl = hubUrlFrom(opts.hub, deps.env);

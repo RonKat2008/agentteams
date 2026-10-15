@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultMemberName, detectGithubSlug, repoRoot } from '../src/repo.js';
+import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../src/repo.js';
 import { fakeExec } from './helpers.js';
 
 describe('repo helpers', () => {
@@ -28,5 +28,25 @@ describe('repo helpers', () => {
     expect(defaultMemberName('a.very-long.user.name.exceeding.limit')).toBe('a_very_long_user_name_ex');
     expect(defaultMemberName('!!!')).toBe('___');
     expect(defaultMemberName('')).toBe('user');
+  });
+});
+
+describe('checkTeamDir', () => {
+  const git = fakeExec({ 'git rev-parse --show-toplevel': { stdout: '/w/app\n' } });
+  it('refuses the home directory and the filesystem root', async () => {
+    const err: string[] = [];
+    const deps = { exec: git, homedir: '/Users/x', err: (l: string) => err.push(l) };
+    await expect(checkTeamDir(deps, '/Users/x')).rejects.toThrow(/refusing to set up a team in \/Users\/x/);
+    await expect(checkTeamDir(deps, '/')).rejects.toThrow(/refusing/);
+  });
+  it('warns outside a git repo but proceeds', async () => {
+    const err: string[] = [];
+    await checkTeamDir({ exec: fakeExec({}), homedir: '/Users/x', err: (l) => err.push(l) }, '/tmp');
+    expect(err.join('\n')).toContain('is not a git repository');
+  });
+  it('is silent inside a git repo', async () => {
+    const err: string[] = [];
+    await checkTeamDir({ exec: git, homedir: '/Users/x', err: (l) => err.push(l) }, '/w/app');
+    expect(err).toEqual([]);
   });
 });

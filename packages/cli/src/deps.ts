@@ -27,7 +27,9 @@ const realExec: Exec = (cmd, args, opts = {}) =>
       const code = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
       resolve({ code, stdout: String(stdout), stderr: String(stderr) });
     });
-    if (opts.input !== undefined) child.stdin?.end(opts.input);
+    // Always close stdin (so children never wait on input) and swallow EPIPE-style errors.
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(opts.input);
   });
 
 async function readAllStdin(): Promise<string> {

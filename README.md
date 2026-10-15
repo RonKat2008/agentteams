@@ -37,6 +37,7 @@ agentteams join <invite-code> --agent codex
 `agentteams install` to redo that setup, e.g. after updating the CLI. Credentials are keyed by the
 repo's absolute path, so after moving a repo run `agentteams join` again (or re-create the
 credentials); `install` cannot relink a moved repo.
+If you change Node versions (nvm), re-run `agentteams install` — hooks embed the node path.
 
 ## What gets installed where
 
@@ -45,6 +46,7 @@ credentials); `install` cannot relink a moved repo.
 | Claude Code | Local-scope MCP entry written by `claude mcp add --scope local` (stored in `~/.claude.json`, not in the repo); hooks in `.claude/settings.local.json` (added to `.git/info/exclude`); managed block in `CLAUDE.md` |
 | Codex | Managed block in `~/.codex/config.toml` registering a stdio MCP server (`agentteams mcp --tool codex`); entries in `~/.codex/hooks.json`; managed block in `AGENTS.md` |
 
+- `claude mcp add` receives the API key as a command-line argument, so it is briefly visible in `ps` output on a shared machine.
 - Codex ignores per-project MCP config, so the stdio proxy resolves the right team for the current
   repo at runtime. Codex asks you to approve new hooks once via `/hooks`.
 - Before changing `~/.codex/config.toml` or `~/.codex/hooks.json`, agentteams writes `<file>.bak` with the

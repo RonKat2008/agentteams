@@ -124,6 +124,15 @@ describe('agentteams commands', () => {
     expect(JSON.parse(t.raw[0]!).hookSpecificOutput.hookEventName).toBe('SessionStart');
   });
 
+  it('create and join refuse to run in the home directory', async () => {
+    const t = mk({}, { claude: { code: 0 } });
+    t.deps.cwd = t.deps.homedir;
+    expect(await run(t, 'create', 'x', '--hub', hub.url, '--local')).toBe(1);
+    expect(t.err.join('\n')).toContain('refusing to set up a team');
+    expect(await run(t, 'join', 'aaaa-bbbb-cccc-dddd', '--hub', hub.url)).toBe(1);
+    expect(await resolveCredential(t.deps, t.deps.cwd, 'claude')).toBeNull();
+  });
+
   it('unreachable hub returns 1 with a helpful message', async () => {
     const t = mk();
     expect(await run(t, 'create', 'x', '--hub', 'http://127.0.0.1:1', '--local')).toBe(1);

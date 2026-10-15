@@ -3,12 +3,13 @@ import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
 import { hubUrlFrom } from '../paths.js';
-import { defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
+import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 
 export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean }
 
 export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): Promise<void> {
+  await checkTeamDir(deps, deps.cwd);
   const repoPath = await repoRoot(deps, deps.cwd);
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const member = opts.as ?? defaultMemberName(deps.username);
