@@ -40,7 +40,7 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
 
 describe('MCP endpoint', () => {
   it('answers an authenticated GET with 405 instead of opening an SSE stream', async () => {
-    const res = await app.request('/mcp', { headers: { authorization: `Bearer ${team.keys.ronit}` } });
+    const res = await app.request('/mcp', { headers: { authorization: `Bearer ${team.keys.ronit}`, accept: 'text/event-stream' } });
     await res.body?.cancel();
     expect(res.status).toBe(405);
   });
