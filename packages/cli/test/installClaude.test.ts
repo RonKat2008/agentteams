@@ -14,6 +14,11 @@ const CLI = "'/usr/bin/node' '/opt/x/dist/bin.js'";
 beforeEach(() => {
   t = makeTestCli({}, { claude: { code: 0 } });
   repo = t.deps.cwd;
+  const base = t.deps.exec;
+  t.deps.exec = (cmd, args, o) =>
+    cmd === 'git' && args.includes('--git-path')
+      ? Promise.resolve({ code: 0, stdout: `${join(repo, '.git', args[args.length - 1]!)}\n`, stderr: '' })
+      : base(cmd, args, o);
   mkdirSync(join(repo, '.git', 'info'), { recursive: true });
   cred = { repoPath: repo, tool: 'claude', hubUrl: 'http://127.0.0.1:4747', teamName: 'dev-squad', agentName: 'ronit-claude', apiKey: 'at_SECRET', createdAt: 'x' };
 });

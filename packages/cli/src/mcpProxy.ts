@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolKind } from '@agentteams/shared';
-import { resolveCredential } from './credentials.js';
+import { resolveCredentialForCwd } from './credentials.js';
 import type { CliDeps } from './deps.js';
 
 const errorResult = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
@@ -32,7 +32,7 @@ export function createProxyServer(upstream: Client | null, hubUrl?: string, unav
 }
 
 export async function runMcpProxy(deps: CliDeps, tool: ToolKind): Promise<void> {
-  const cred = await resolveCredential(deps, deps.cwd, tool);
+  const cred = await resolveCredentialForCwd(deps, deps.cwd, tool);
   let upstream: Client | null = null;
   let reason: string | undefined;
   if (!cred) {

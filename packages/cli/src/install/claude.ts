@@ -1,8 +1,9 @@
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ToolKind } from '@agentteams/shared';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
+import { gitPath } from '../git.js';
 import { writeInstructionFile } from '../instructions.js';
 import { cliCommand } from '../paths.js';
 import { mergeManagedHooks, type HooksJson } from './hooksConfig.js';
@@ -60,15 +61,21 @@ async function installHooks(repo: string, cli: string, report: InstallReport): P
   report.done.push('installed hooks in .claude/settings.local.json');
 }
 
-async function gitExclude(repo: string): Promise<void> {
-  const gitDir = join(repo, '.git');
-  const s = await stat(gitDir).catch(() => null);
-  if (!s?.isDirectory()) return;
-  const path = join(gitDir, 'info', 'exclude');
-  const existing = (await readText(path)) ?? '';
-  if (existing.split('\n').some((l) => l.trim() === EXCLUDE_LINE)) return;
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`}${EXCLUDE_LINE}\n`);
+async function gitExclude(deps: Pick<CliDeps, 'exec'>, repo: string, report: InstallReport): Promise<void> {
+  let path: string;
+  try {
+    path = await gitPath(deps, repo, 'info/exclude');
+  } catch {
+    return; // not a git repo
+  }
+  try {
+    const existing = (await readText(path)) ?? '';
+    if (existing.split('\n').some((l) => l.trim() === EXCLUDE_LINE)) return;
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`}${EXCLUDE_LINE}\n`);
+  } catch (err) {
+    report.warnings.push(`could not update git exclude: ${(err as Error).message}`);
+  }
 }
 
 export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli?: string } = {}): Promise<InstallReport> {
@@ -76,7 +83,7 @@ export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli
   const repo = cred.repoPath;
   await registerMcp(deps, cred, report);
   await installHooks(repo, opts.cli ?? cliCommand(), report);
-  await gitExclude(repo);
+  await gitExclude(deps, repo, report);
   await writeInstructionFile(join(repo, 'CLAUDE.md'), cred.teamName);
   report.done.push('updated CLAUDE.md');
   return report;
