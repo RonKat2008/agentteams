@@ -39,6 +39,12 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
 }
 
 describe('MCP endpoint', () => {
+  it('answers an authenticated GET with 405 instead of opening an SSE stream', async () => {
+    const res = await app.request('/mcp', { headers: { authorization: `Bearer ${team.keys.ronit}` } });
+    await res.body?.cancel();
+    expect(res.status).toBe(405);
+  });
+
   it('exposes the 14 agentteams tools', async () => {
     const client = await connect(team.keys.ronit);
     const names = (await client.listTools()).tools.map((t) => t.name).sort();

@@ -68,6 +68,7 @@ export function createApp(ctx: HubContext): Hono<AppEnv> {
   app.post('/api/team/invite/revoke', async (c) => c.json(await revokeInvite(ctx, c.get('actor'))));
 
   app.use('/mcp', requireAgent(ctx));
+  app.get('/mcp', (c) => c.body(null, 405)); // stateless: no server-initiated SSE stream
   app.all('/mcp', async (c) => {
     const server = buildMcpServer(ctx, c.get('actor'));
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
