@@ -98,6 +98,19 @@ describe('assignTask and listTasks', () => {
     expect(await readInbox(env.ctx, dylan)).toHaveLength(1);
   });
 
+  it('tells the previous assignee to stop and release files', async () => {
+    const { ronit, ash } = await seedTeam(env);
+    await createTask(env.ctx, ronit, { title: 'Login', assignee: 'ash-codex' });
+    await readInbox(env.ctx, ash);
+    await assignTask(env.ctx, ronit, { task: 1, assignee: 'dylan-claude' });
+    expect(await readInbox(env.ctx, ash)).toEqual([
+      expect.objectContaining({
+        kind: 'command', fromRole: 'orchestrator',
+        body: expect.stringContaining('Task #1 (Login) has been reassigned to dylan-claude. Stop work on it and release any files you claimed for it.'),
+      }),
+    ]);
+  });
+
   it('filters by status and assignee', async () => {
     const { ronit, ash } = await seedTeam(env);
     await createTask(env.ctx, ronit, { title: 'A', assignee: 'ash-codex' });

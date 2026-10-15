@@ -89,6 +89,13 @@ export async function assignTask(ctx: HubContext, actor: Actor, input: AssignTas
       .where('id', '=', task.id).execute();
     await logEvent(tx, actor.teamId, actor.id, 'task_assigned', { task: task.number, assignee: assignee.name });
     await notifyAssignment(tx, actor, assignee.id, task.number, task.title);
+    const previousId = task.assignee_agent_id;
+    if (previousId && previousId !== assignee.id && previousId !== actor.id) {
+      await insertMessage(tx, {
+        teamId: actor.teamId, fromId: actor.id, toId: previousId, kind: 'command',
+        body: `Task #${task.number} (${task.title}) has been reassigned to ${assignee.name}. Stop work on it and release any files you claimed for it.`,
+      });
+    }
   });
   return view(ctx, actor.teamId, p.task);
 }
