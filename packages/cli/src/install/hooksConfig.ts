@@ -7,7 +7,8 @@ export interface HooksJson { hooks?: Record<string, HookGroup[]>; [k: string]: u
 
 export const HOOK_TIMEOUT_SECONDS = 10;
 
-export function isManagedHookCommand(cmd: string): boolean {
+export function isManagedHookCommand(cmd: unknown): boolean {
+  if (typeof cmd !== 'string') return false;
   return cmd.includes(' hook ') && cmd.includes(' --tool ') && cmd.includes('agentteams');
 }
 
@@ -17,9 +18,12 @@ export function mergeManagedHooks(config: HooksJson, cli: string, tool: ToolKind
   const hooks: Record<string, HookGroup[]> = next.hooks ?? {};
   for (const event of HOOK_EVENTS) {
     const name = HOOK_EVENT_NAMES[event];
-    const kept = (hooks[name] ?? [])
-      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isManagedHookCommand(h.command)) }))
-      .filter((g) => g.hooks.length > 0);
+    const current: unknown = hooks[name];
+    // A non-array, non-undefined value is user-owned and malformed: leave it untouched.
+    if (current !== undefined && !Array.isArray(current)) continue;
+    const kept = ((current ?? []) as HookGroup[])
+      .map((g) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h) => !isManagedHookCommand(h?.command)) } : g))
+      .filter((g) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
     kept.push({
       matcher: '',
       hooks: [{ type: 'command', command: `${cli} hook ${event} --tool ${tool}`, timeout: HOOK_TIMEOUT_SECONDS }],

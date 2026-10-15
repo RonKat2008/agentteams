@@ -25,3 +25,13 @@ describe('managed instruction block', () => {
     expect(twice.split(BLOCK_START)).toHaveLength(2);
   });
 });
+
+describe('orphan start marker', () => {
+  it('keeps user text, leaves one marker, and is idempotent', () => {
+    const block = instructionBlock('t');
+    const once = upsertManagedBlock(`# P\n${BLOCK_START}\nuser text\n`, block);
+    expect(once).toContain('user text');
+    expect(once.split(BLOCK_START)).toHaveLength(2);
+    expect(upsertManagedBlock(once, block)).toBe(once);
+  });
+});

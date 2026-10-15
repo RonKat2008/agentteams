@@ -77,3 +77,18 @@ describe('installClaude', () => {
     t2.cleanup();
   });
 });
+
+describe('mergeManagedHooks with non-command handlers', () => {
+  it('drops only the managed handler from a mixed group', () => {
+    const cfg = { hooks: { Stop: [{ hooks: [{ type: 'command', command: `${CLI} hook stop --tool claude` }, { type: 'prompt', prompt: 'x' }] }] } } as never;
+    const merged = mergeManagedHooks(cfg, CLI, 'claude');
+    expect(merged.hooks!.Stop![0]!.hooks).toEqual([{ type: 'prompt', prompt: 'x' }]);
+    expect(merged.hooks!.Stop).toHaveLength(2);
+  });
+  it('keeps a lone non-command handler and tolerates a non-array event value', () => {
+    const cfg = { hooks: { Stop: [{ hooks: [{ type: 'prompt', prompt: 'x' }] }], PostToolUse: 'oops' } } as never;
+    const merged = mergeManagedHooks(cfg, CLI, 'claude');
+    expect(merged.hooks!.Stop![0]!.hooks).toEqual([{ type: 'prompt', prompt: 'x' }]);
+    expect((merged.hooks as Record<string, unknown>).PostToolUse).toBe('oops');
+  });
+});

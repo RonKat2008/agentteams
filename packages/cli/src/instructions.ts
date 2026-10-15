@@ -27,6 +27,11 @@ export function upsertManagedBlock(existing: string, block: string): string {
     if (existing[end] === '\n') end += 1;
     return existing.slice(0, start) + block + existing.slice(end);
   }
+  if (start !== -1) {
+    // Orphan start marker (no end after it): drop just that marker line, keep user text.
+    const eol = existing.indexOf('\n', start);
+    existing = existing.slice(0, start) + (eol === -1 ? '' : existing.slice(eol + 1));
+  }
   if (existing.trim() === '') return block;
   return `${existing.replace(/\n*$/, '\n')}\n${block}`;
 }
