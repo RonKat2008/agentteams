@@ -101,6 +101,10 @@ export async function assignTask(ctx: HubContext, actor: Actor, input: AssignTas
   return view(ctx, actor.teamId, p.task);
 }
 
+export async function getTaskView(ctx: HubContext, actor: Actor, number: number): Promise<TaskView> {
+  return view(ctx, actor.teamId, number);
+}
+
 export async function listTasks(ctx: HubContext, actor: Actor, input: ListTasksInput = {}): Promise<TaskView[]> {
   const p = parseInput(ListTasksInput, input);
   let query = ctx.db.selectFrom('tasks').selectAll().where('team_id', '=', actor.teamId);

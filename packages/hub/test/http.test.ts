@@ -3,6 +3,7 @@ import { makeTestContext, type TestEnv } from './helpers.js';
 import { createApp } from '../src/http/app.js';
 import { sendMessage } from '../src/services/messages.js';
 import { authenticate } from '../src/services/teams.js';
+import { createTask } from '../src/services/tasks.js';
 
 let env: TestEnv;
 let app: ReturnType<typeof createApp>;
@@ -149,5 +150,55 @@ describe('host allowlist', () => {
     expect(await evil.json()).toEqual({ error: { code: 'forbidden', message: 'host not allowed' } });
     expect((await strict.request('http://127.0.0.1:4747/health')).status).toBe(200);
     expect((await strict.request('http://localhost:4747/health')).status).toBe(200);
+  });
+});
+
+describe('git-layer routes', () => {
+  async function setup() {
+    const keys = await bootstrap();
+    const ronit = await authenticate(env.ctx, keys.ronitKey);
+    await createTask(env.ctx, ronit, { title: 'Build login', assignee: 'ash-codex' });
+    return keys;
+  }
+  const getJson = (path: string, key: string) => app.request(path, get(key));
+
+  it('previews an invite without auth', async () => {
+    const { inviteCode } = await bootstrap();
+    const res = await app.request('/api/join/preview', json({ inviteCode }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ teamName: 'dev-squad' });
+  });
+
+  it('checks files and records a claim override', async () => {
+    const { ronitKey, ashKey } = await setup();
+    const check = await app.request('/api/team/check-files', json({ paths: ['src/a.ts'] }, ashKey));
+    expect(check.status).toBe(200);
+    expect(await check.json()).toHaveProperty('conflicts');
+    const override = await app.request('/api/team/claim-override', json({ paths: ['src/a.ts'] }, ashKey));
+    expect(override.status).toBe(200);
+    expect(await override.json()).toHaveProperty('owners');
+  });
+
+  it('claims, completes, merges and fetches a task', async () => {
+    const { ronitKey, ashKey } = await setup();
+    const claim = await app.request('/api/team/tasks/1/claim', json({}, ashKey));
+    expect(claim.status).toBe(200);
+    expect((await claim.json()).status).toBe('in_progress');
+    const done = await app.request('/api/team/tasks/1/complete', json({ summary: 'done', branch: 'at/ash-codex/1' }, ashKey));
+    expect((await done.json()).status).toBe('done');
+    const merged = await app.request('/api/team/tasks/1/merged', json({ pr: 'https://github.com/o/r/pull/1' }, ronitKey));
+    expect(merged.status).toBe(200);
+    expect((await merged.json()).mergedAt).toBeTruthy();
+    const view = await getJson('/api/team/tasks/1', ashKey);
+    expect(view.status).toBe(200);
+    expect((await view.json()).number).toBe(1);
+  });
+
+  it('maps errors: 403 non-orchestrator merged, 404 unknown task, 400 bad number', async () => {
+    const { ashKey } = await setup();
+    expect((await app.request('/api/team/tasks/1/merged', json({}, ashKey))).status).toBe(403);
+    expect((await getJson('/api/team/tasks/99', ashKey)).status).toBe(404);
+    expect((await getJson('/api/team/tasks/abc', ashKey)).status).toBe(400);
+    expect((await app.request('/api/team/tasks/abc/claim', json({}, ashKey))).status).toBe(400);
   });
 });

@@ -1,5 +1,6 @@
 import type {
-  ActivityEvent, CreateTeamInput, InboxMessage, JoinTeamInput, RepoLink, TeamStatus,
+  ActivityEvent, CheckFilesResult, CommitInput, CreateTeamInput, InboxMessage, InvitePreview, JoinTeamInput, RepoLink, TaskView,
+  TeamStatus,
 } from '@agentteams/shared';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -86,5 +87,29 @@ export class HubClient {
   }
   revokeInvite() {
     return this.request<{ revoked: true }>('POST', '/api/team/invite/revoke');
+  }
+  previewInvite(inviteCode: string) {
+    return this.request<InvitePreview>('POST', '/api/join/preview', { inviteCode });
+  }
+  checkFiles(paths: string[]) {
+    return this.request<CheckFilesResult>('POST', '/api/team/check-files', { paths });
+  }
+  claimOverride(paths: string[], sha?: string) {
+    return this.request<{ owners: string[] }>('POST', '/api/team/claim-override', { paths, ...(sha === undefined ? {} : { sha }) });
+  }
+  claimTask(n: number) {
+    return this.request<TaskView>('POST', `/api/team/tasks/${n}/claim`);
+  }
+  completeTask(n: number, summary: string, branch: string) {
+    return this.request<TaskView>('POST', `/api/team/tasks/${n}/complete`, { summary, branch });
+  }
+  markMerged(n: number, pr?: string) {
+    return this.request<TaskView>('POST', `/api/team/tasks/${n}/merged`, pr === undefined ? {} : { pr });
+  }
+  getTask(n: number) {
+    return this.request<TaskView>('GET', `/api/team/tasks/${n}`);
+  }
+  recordCommit(input: CommitInput) {
+    return this.request<{ notified: string[]; duplicate: boolean }>('POST', '/api/team/commits', input);
   }
 }
