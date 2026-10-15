@@ -73,6 +73,16 @@ describe('claim, update, complete', () => {
     await expect(claimTask(env.ctx, ash, { task: 1 })).rejects.toMatchObject({ code: 'conflict' });
   });
 
+  it('lets exactly one of two concurrent claims win', async () => {
+    const { ronit, dylan, ash } = await seedTeam(env);
+    await createTask(env.ctx, ronit, { title: 'Docs' });
+    const results = await Promise.allSettled([claimTask(env.ctx, dylan, { task: 1 }), claimTask(env.ctx, ash, { task: 1 })]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toMatchObject({ code: 'forbidden' });
+  });
+
   it('reports unknown task numbers', async () => {
     const { ash } = await seedTeam(env);
     await expect(claimTask(env.ctx, ash, { task: 99 })).rejects.toMatchObject({ code: 'not_found', message: 'task #99 not found' });

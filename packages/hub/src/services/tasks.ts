@@ -80,17 +80,17 @@ export async function createTask(ctx: HubContext, actor: Actor, input: CreateTas
 export async function assignTask(ctx: HubContext, actor: Actor, input: AssignTaskInput): Promise<TaskView> {
   const p = parseInput(AssignTaskInput, input);
   await requireOrchestrator(ctx, actor, 'assign tasks');
-  const task = await getTask(ctx, actor.teamId, p.task);
-  assertNotDone(task);
-  const assignee = await findAgent(ctx, actor.teamId, p.assignee);
   await withTx(ctx, async (tx) => {
+    const task = await getTask(tx, actor.teamId, p.task);
+    assertNotDone(task);
+    const assignee = await findAgent(tx, actor.teamId, p.assignee);
     await tx.db.updateTable('tasks')
       .set({ assignee_agent_id: assignee.id, status: 'assigned', updated_at: tx.now().toISOString() })
       .where('id', '=', task.id).execute();
     await logEvent(tx, actor.teamId, actor.id, 'task_assigned', { task: task.number, assignee: assignee.name });
     await notifyAssignment(tx, actor, assignee.id, task.number, task.title);
   });
-  return view(ctx, actor.teamId, task.number);
+  return view(ctx, actor.teamId, p.task);
 }
 
 export async function listTasks(ctx: HubContext, actor: Actor, input: ListTasksInput = {}): Promise<TaskView[]> {
@@ -105,39 +105,39 @@ export async function listTasks(ctx: HubContext, actor: Actor, input: ListTasksI
 
 export async function claimTask(ctx: HubContext, actor: Actor, input: ClaimTaskInput): Promise<TaskView> {
   const p = parseInput(ClaimTaskInput, input);
-  const task = await getTask(ctx, actor.teamId, p.task);
-  assertNotDone(task);
-  if (task.assignee_agent_id && task.assignee_agent_id !== actor.id) await assertAssignee(ctx, actor, task, 'claim');
   await withTx(ctx, async (tx) => {
+    const task = await getTask(tx, actor.teamId, p.task);
+    assertNotDone(task);
+    if (task.assignee_agent_id && task.assignee_agent_id !== actor.id) await assertAssignee(tx, actor, task, 'claim');
     await tx.db.updateTable('tasks')
       .set({ assignee_agent_id: actor.id, status: 'in_progress', updated_at: tx.now().toISOString() })
       .where('id', '=', task.id).execute();
     await logEvent(tx, actor.teamId, actor.id, 'task_claimed', { task: task.number, title: task.title });
   });
-  return view(ctx, actor.teamId, task.number);
+  return view(ctx, actor.teamId, p.task);
 }
 
 export async function updateTask(ctx: HubContext, actor: Actor, input: UpdateTaskInput): Promise<TaskView> {
   const p = parseInput(UpdateTaskInput, input);
-  const task = await getTask(ctx, actor.teamId, p.task);
-  await assertAssignee(ctx, actor, task, 'update');
-  assertNotDone(task);
   await withTx(ctx, async (tx) => {
+    const task = await getTask(tx, actor.teamId, p.task);
+    await assertAssignee(tx, actor, task, 'update');
+    assertNotDone(task);
     await tx.db.updateTable('tasks')
       .set({ status: p.status ?? task.status, updated_at: tx.now().toISOString() })
       .where('id', '=', task.id).execute();
     await logEvent(tx, actor.teamId, actor.id, 'task_updated', { task: task.number, status: p.status ?? task.status, note: p.note });
   });
-  return view(ctx, actor.teamId, task.number);
+  return view(ctx, actor.teamId, p.task);
 }
 
 export async function completeTask(ctx: HubContext, actor: Actor, input: CompleteTaskInput): Promise<TaskView> {
   const p = parseInput(CompleteTaskInput, input);
-  const task = await getTask(ctx, actor.teamId, p.task);
-  await assertAssignee(ctx, actor, task, 'complete');
-  assertNotDone(task);
-  const team = await getTeamRow(ctx, actor.teamId);
   await withTx(ctx, async (tx) => {
+    const task = await getTask(tx, actor.teamId, p.task);
+    await assertAssignee(tx, actor, task, 'complete');
+    assertNotDone(task);
+    const team = await getTeamRow(tx, actor.teamId);
     await tx.db.updateTable('tasks')
       .set({ status: 'done', summary: p.summary, branch: p.branch, updated_at: tx.now().toISOString() })
       .where('id', '=', task.id).execute();
@@ -149,5 +149,5 @@ export async function completeTask(ctx: HubContext, actor: Actor, input: Complet
       });
     }
   });
-  return view(ctx, actor.teamId, task.number);
+  return view(ctx, actor.teamId, p.task);
 }
