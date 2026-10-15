@@ -1,6 +1,6 @@
 import { Argument, Command, CommanderError, Option } from 'commander';
 import { ToolKind } from '@agentteams/shared';
-import { createCommand } from './commands/create.js';
+import { createCommand, type CreateOpts } from './commands/create.js';
 import { installCommand } from './commands/install.js';
 import { inviteCommand } from './commands/invite.js';
 import { joinCommand } from './commands/join.js';
@@ -47,8 +47,14 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((o: { port?: string }) => upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>')
-    .option('--repo <owner/name>').option('--local', 'local-only team (no GitHub link)').option('--no-install')
-    .action((name: string, o) => createCommand(deps, name, o));
+    .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
+    .addOption(new Option('--local', 'local-only team (no GitHub link)').conflicts('newRepo'))
+    .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
+    .addOption(new Option('--private', 'new repo is private (default)').conflicts('public'))
+    .addOption(new Option('--public', 'new repo is public'))
+    .option('--owner <org>', 'GitHub owner/org for --new-repo').option('--no-install')
+    .action((name: string, o: { public?: boolean } & CreateOpts) =>
+      createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>').option('--no-install')
     .action((code: string, o) => joinCommand(deps, code, o));
