@@ -21,7 +21,8 @@ async function toResult(run: () => Promise<unknown>): Promise<CallToolResult> {
     return { content: [{ type: 'text', text: JSON.stringify(await run(), null, 2) }] };
   } catch (err) {
     if (err instanceof DomainError) return { isError: true, content: [{ type: 'text', text: `${err.code}: ${err.message}` }] };
-    throw err;
+    console.error('[agentteams-hub] tool error', err);
+    return { isError: true, content: [{ type: 'text', text: 'internal: internal error' }] };
   }
 }
 

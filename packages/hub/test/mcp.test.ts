@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as teamsModule from '../src/services/teams.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { makeTestContext, seedTeam, type SeededTeam, type TestEnv } from './helpers.js';
@@ -15,6 +16,7 @@ beforeEach(async () => {
   team = await seedTeam(env);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(clients.splice(0).map((c) => c.close()));
   await env.close();
 });
@@ -75,7 +77,24 @@ describe('MCP endpoint', () => {
 
   it('rejects connections without a valid key', async () => {
     await expect(connect('at_garbage')).rejects.toThrow();
-    const res = await app.request('/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    expect(res.status).toBe(401);
+    const post = (headers: Record<string, string>) =>
+      app.request('/mcp', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' });
+    const noAuth = await post({});
+    expect(noAuth.status).toBe(401);
+    expect(await noAuth.json()).toEqual({ error: { code: 'unauthorized', message: 'missing bearer API key' } });
+    const badKey = await post({ authorization: 'Bearer at_garbage' });
+    expect(badKey.status).toBe(401);
+    expect(await badKey.json()).toEqual({ error: { code: 'unauthorized', message: 'invalid API key' } });
+  });
+
+  it('masks non-domain errors from tools as a generic internal error', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(teamsModule, 'getTeamStatus').mockRejectedValueOnce(new Error('SQLITE_BUSY secret detail'));
+    const client = await connect(team.keys.ronit);
+    const res = await call(client, 'team_status');
+    expect(res.isError).toBe(true);
+    expect(res.text).toBe('internal: internal error');
+    expect(res.text).not.toContain('SQLITE_BUSY');
+    expect(errSpy).toHaveBeenCalledWith('[agentteams-hub] tool error', expect.any(Error));
   });
 });
