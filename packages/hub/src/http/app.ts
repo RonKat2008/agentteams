@@ -3,6 +3,8 @@ import { createMiddleware } from 'hono/factory';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Actor, HubContext } from '../context.js';
 import { DomainError, type ErrorCode } from '../errors.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { buildMcpServer } from '../mcp/server.js';
 import { getActivity } from '../services/activity.js';
 import { whoOwns } from '../services/claims.js';
 import { getChanges, recordCommit } from '../services/commits.js';
@@ -64,6 +66,14 @@ export function createApp(ctx: HubContext): Hono<AppEnv> {
   app.post('/api/team/orchestrator', async (c) => c.json(await setOrchestrator(ctx, c.get('actor'), (await body(c)) as never)));
   app.post('/api/team/invite/rotate', async (c) => c.json(await rotateInvite(ctx, c.get('actor'))));
   app.post('/api/team/invite/revoke', async (c) => c.json(await revokeInvite(ctx, c.get('actor'))));
+
+  app.use('/mcp', requireAgent(ctx));
+  app.all('/mcp', async (c) => {
+    const server = buildMcpServer(ctx, c.get('actor'));
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    await server.connect(transport);
+    return transport.handleRequest(c.req.raw);
+  });
 
   return app;
 }
