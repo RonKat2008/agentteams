@@ -51,5 +51,17 @@ export async function runMcpProxy(deps: CliDeps, tool: ToolKind): Promise<void> 
       reason = `agentteams hub unreachable at ${cred.hubUrl}`;
     }
   }
-  await createProxyServer(upstream, cred?.hubUrl, reason).connect(new StdioServerTransport());
+  const server = createProxyServer(upstream, cred?.hubUrl, reason);
+  const closed = new Promise<void>((resolve) => {
+    const prev = server.onclose;
+    server.onclose = () => {
+      prev?.();
+      resolve();
+    };
+  });
+  const transport = new StdioServerTransport();
+  // StdioServerTransport does not notice stdin ending; close explicitly so the process can exit.
+  process.stdin.once('end', () => void server.close());
+  await server.connect(transport);
+  await closed;
 }
