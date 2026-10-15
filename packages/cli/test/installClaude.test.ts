@@ -9,7 +9,7 @@ import { makeTestCli, type TestCli } from './helpers.js';
 let t: TestCli;
 let repo: string;
 let cred: Credential;
-const CLI = "'/usr/bin/node' '/x/agentteams/packages/cli/dist/bin.js'";
+const CLI = "'/usr/bin/node' '/opt/x/dist/bin.js'";
 
 beforeEach(() => {
   t = makeTestCli({}, { claude: { code: 0 } });
@@ -26,7 +26,7 @@ describe('mergeManagedHooks', () => {
     expect(Object.keys(merged.hooks!).sort()).toEqual(['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
     expect(merged.hooks!.Stop).toHaveLength(2);
     expect(merged.hooks!.Stop![0]!.hooks[0]!.command).toBe('say done');
-    expect(merged.hooks!.Stop![1]!.hooks[0]).toEqual({ type: 'command', command: `${CLI} hook stop --tool claude`, timeout: 10 });
+    expect(merged.hooks!.Stop![1]!.hooks[0]).toEqual({ type: 'command', command: `${CLI} hook stop --tool claude --agentteams-managed`, timeout: 10 });
     expect((merged as { model: string }).model).toBe('x');
     expect(user.hooks.Stop).toHaveLength(1);
   });
@@ -35,7 +35,10 @@ describe('mergeManagedHooks', () => {
     expect(mergeManagedHooks(once, CLI, 'claude')).toEqual(once);
   });
   it('recognises managed commands', () => {
-    expect(isManagedHookCommand(`${CLI} hook stop --tool codex`)).toBe(true);
+    expect(isManagedHookCommand(`${CLI} hook stop --tool codex --agentteams-managed`)).toBe(true);
+    expect(isManagedHookCommand(`${CLI} hook stop --tool codex`)).toBe(false);
+    // legacy commands (pre-marker) from an install path containing "agentteams"
+    expect(isManagedHookCommand("'/n' '/x/agentteams/dist/bin.js' hook stop --tool codex")).toBe(true);
     expect(isManagedHookCommand('say done')).toBe(false);
   });
 });
@@ -63,7 +66,10 @@ describe('installClaude', () => {
     await installClaude(t.deps, cred, { cli: CLI });
     const s = JSON.parse(readFileSync(join(repo, '.claude', 'settings.local.json'), 'utf8'));
     expect(s.permissions.allow).toEqual(['Bash(ls)']);
-    expect(s.hooks.Stop).toHaveLength(1);
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
+      expect(s.hooks[event]).toHaveLength(1);
+      expect(s.hooks[event][0].hooks).toHaveLength(1);
+    }
     expect(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8').match(/settings\.local\.json/g)).toHaveLength(1);
     expect(readFileSync(join(repo, 'CLAUDE.md'), 'utf8').match(/agentteams:start/g)).toHaveLength(1);
   });
@@ -80,7 +86,7 @@ describe('installClaude', () => {
 
 describe('mergeManagedHooks with non-command handlers', () => {
   it('drops only the managed handler from a mixed group', () => {
-    const cfg = { hooks: { Stop: [{ hooks: [{ type: 'command', command: `${CLI} hook stop --tool claude` }, { type: 'prompt', prompt: 'x' }] }] } } as never;
+    const cfg = { hooks: { Stop: [{ hooks: [{ type: 'command', command: `${CLI} hook stop --tool claude --agentteams-managed` }, { type: 'prompt', prompt: 'x' }] }] } } as never;
     const merged = mergeManagedHooks(cfg, CLI, 'claude');
     expect(merged.hooks!.Stop![0]!.hooks).toEqual([{ type: 'prompt', prompt: 'x' }]);
     expect(merged.hooks!.Stop).toHaveLength(2);

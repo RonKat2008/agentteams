@@ -8,8 +8,8 @@ import { makeTestCli, type TestCli } from './helpers.js';
 let t: TestCli;
 let codex: string;
 let cred: Credential;
-const CLI = "'/usr/bin/node' '/x/agentteams/packages/cli/dist/bin.js'";
-const ARGV = { command: '/usr/bin/node', args: ['/x/agentteams/packages/cli/dist/bin.js'] };
+const CLI = "'/usr/bin/node' '/opt/x/dist/bin.js'";
+const ARGV = { command: '/usr/bin/node', args: ['/opt/x/dist/bin.js'] };
 
 beforeEach(() => {
   t = makeTestCli();
@@ -82,7 +82,7 @@ describe('installCodex', () => {
     expect(config).toContain(TOML_START);
     expect(config).not.toContain('at_SECRET');
     expect(JSON.stringify(hooks)).not.toContain('at_SECRET');
-    expect(hooks.hooks.Stop.map((g: { hooks: { command: string }[] }) => g.hooks[0]!.command)).toEqual(['say hi', `${CLI} hook stop --tool codex`]);
+    expect(hooks.hooks.Stop.map((g: { hooks: { command: string }[] }) => g.hooks[0]!.command)).toEqual(['say hi', `${CLI} hook stop --tool codex --agentteams-managed`]);
     expect(readFileSync(join(codex, 'config.toml.bak'), 'utf8')).toBe('model = "o3"\n');
     expect(existsSync(join(codex, 'hooks.json.bak'))).toBe(true);
     expect(readFileSync(join(t.deps.cwd, 'AGENTS.md'), 'utf8')).toContain('agentteams:start');
@@ -105,6 +105,11 @@ describe('installCodex', () => {
     await installCodex(t.deps, cred, { cli: CLI, argv: ARGV });
     expect(readFileSync(join(codex, 'config.toml'), 'utf8')).toBe(config1);
     expect(readFileSync(join(codex, 'hooks.json'), 'utf8')).toBe(hooks1);
+    const parsed = JSON.parse(hooks1) as { hooks: Record<string, Array<{ hooks: unknown[] }>> };
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
+      expect(parsed.hooks[event]).toHaveLength(1);
+      expect(parsed.hooks[event]![0]!.hooks).toHaveLength(1);
+    }
   });
 
   it('warns instead of corrupting a config with a user-owned agentteams server', async () => {

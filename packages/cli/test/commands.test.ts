@@ -115,7 +115,7 @@ describe('agentteams commands', () => {
 
   it('hook stop is silent without credentials; session-start emits context', async () => {
     const t0 = mk({ readStdin: async () => '{"cwd":"/nowhere"}' });
-    expect(await run(t0, 'hook', 'stop', '--tool', 'codex')).toBe(0);
+    expect(await run(t0, 'hook', 'stop', '--tool', 'codex', '--agentteams-managed')).toBe(0);
     expect(t0.raw).toEqual([]);
     const t = mk({}, { claude: { code: 0 } });
     expect(await run(t, 'create', 'hooked', '--hub', hub.url, '--local', '--no-install')).toBe(0);

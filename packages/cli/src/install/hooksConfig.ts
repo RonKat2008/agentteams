@@ -7,9 +7,14 @@ export interface HooksJson { hooks?: Record<string, HookGroup[]>; [k: string]: u
 
 export const HOOK_TIMEOUT_SECONDS = 10;
 
+/** Stable flag appended to every generated hook command so reinstalls find their own handlers. */
+export const MANAGED_MARKER = '--agentteams-managed';
+
 export function isManagedHookCommand(cmd: unknown): boolean {
   if (typeof cmd !== 'string') return false;
-  return cmd.includes(' hook ') && cmd.includes(' --tool ') && cmd.includes('agentteams');
+  if (cmd.includes(` ${MANAGED_MARKER}`)) return true;
+  // Backward compat: commands written before the marker existed.
+  return cmd.includes(' hook ') && cmd.includes(' --tool ') && cmd.includes('bin.js') && cmd.includes('agentteams');
 }
 
 /** Pure: returns a new config with exactly one managed handler per event; user hooks untouched. */
@@ -26,7 +31,7 @@ export function mergeManagedHooks(config: HooksJson, cli: string, tool: ToolKind
       .filter((g) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
     kept.push({
       matcher: '',
-      hooks: [{ type: 'command', command: `${cli} hook ${event} --tool ${tool}`, timeout: HOOK_TIMEOUT_SECONDS }],
+      hooks: [{ type: 'command', command: `${cli} hook ${event} --tool ${tool} ${MANAGED_MARKER}`, timeout: HOOK_TIMEOUT_SECONDS }],
     });
     hooks[name] = kept;
   }

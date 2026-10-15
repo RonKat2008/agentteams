@@ -64,6 +64,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('hook').description('(internal) agent hook entry point')
     .addArgument(new Argument('<event>').choices([...HOOK_EVENTS]))
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
+    .option('--agentteams-managed', '(marker identifying installer-managed hooks; ignored)')
     .action(async (event: HookEvent, o: { tool: ToolKind }) => {
       const res = await runHook(event, await deps.readStdin(), o.tool, deps);
       if (res.stdout) deps.write(res.stdout);
