@@ -41,7 +41,6 @@ export async function sendMessage(ctx: HubContext, actor: Actor, input: SendMess
 
 export async function readInbox(ctx: HubContext, actor: Actor, input: ReadInboxInput = {}): Promise<InboxMessage[]> {
   const p = parseInput(ReadInboxInput, input);
-  const me = await ctx.db.selectFrom('agents').select('created_at').where('id', '=', actor.id).executeTakeFirstOrThrow();
 
   const rows = await ctx.db.selectFrom('messages as m')
     .innerJoin('agents as a', 'a.id', 'm.from_agent_id')
@@ -52,7 +51,7 @@ export async function readInbox(ctx: HubContext, actor: Actor, input: ReadInboxI
     .where('r.message_id', 'is', null)
     .where((eb) => eb.or([
       eb('m.to_agent_id', '=', actor.id),
-      eb.and([eb('m.to_agent_id', 'is', null), eb('m.created_at', '>=', me.created_at)]),
+      eb.and([eb('m.to_agent_id', 'is', null), eb('m.id', '>', actor.id)]),
     ]))
     .orderBy('m.id')
     .limit(INBOX_PAGE)

@@ -48,6 +48,8 @@ export function createApp(ctx: HubContext): Hono<AppEnv> {
     return c.json({ error: { code: 'internal', message: 'internal error' } }, 500);
   });
 
+  app.notFound((c) => c.json({ error: { code: 'not_found', message: 'route not found' } }, 404));
+
   app.get('/health', (c) => c.json({ ok: true }));
   app.post('/api/teams', async (c) => c.json(await createTeam(ctx, (await body(c)) as never), 201));
   app.post('/api/join', async (c) => c.json(await joinTeam(ctx, (await body(c)) as never), 201));

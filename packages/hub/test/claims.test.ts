@@ -91,6 +91,13 @@ describe('whoOwns and releaseFiles', () => {
     expect((await whoOwns(env.ctx, dylan, { path: 'src/auth/login.ts' })).map((c) => c.agent)).toEqual(['ash-codex']);
   });
 
+  it('rejects an empty globs array and releases nothing', async () => {
+    const { ash } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['a/**'] });
+    await expect(releaseFiles(env.ctx, ash, { globs: [] })).rejects.toMatchObject({ code: 'invalid' });
+    expect(await whoOwns(env.ctx, ash, { path: 'a/x.ts' })).toHaveLength(1);
+  });
+
   it("releases specific globs or everything you hold, never others' claims", async () => {
     const { ash, dylan } = await seedTeam(env);
     await claimFiles(env.ctx, ash, { globs: ['a/**', 'b/**'] });

@@ -14,6 +14,12 @@ const json = (body: unknown, key?: string): RequestInit => ({
   headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
   body: JSON.stringify(body),
 });
+it('returns a JSON 404 for unknown routes', async () => {
+  const res = await app.request('/nope');
+  expect(res.status).toBe(404);
+  expect(await res.json()).toEqual({ error: { code: 'not_found', message: 'route not found' } });
+});
+
 const get = (key: string): RequestInit => ({ headers: { authorization: `Bearer ${key}` } });
 
 async function bootstrap() {

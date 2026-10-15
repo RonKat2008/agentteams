@@ -116,7 +116,7 @@ export const ClaimFilesInput = z.object({
 });
 export type ClaimFilesInput = z.input<typeof ClaimFilesInput>;
 
-export const ReleaseFilesInput = z.object({ globs: z.array(RepoGlob).max(50).optional() });
+export const ReleaseFilesInput = z.object({ globs: z.array(RepoGlob).min(1).max(50).optional() });
 export type ReleaseFilesInput = z.input<typeof ReleaseFilesInput>;
 
 export const WhoOwnsInput = z.object({ path: RepoGlob });
