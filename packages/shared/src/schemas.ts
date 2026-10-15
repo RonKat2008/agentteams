@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { DEFAULT_CLAIM_TTL_MIN, MAX_MESSAGE_LENGTH } from './constants.js';
 
+/** Control characters and Unicode line/paragraph separators: never allowed in single-line fields. */
+const CONTROL_CHARS = /[\p{Cc}\u2028\u2029]/u;
+const singleLine = (s: string): boolean => !CONTROL_CHARS.test(s);
+const SINGLE_LINE_MESSAGE = 'must not contain control characters or line breaks';
+/** Names end up in injected agent context and committed files, so also keep markup out. */
+const noMarkup = (s: string): boolean => !/[<>]/.test(s);
+
 export const ToolKind = z.enum(['claude', 'codex', 'other']);
 export type ToolKind = z.infer<typeof ToolKind>;
 
@@ -37,7 +44,7 @@ export const RepoLink = z
   .object({
     provider: z.enum(['github', 'local']),
     slug: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'slug must look like owner/name').optional(),
-    defaultBranch: z.string().min(1).max(255).default('main'),
+    defaultBranch: z.string().min(1).max(255).refine(singleLine, `default branch ${SINGLE_LINE_MESSAGE}`).default('main'),
   })
   .refine((r) => r.provider === 'local' || r.slug !== undefined, {
     message: 'github repos need a slug like owner/name',
@@ -46,7 +53,9 @@ export const RepoLink = z
 export type RepoLink = z.output<typeof RepoLink>;
 
 export const CreateTeamInput = z.object({
-  name: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(64)
+    .refine(singleLine, `team name ${SINGLE_LINE_MESSAGE}`)
+    .refine(noMarkup, 'team name must not contain < or >'),
   member: MemberName,
   tool: ToolKind,
   repo: RepoLink,
@@ -80,7 +89,7 @@ export type ReadInboxInput = z.input<typeof ReadInboxInput>;
 const TaskNumber = z.number().int().positive();
 
 export const CreateTaskInput = z.object({
-  title: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(200).refine(singleLine, `task title ${SINGLE_LINE_MESSAGE}`),
   description: z.string().max(10_000).default(''),
   assignee: AgentName.optional(),
 });
@@ -105,12 +114,13 @@ export type UpdateTaskInput = z.input<typeof UpdateTaskInput>;
 export const CompleteTaskInput = z.object({
   task: TaskNumber,
   summary: z.string().trim().min(1).max(4000),
-  branch: z.string().trim().min(1).max(255),
+  branch: z.string().trim().min(1).max(255).refine(singleLine, `branch ${SINGLE_LINE_MESSAGE}`),
 });
 export type CompleteTaskInput = z.input<typeof CompleteTaskInput>;
 
 const RepoGlob = z
   .string().trim().min(1).max(256)
+  .refine(singleLine, `paths and globs ${SINGLE_LINE_MESSAGE}`)
   .refine((g) => !g.startsWith('/') && !g.split('/').includes('..'), 'paths and globs must be relative to the repo root');
 
 export const ClaimFilesInput = z.object({
@@ -134,9 +144,9 @@ export type ActivityQuery = z.input<typeof ActivityQuery>;
 
 export const CommitInput = z.object({
   sha: z.string().regex(/^[0-9a-f]{7,40}$/, 'sha must be 7-40 lowercase hex characters'),
-  branch: z.string().min(1).max(255),
+  branch: z.string().min(1).max(255).refine(singleLine, `branch ${SINGLE_LINE_MESSAGE}`),
   message: z.string().max(2000),
-  files: z.array(z.string().min(1).max(1024)).max(1000),
+  files: z.array(z.string().min(1).max(1024).refine(singleLine, `file paths ${SINGLE_LINE_MESSAGE}`)).max(1000),
   insertions: z.number().int().min(0),
   deletions: z.number().int().min(0),
 });
