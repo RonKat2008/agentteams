@@ -25,8 +25,8 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     await db.destroy();
     throw err;
   }
-  const app = createApp(createContext(db));
   const hostname = opts.host ?? '127.0.0.1';
+  const app = createApp(createContext(db), hostname === '127.0.0.1' ? { allowedHosts: ['127.0.0.1', 'localhost'] } : {});
 
   return new Promise((resolve, reject) => {
     // Only guards startup (e.g. EADDRINUSE); detached once listening so a later error cannot destroy the db.

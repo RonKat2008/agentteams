@@ -14,7 +14,7 @@
     "agentteams-hub": "./dist/bin.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && chmod +x dist/bin.js"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

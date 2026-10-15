@@ -1,3 +1,5 @@
+import { connect } from 'node:net';
+import { request } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,5 +72,34 @@ describe('hub over real HTTP', () => {
   it('rejects and releases its database when the port is taken', async () => {
     const port = Number(new URL(hub.url).port);
     await expect(startHub({ dbPath: join(dir, 'second.db'), port })).rejects.toMatchObject({ code: 'EADDRINUSE' });
+  });
+
+  it('rejects a spoofed Host header on the local hub', async () => {
+    // fetch() ignores a Host override, so speak raw HTTP.
+    const { port } = new URL(hub.url);
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port, path: '/health', headers: { host: 'evil.example' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject).end();
+    });
+    expect(status).toBe(403);
+  });
+
+  it('accepts a bodyless POST with no content-length or content-type', async () => {
+    const created = await post('/api/teams', { name: 'bodyless', member: 'ronit', tool: 'claude', repo: { provider: 'local' } });
+    const { port } = new URL(hub.url);
+    // Raw socket: node:http would add content-length: 0, which curl does not.
+    const reply = await new Promise<string>((resolve, reject) => {
+      const socket = connect({ host: '127.0.0.1', port: Number(port) }, () => {
+        socket.write(`POST /api/team/invite/rotate HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${created.apiKey}\r\nConnection: close\r\n\r\n`);
+      });
+      let data = '';
+      socket.on('data', (chunk) => { data += chunk; });
+      socket.on('end', () => resolve(data));
+      socket.on('error', reject);
+    });
+    expect(reply.split('\r\n')[0]).toBe('HTTP/1.1 200 OK');
   });
 });

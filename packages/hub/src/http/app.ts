@@ -39,7 +39,17 @@ export function requireAgent(ctx: HubContext) {
   });
 }
 
-export function createApp(ctx: HubContext): Hono<AppEnv> {
+export interface AppOptions {
+  /** When set, requests whose Host hostname is not listed are refused (DNS-rebinding/CSRF guard for the local hub). */
+  allowedHosts?: string[];
+}
+
+function hostnameOf(host: string): string {
+  if (host.startsWith('[')) return host.slice(0, host.indexOf(']') + 1).toLowerCase();
+  return host.split(':')[0]!.toLowerCase();
+}
+
+export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.onError((err, c) => {
@@ -49,6 +59,27 @@ export function createApp(ctx: HubContext): Hono<AppEnv> {
   });
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'route not found' } }, 404));
+
+  if (opts.allowedHosts) {
+    const allowed = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));
+    app.use('*', async (c, next) => {
+      const host = hostnameOf(c.req.header('host') ?? new URL(c.req.url).host);
+      if (!allowed.has(host)) throw new DomainError('forbidden', 'host not allowed');
+      await next();
+    });
+  }
+
+  app.use('/api/*', async (c, next) => {
+    if (c.req.method === 'POST') {
+      const length = c.req.header('content-length');
+      const hasBody = (length !== undefined && length !== '0') || c.req.header('transfer-encoding') !== undefined;
+      const type = (c.req.header('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+      if (hasBody && type !== 'application/json') {
+        return c.json({ error: { code: 'invalid', message: 'Content-Type must be application/json' } }, 415);
+      }
+    }
+    await next();
+  });
 
   app.get('/health', (c) => c.json({ ok: true }));
   app.post('/api/teams', async (c) => c.json(await createTeam(ctx, (await body(c)) as never), 201));
