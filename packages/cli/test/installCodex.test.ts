@@ -44,6 +44,34 @@ describe('codex config block', () => {
   });
 });
 
+describe('unmanaged agentteams server detection', () => {
+  const block = codexMcpBlock('/n', ['/b']);
+  const bad = [
+    '[mcp_servers.agentteams] # x\nurl = "x"\n',
+    '[ mcp_servers . agentteams ]  # x\n',
+    '[mcp_servers."agentteams"]\n',
+    "[mcp_servers.'agentteams']\n",
+    '[mcp_servers.agentteams.env]\nA = "b"\n',
+    'mcp_servers.agentteams.command = "x"\n',
+    ' "mcp_servers" . \'agentteams\' . command="x"\n',
+    '[mcp_servers]\nagentteams = { url = "x" }\n',
+    '[ "mcp_servers" ]\n"agentteams".url = "x"\n',
+    'mcp_servers = { agentteams = { url = "x" } }\n',
+  ];
+  it.each(bad)('refuses %j', (text) => {
+    expect(() => upsertCodexConfig(text, block)).toThrow(/outside the agentteams-managed block/);
+  });
+  const ok = [
+    '[mcp_servers.agentteams_other]\nurl = "x"\n',
+    '[mcp_servers.alike]\nurl = "agentteams"\n',
+    '# [mcp_servers.agentteams]\n',
+    '[other]\nagentteams = 1\n',
+  ];
+  it.each(ok)('allows %j', (text) => {
+    expect(() => upsertCodexConfig(text, block)).not.toThrow();
+  });
+});
+
 describe('installCodex', () => {
   it('writes config, hooks and AGENTS.md without the key, with backups', async () => {
     writeFileSync(join(codex, 'config.toml'), 'model = "o3"\n');
@@ -60,6 +88,14 @@ describe('installCodex', () => {
     expect(readFileSync(join(t.deps.cwd, 'AGENTS.md'), 'utf8')).toContain('agentteams:start');
     expect(report.warnings).toEqual([]);
     expect(report.done.join('\n')).toContain('/hooks');
+  });
+
+  it('keeps the first .bak across later content-changing runs', async () => {
+    writeFileSync(join(codex, 'config.toml'), 'model = "o3"\n');
+    await installCodex(t.deps, cred, { cli: CLI, argv: ARGV });
+    await installCodex(t.deps, cred, { cli: CLI, argv: { command: '/other', args: ['/y'] } });
+    expect(readFileSync(join(codex, 'config.toml'), 'utf8')).toContain('"/other"');
+    expect(readFileSync(join(codex, 'config.toml.bak'), 'utf8')).toBe('model = "o3"\n');
   });
 
   it('is idempotent', async () => {

@@ -20,9 +20,9 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function downstreamFor(upstream: Client | null) {
+async function downstreamFor(upstream: Client | null, reason?: string) {
   const [a, b] = InMemoryTransport.createLinkedPair();
-  await createProxyServer(upstream, hub.url).connect(a);
+  await createProxyServer(upstream, hub.url, reason).connect(a);
   const downstream = new Client({ name: 'codex', version: '0' });
   await downstream.connect(b);
   return downstream;
@@ -48,6 +48,21 @@ describe('MCP proxy', () => {
   it('serves an empty tool list without credentials', async () => {
     const downstream = await downstreamFor(null);
     expect((await downstream.listTools()).tools).toEqual([]);
+    await downstream.close();
+  });
+
+  it('reports the distinct reason on calls when credentials exist but the hub is unreachable', async () => {
+    const downstream = await downstreamFor(null, 'agentteams hub unreachable at http://x');
+    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(res.isError).toBe(true);
+    expect((res.content as Array<{ text: string }>)[0]!.text).toBe('agentteams hub unreachable at http://x');
+    await downstream.close();
+  });
+
+  it('reports missing credentials by default', async () => {
+    const downstream = await downstreamFor(null);
+    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect((res.content as Array<{ text: string }>)[0]!.text).toContain('no team credentials');
     await downstream.close();
   });
 });

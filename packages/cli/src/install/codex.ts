@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Credential } from '../credentials.js';
@@ -23,6 +24,34 @@ export function codexMcpBlock(command: string, args: string[]): string {
   ].join('\n');
 }
 
+const norm = (t: string): string => t.replace(/["'\s]/g, '');
+const SERVER = 'mcp_servers.agentteams';
+const isServerPath = (n: string): boolean => n === SERVER || n.startsWith(`${SERVER}.`);
+
+/** Line scanner: does this (non-managed) TOML text define the agentteams MCP server in any form? */
+function definesAgentteamsServer(text: string): boolean {
+  let table = '';
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    if (line.startsWith('[')) {
+      const m = /^\[\[?([^\]]*)\]\]?\s*(#.*)?$/.exec(line);
+      if (m) {
+        table = norm(m[1] ?? '');
+        if (isServerPath(table)) return true;
+      }
+      continue;
+    }
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = norm(line.slice(0, eq));
+    if (isServerPath(key)) return true;
+    if (table === 'mcp_servers' && (key === 'agentteams' || key.startsWith('agentteams.'))) return true;
+    if (key === 'mcp_servers' && /["']?agentteams["']?\s*[=.]/.test(line.slice(eq + 1))) return true;
+  }
+  return false;
+}
+
 export function upsertCodexConfig(existing: string, block: string): string {
   const start = existing.indexOf(TOML_START);
   const endMarker = start === -1 ? -1 : existing.indexOf(TOML_END, start);
@@ -35,7 +64,7 @@ export function upsertCodexConfig(existing: string, block: string): string {
     before = existing.slice(0, start);
     after = existing.slice(end);
   }
-  if (/^\s*\[mcp_servers\.agentteams\]\s*$/m.test(before + after)) {
+  if (definesAgentteamsServer(before + after)) {
     throw new Error(
       '~/.codex/config.toml already defines [mcp_servers.agentteams] outside the agentteams-managed block; remove it and re-run "agentteams install"',
     );
@@ -55,7 +84,7 @@ async function readText(path: string): Promise<string | null> {
 }
 
 async function writeWithBackup(path: string, old: string | null, next: string): Promise<void> {
-  if (old !== null) await writeFile(`${path}.bak`, old);
+  if (old !== null && !existsSync(`${path}.bak`)) await writeFile(`${path}.bak`, old);
   await writeFile(path, next);
 }
 
