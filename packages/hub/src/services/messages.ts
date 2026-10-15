@@ -62,6 +62,7 @@ export async function readInbox(ctx: HubContext, actor: Actor, input: ReadInboxI
     const readAt = ctx.now().toISOString();
     await ctx.db.insertInto('message_reads')
       .values(rows.map((r) => ({ message_id: r.id, agent_id: actor.id, read_at: readAt })))
+      .onConflict((oc) => oc.doNothing())
       .execute();
   }
 

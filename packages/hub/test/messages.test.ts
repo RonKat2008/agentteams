@@ -33,6 +33,15 @@ describe('direct messages', () => {
   });
 });
 
+describe('concurrent reads', () => {
+  it('two simultaneous readInbox calls do not crash and mark the message read', async () => {
+    const { dylan, ash } = await seedTeam(env);
+    await sendMessage(env.ctx, dylan, { to: 'ash-codex', body: 'race', kind: 'fyi' });
+    await expect(Promise.all([readInbox(env.ctx, ash), readInbox(env.ctx, ash)])).resolves.toBeDefined();
+    expect(await readInbox(env.ctx, ash)).toEqual([]);
+  });
+});
+
 describe('from_role', () => {
   it('is frozen at send time and survives an orchestrator change', async () => {
     const { ronit, dylan, ash } = await seedTeam(env);
