@@ -1,0 +1,53 @@
+import { execFile } from 'node:child_process';
+import { homedir, userInfo } from 'node:os';
+
+export interface ExecResult { code: number; stdout: string; stderr: string }
+export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; input?: string }) => Promise<ExecResult>;
+
+export interface CliDeps {
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  exec: Exec;
+  fetch: typeof fetch;
+  out: (line: string) => void;
+  write: (raw: string) => void;
+  err: (line: string) => void;
+  readStdin: () => Promise<string>;
+  homedir: string;
+  username: string;
+}
+
+const realExec: Exec = (cmd, args, opts = {}) =>
+  new Promise((resolve) => {
+    const child = execFile(cmd, args, { cwd: opts.cwd, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        resolve({ code: 127, stdout: '', stderr: `command not found: ${cmd}` });
+        return;
+      }
+      const code = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
+      resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+    });
+    if (opts.input !== undefined) child.stdin?.end(opts.input);
+  });
+
+async function readAllStdin(): Promise<string> {
+  if (process.stdin.isTTY) return '';
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+export function realDeps(): CliDeps {
+  return {
+    env: process.env,
+    cwd: process.cwd(),
+    exec: realExec,
+    fetch: globalThis.fetch,
+    out: (line) => process.stdout.write(`${line}\n`),
+    write: (raw) => process.stdout.write(raw),
+    err: (line) => process.stderr.write(`${line}\n`),
+    readStdin: readAllStdin,
+    homedir: homedir(),
+    username: userInfo().username,
+  };
+}
