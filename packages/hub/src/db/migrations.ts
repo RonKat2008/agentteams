@@ -17,6 +17,7 @@ const migrations: Record<string, Migration> = {
         .addColumn('default_branch', 'text', (c) => c.notNull())
         .addColumn('orchestrator_agent_id', 'text')
         .addColumn('created_by_member', 'text', (c) => c.notNull())
+        .addColumn('creator_agent_id', 'text', (c) => c.notNull())
         .addColumn('created_at', 'text', (c) => c.notNull())
         .execute();
 

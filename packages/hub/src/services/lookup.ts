@@ -38,8 +38,9 @@ export async function requireOrchestrator(ctx: HubContext, actor: Actor, action:
   throw new DomainError('forbidden', `only the orchestrator${orchestrator ? ` (${orchestrator})` : ''} can ${action}`);
 }
 
-export function requireCreator(team: TeamRow, actor: Actor, action: string): void {
-  if (team.created_by_member !== actor.member) {
-    throw new DomainError('forbidden', `only the team creator (${team.created_by_member}) can ${action}`);
-  }
+/** Creator powers belong to the creating agent (by id), not to a self-asserted member name. */
+export async function requireCreator(ctx: HubContext, team: TeamRow, actor: Actor, action: string): Promise<void> {
+  if (team.creator_agent_id === actor.id) return;
+  const creator = (await agentNames(ctx, team.id)).get(team.creator_agent_id) ?? team.created_by_member;
+  throw new DomainError('forbidden', `only the team creator (${creator}) can ${action}`);
 }

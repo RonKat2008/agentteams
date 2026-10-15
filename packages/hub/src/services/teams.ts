@@ -39,7 +39,7 @@ export async function createTeam(ctx: HubContext, input: CreateTeamInput) {
       invite_code_hash: hashSecret(normalizeInviteCode(inviteCode)),
       invite_expires_at: inviteExpiresAt, invite_revoked: 0,
       repo_provider: p.repo.provider, repo_slug: p.repo.slug ?? null, default_branch: p.repo.defaultBranch,
-      orchestrator_agent_id: agentId, created_by_member: p.member, created_at: nowIso,
+      orchestrator_agent_id: agentId, created_by_member: p.member, creator_agent_id: agentId, created_at: nowIso,
     }).execute();
     await tx.db.insertInto('agents').values({
       id: agentId, team_id: teamId, name: agentName, member: p.member, tool: p.tool,
@@ -125,7 +125,7 @@ export async function getTeamStatus(ctx: HubContext, actor: Actor): Promise<Team
 export async function setOrchestrator(ctx: HubContext, actor: Actor, input: SetOrchestratorInput) {
   const p = parseInput(SetOrchestratorInput, input);
   const team = await getTeamRow(ctx, actor.teamId);
-  requireCreator(team, actor, 'change the orchestrator');
+  await requireCreator(ctx, team, actor, 'change the orchestrator');
   const target = await findAgent(ctx, team.id, p.agent);
   await withTx(ctx, async (tx) => {
     await tx.db.updateTable('teams').set({ orchestrator_agent_id: target.id }).where('id', '=', team.id).execute();
@@ -136,7 +136,7 @@ export async function setOrchestrator(ctx: HubContext, actor: Actor, input: SetO
 
 export async function rotateInvite(ctx: HubContext, actor: Actor) {
   const team = await getTeamRow(ctx, actor.teamId);
-  requireCreator(team, actor, 'rotate the invite code');
+  await requireCreator(ctx, team, actor, 'rotate the invite code');
   const inviteCode = generateInviteCode();
   const inviteExpiresAt = inviteExpiry(ctx);
   await withTx(ctx, async (tx) => {
@@ -152,7 +152,7 @@ export async function rotateInvite(ctx: HubContext, actor: Actor) {
 
 export async function revokeInvite(ctx: HubContext, actor: Actor) {
   const team = await getTeamRow(ctx, actor.teamId);
-  requireCreator(team, actor, 'revoke the invite code');
+  await requireCreator(ctx, team, actor, 'revoke the invite code');
   await withTx(ctx, async (tx) => {
     await tx.db.updateTable('teams').set({ invite_revoked: 1 }).where('id', '=', team.id).execute();
     await logEvent(tx, team.id, actor.id, 'invite_revoked');

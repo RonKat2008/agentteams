@@ -12,6 +12,7 @@ export interface TeamsTable {
   default_branch: string;
   orchestrator_agent_id: string | null;
   created_by_member: string;
+  creator_agent_id: string;
   created_at: string;
 }
 

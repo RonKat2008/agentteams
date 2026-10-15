@@ -75,6 +75,19 @@ describe('joinTeam', () => {
   });
 });
 
+describe('creator authority', () => {
+  it('is not gained by joining with the creator\'s member name', async () => {
+    const { inviteCode, ronit } = await seedTeam(env);
+    const impostorJoin = await joinTeam(env.ctx, { inviteCode, member: 'ronit', tool: 'claude' });
+    expect(impostorJoin.agentName).toBe('ronit-claude-2');
+    const impostor = await authenticate(env.ctx, impostorJoin.apiKey);
+    await expect(rotateInvite(env.ctx, impostor)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(revokeInvite(env.ctx, impostor)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(setOrchestrator(env.ctx, impostor, { agent: 'ronit-claude-2' })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(rotateInvite(env.ctx, ronit)).resolves.toBeDefined();
+  });
+});
+
 describe('authenticate and presence', () => {
   it('rejects an unknown key', async () => {
     await expect(authenticate(env.ctx, 'at_nope')).rejects.toMatchObject({ code: 'unauthorized' });
