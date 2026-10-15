@@ -113,3 +113,41 @@ describe('authenticated routes', () => {
     expect((await app.request('/api/team/invite/revoke', json({}, ronitKey))).status).toBe(200);
   });
 });
+
+describe('local hardening', () => {
+  it('rejects non-JSON POST bodies with 415', async () => {
+    const res = await app.request('/api/teams', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: JSON.stringify({ name: 's', member: 'ronit', tool: 'claude', repo: { provider: 'local' } }),
+    });
+    expect(res.status).toBe(415);
+    expect(await res.json()).toEqual({ error: { code: 'invalid', message: 'Content-Type must be application/json' } });
+  });
+
+  it('accepts application/json with a charset parameter', async () => {
+    const res = await app.request('/api/teams', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ name: 's', member: 'ronit', tool: 'claude', repo: { provider: 'local' } }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it('allows a bodyless POST (e.g. invite rotate) without a content type', async () => {
+    const { ronitKey } = await bootstrap();
+    const res = await app.request('/api/team/invite/rotate', { method: 'POST', headers: { authorization: `Bearer ${ronitKey}` } });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('host allowlist', () => {
+  it('refuses requests whose Host is not allowed', async () => {
+    const strict = createApp(env.ctx, { allowedHosts: ['127.0.0.1', 'localhost'] });
+    const evil = await strict.request('http://evil.example/health');
+    expect(evil.status).toBe(403);
+    expect(await evil.json()).toEqual({ error: { code: 'forbidden', message: 'host not allowed' } });
+    expect((await strict.request('http://127.0.0.1:4747/health')).status).toBe(200);
+    expect((await strict.request('http://localhost:4747/health')).status).toBe(200);
+  });
+});

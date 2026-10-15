@@ -1,3 +1,4 @@
+import { request } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,5 +71,18 @@ describe('hub over real HTTP', () => {
   it('rejects and releases its database when the port is taken', async () => {
     const port = Number(new URL(hub.url).port);
     await expect(startHub({ dbPath: join(dir, 'second.db'), port })).rejects.toMatchObject({ code: 'EADDRINUSE' });
+  });
+
+  it('rejects a spoofed Host header on the local hub', async () => {
+    // fetch() ignores a Host override, so speak raw HTTP.
+    const { port } = new URL(hub.url);
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port, path: '/health', headers: { host: 'evil.example' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject).end();
+    });
+    expect(status).toBe(403);
   });
 });
