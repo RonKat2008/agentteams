@@ -70,7 +70,11 @@ export const SendMessageInput = z.object({
 });
 export type SendMessageInput = z.input<typeof SendMessageInput>;
 
-export const ReadInboxInput = z.object({ markRead: z.boolean().default(true) });
+export const ReadInboxInput = z.object({
+  markRead: z.boolean().default(true),
+  /** Return (and mark read) at most this many of the oldest unread messages. */
+  limit: z.number().int().min(1).max(100).optional(),
+});
 export type ReadInboxInput = z.input<typeof ReadInboxInput>;
 
 const TaskNumber = z.number().int().positive();

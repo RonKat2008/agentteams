@@ -9,9 +9,27 @@ function formatMessage(m: InboxMessage): string {
   return `- ${label}: ${m.body.split('\n').join('\n  ')}`;
 }
 
-export function formatMessages(messages: InboxMessage[]): string {
+export const MAX_HOOK_MESSAGES = 20;
+export const MAX_HOOK_CHARS = 32 * 1024;
+
+/** Longest prefix of `messages` that fits the hook caps (always at least one message if any). */
+export function fitMessages(messages: InboxMessage[]): InboxMessage[] {
+  let used = 0;
+  const fit: InboxMessage[] = [];
+  for (const m of messages) {
+    const size = formatMessage(m).length + 1;
+    if (fit.length >= MAX_HOOK_MESSAGES || (fit.length > 0 && used + size > MAX_HOOK_CHARS)) break;
+    fit.push(m);
+    used += size;
+  }
+  return fit;
+}
+
+export function formatMessages(messages: InboxMessage[], more = 0): string {
   if (messages.length === 0) return '';
-  return [`agentteams: ${messages.length} new team message(s).`, ...messages.map(formatMessage)].join('\n');
+  const lines = [`agentteams: ${messages.length} new team message(s).`, ...messages.map(formatMessage)];
+  if (more > 0) lines.push(`(${more} more message${more === 1 ? '' : 's'} — call read_inbox)`);
+  return lines.join('\n');
 }
 
 export function formatStatus(status: TeamStatus, me: string): string {

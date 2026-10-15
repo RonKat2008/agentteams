@@ -26,6 +26,13 @@ describe('direct messages', () => {
     expect(await readInbox(env.ctx, ronit)).toHaveLength(1);
   });
 
+  it('with a limit only consume (mark read) that many, oldest first', async () => {
+    const { ronit, dylan } = await seedTeam(env);
+    for (const b of ['one', 'two', 'three']) await sendMessage(env.ctx, dylan, { to: 'ronit-claude', body: b });
+    expect((await readInbox(env.ctx, ronit, { limit: 2 })).map((m) => m.body)).toEqual(['one', 'two']);
+    expect((await readInbox(env.ctx, ronit)).map((m) => m.body)).toEqual(['three']);
+  });
+
   it('are not visible to other agents', async () => {
     const { ash, dylan } = await seedTeam(env);
     await sendMessage(env.ctx, dylan, { to: 'ronit-claude', body: 'private' });

@@ -69,8 +69,8 @@ export class HubClient {
   joinTeam(input: JoinTeamInput) {
     return this.request<{ teamId: string; teamName: string; agentName: string; apiKey: string; repo: RepoLink }>('POST', '/api/join', input);
   }
-  ping(markRead = true) {
-    return this.request<{ agent: string; messages: InboxMessage[] }>('POST', '/api/team/ping', { markRead });
+  ping(markRead = true, limit?: number) {
+    return this.request<{ agent: string; messages: InboxMessage[] }>('POST', '/api/team/ping', { markRead, ...(limit === undefined ? {} : { limit }) });
   }
   status() {
     return this.request<TeamStatus>('GET', '/api/team/status');

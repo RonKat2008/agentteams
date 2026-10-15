@@ -54,7 +54,7 @@ export async function readInbox(ctx: HubContext, actor: Actor, input: ReadInboxI
       eb.and([eb('m.to_agent_id', 'is', null), eb('m.id', '>', actor.id)]),
     ]))
     .orderBy('m.id')
-    .limit(INBOX_PAGE)
+    .limit(Math.min(p.limit ?? INBOX_PAGE, INBOX_PAGE))
     .execute();
 
   if (p.markRead && rows.length > 0) {

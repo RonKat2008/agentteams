@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startHub } from '@agentteams/hub';
 import { HubClient } from '../src/hubClient.js';
-import { saveCredential } from '../src/credentials.js';
+import { loadCredentials, saveCredential } from '../src/credentials.js';
 import { runHook } from '../src/hooks.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
@@ -75,6 +75,33 @@ describe('runHook', () => {
     expect(blocked.reason).toContain('Now do task 5');
     expect(blocked.reason).toContain('just fyi');
     expect((await runHook('stop', JSON.stringify({ cwd: repo }), 'codex', t.deps)).stdout).toBe('');
+  });
+
+  it('caps injected messages and leaves the rest unread', async () => {
+    for (let i = 1; i <= 25; i++) await ronitSend('ash-codex', `msg-${String(i).padStart(2, '0')}`, 'fyi');
+    const res = await runHook('post-tool-use', JSON.stringify({ cwd: repo }), 'codex', t.deps);
+    const text = ctxOf(res.stdout).additionalContext;
+    expect(text).toContain('20 new team message(s)');
+    expect(text).toContain('msg-20');
+    expect(text).not.toContain('msg-21');
+    expect(text).toContain('(5 more messages — call read_inbox)');
+    const next = ctxOf((await runHook('post-tool-use', JSON.stringify({ cwd: repo }), 'codex', t.deps)).stdout).additionalContext;
+    expect(next).toContain('5 new team message(s)');
+    expect(next).toContain('msg-21');
+    expect(next).toContain('msg-25');
+  });
+
+  it('caps by size and still emits valid JSON', async () => {
+    const big = 'x'.repeat(8000);
+    for (let i = 0; i < 10; i++) await ronitSend('ash-codex', `${i}${big}`, 'fyi');
+    const res = await runHook('user-prompt-submit', JSON.stringify({ cwd: repo }), 'codex', t.deps);
+    const text = ctxOf(res.stdout).additionalContext;
+    expect(text.length).toBeLessThan(40 * 1024);
+    expect(text).toMatch(/\(\d+ more messages? — call read_inbox\)/);
+    const [cred] = await loadCredentials(t.deps);
+    const left = (await new HubClient(hub.url, { apiKey: cred!.apiKey }).ping(false)).messages;
+    expect(left.length).toBeGreaterThan(0);
+    expect(left.length + Number(/(\d+) new team message/.exec(text)![1])).toBe(10);
   });
 
   it('stays silent and fast when the hub is down or stdin is garbage', async () => {

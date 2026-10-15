@@ -1,7 +1,8 @@
 import type { ToolKind } from '@agentteams/shared';
 import { resolveCredential } from './credentials.js';
 import type { CliDeps } from './deps.js';
-import { formatMessages, formatStatus } from './format.js';
+import type { InboxMessage } from '@agentteams/shared';
+import { fitMessages, formatMessages, formatStatus } from './format.js';
 import { HubClient } from './hubClient.js';
 
 export type HookEvent = 'session-start' | 'user-prompt-submit' | 'post-tool-use' | 'stop';
@@ -32,6 +33,17 @@ const contextOutput = (event: HookEvent, additionalContext: string): HookResult 
   exitCode: 0,
 });
 
+/** Messages that fit the caps from an unread peek; null when nothing fits. */
+async function consumeFitting(client: HubClient, peeked: InboxMessage[]): Promise<{ messages: InboxMessage[]; more: number } | null> {
+  const fit = fitMessages(peeked);
+  if (fit.length === 0) return null;
+  // Mark read only the messages that are actually injected; the rest stay unread.
+  const { messages } = await client.ping(true, fit.length);
+  return { messages, more: peeked.length - fit.length };
+}
+
+const isRealCommand = (m: InboxMessage): boolean => m.kind === 'command' && m.body.trim() !== '';
+
 export async function runHook(
   event: HookEvent,
   stdinText: string,
@@ -47,20 +59,21 @@ export async function runHook(
 
     if (event === 'session-start') {
       const status = await client.status();
-      const { messages } = await client.ping(true);
-      const text = formatStatus(status, cred.agentName) + (messages.length > 0 ? `\n\n${formatMessages(messages)}` : '');
+      const taken = await consumeFitting(client, (await client.ping(false)).messages);
+      const text = formatStatus(status, cred.agentName) + (taken ? `\n\n${formatMessages(taken.messages, taken.more)}` : '');
       return contextOutput(event, text);
     }
     if (event === 'stop') {
       if (input.stop_hook_active === true) return EMPTY;
-      const peek = await client.ping(false);
-      if (!peek.messages.some((m) => m.kind === 'command')) return EMPTY;
-      const { messages } = await client.ping(true);
-      return { stdout: JSON.stringify({ decision: 'block', reason: formatMessages(messages) }), exitCode: 0 };
+      const peeked = (await client.ping(false)).messages;
+      if (!fitMessages(peeked).some(isRealCommand)) return EMPTY;
+      const taken = await consumeFitting(client, peeked);
+      if (!taken?.messages.some(isRealCommand)) return EMPTY;
+      return { stdout: JSON.stringify({ decision: 'block', reason: formatMessages(taken.messages, taken.more) }), exitCode: 0 };
     }
-    const { messages } = await client.ping(true);
-    if (messages.length === 0) return EMPTY;
-    return contextOutput(event, formatMessages(messages));
+    const taken = await consumeFitting(client, (await client.ping(false)).messages);
+    if (!taken || taken.messages.length === 0) return EMPTY;
+    return contextOutput(event, formatMessages(taken.messages, taken.more));
   } catch {
     return EMPTY;
   }
