@@ -100,7 +100,7 @@ describe('installGitHooks', () => {
     const r = await installGitHooks(deps, repo, { command });
     expect(r.status).toBe('skipped');
     expect(r.detail).toContain('git-hook pre-commit');
-    expect(r.detail).toContain('git-hook post-commit');
+    expect(r.detail).toContain("'post-commit'");
     expect(existsSync(join(repo, '.git/hooks/pre-commit'))).toBe(false);
     expect(existsSync(join(repo, '.githooks'))).toBe(false);
   });
