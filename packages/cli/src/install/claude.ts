@@ -88,3 +88,17 @@ export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli
   report.done.push('updated CLAUDE.md');
   return report;
 }
+
+/** Per-worktree Claude setup: MCP registration (cwd = worktree), managed hooks and git exclude; no instruction block. */
+export async function installClaudeForWorktree(
+  deps: CliDeps,
+  cred: Credential,
+  worktreePath: string,
+  opts: { cli?: string } = {},
+): Promise<InstallReport> {
+  const report: InstallReport = { tool: 'claude', done: [], warnings: [] };
+  await registerMcp(deps, { ...cred, repoPath: worktreePath }, report);
+  await installHooks(worktreePath, opts.cli ?? cliCommand(), report);
+  await gitExclude(deps, worktreePath, report);
+  return report;
+}
