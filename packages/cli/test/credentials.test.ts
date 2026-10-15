@@ -2,7 +2,7 @@ import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadCredentials, resolveCredential, saveCredential, type Credential } from '../src/credentials.js';
-import { credentialsPath } from '../src/paths.js';
+import { agentteamsHome, credentialsPath } from '../src/paths.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
 let t: TestCli;
@@ -49,5 +49,17 @@ describe('credentials store', () => {
     mkdirSync(dirname(credentialsPath(t.deps)), { recursive: true });
     writeFileSync(credentialsPath(t.deps), '{nope');
     await expect(loadCredentials(t.deps)).rejects.toThrow(/credentials\.json is not valid JSON/);
+  });
+});
+
+describe('AGENTTEAMS_HOME', () => {
+  it('treats an empty value as unset', () => {
+    expect(agentteamsHome({ env: { AGENTTEAMS_HOME: '' }, homedir: '/h' })).toBe('/h/.agentteams');
+  });
+  it('rejects a relative value', () => {
+    expect(() => agentteamsHome({ env: { AGENTTEAMS_HOME: 'rel/dir' }, homedir: '/h' })).toThrow('AGENTTEAMS_HOME must be an absolute path');
+  });
+  it('uses an absolute value as given', () => {
+    expect(agentteamsHome({ env: { AGENTTEAMS_HOME: '/data/at' }, homedir: '/h' })).toBe('/data/at');
   });
 });

@@ -2,16 +2,21 @@
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parsePort } from './config.js';
+import { parsePort, resolveHome } from './config.js';
 import { startHub } from './server.js';
-
-const home = process.env.AGENTTEAMS_HOME ?? join(homedir(), '.agentteams');
-mkdirSync(home, { recursive: true, mode: 0o700 });
 
 const fail = (message: string): never => {
   console.error(`agentteams-hub: ${message}`);
   process.exit(1);
 };
+
+let home: string;
+try {
+  home = resolveHome(process.env.AGENTTEAMS_HOME, homedir());
+} catch (err) {
+  home = fail((err as Error).message);
+}
+mkdirSync(home, { recursive: true, mode: 0o700 });
 
 let port: number;
 try {

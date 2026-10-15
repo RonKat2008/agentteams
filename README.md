@@ -97,7 +97,7 @@ node packages/hub/dist/bin.js          # listens on http://127.0.0.1:4747
 
 Configuration (environment variables):
 
-- `AGENTTEAMS_HOME` — data directory (default `~/.agentteams`)
+- `AGENTTEAMS_HOME` — data directory (default `~/.agentteams`; must be an absolute path, empty means default)
 - `AGENTTEAMS_PORT` — listen port (default `4747`)
 - `AGENTTEAMS_HUB` — hub URL the CLI talks to (default the local hub)
 
