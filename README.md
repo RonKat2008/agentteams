@@ -34,7 +34,9 @@ agentteams join <invite-code> --agent codex
 ```
 
 `create` and `join` install everything automatically (MCP server, hooks, instruction block). Run
-`agentteams install` to redo that setup, e.g. after moving the repo or updating the CLI.
+`agentteams install` to redo that setup, e.g. after updating the CLI. Credentials are keyed by the
+repo's absolute path, so after moving a repo run `agentteams join` again (or re-create the
+credentials); `install` cannot relink a moved repo.
 
 ## What gets installed where
 
