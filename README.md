@@ -108,12 +108,25 @@ Each task gets its own branch and worktree, and commits are checked against file
 4. `agentteams pr <task>` opens a pull request with `gh` (GitHub teams only). If one exists, its URL is printed.
 5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
 
-The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). If `core.hooksPath` is
-set (husky and similar), agentteams does not write hooks; add these two lines to your hook manager yourself:
+The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). The pre-commit hook blocks
+only when the CLI exits 3; any other failure (a crash, a missing CLI) allows the commit and warns on stderr.
+Git 2.31 or newer is required.
+
+### Hook managers
+
+If `core.hooksPath` is set (husky and similar), agentteams does not write hooks; add these lines to your
+hook manager yourself. They do nothing on machines without `agentteams` installed.
 
 ```sh
-agentteams git-hook pre-commit
-agentteams git-hook post-commit
+# pre-commit
+command -v agentteams >/dev/null 2>&1 || exit 0
+agentteams git-hook pre-commit; [ $? -ne 3 ] || exit 1
+```
+
+```sh
+# post-commit
+command -v agentteams >/dev/null 2>&1 || exit 0
+agentteams git-hook post-commit || true
 ```
 
 `create --new-repo` makes a GitHub repo for you, and `join` clones the team repo (skip with `--no-clone`).

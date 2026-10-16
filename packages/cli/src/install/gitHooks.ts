@@ -72,12 +72,10 @@ export async function installGitHooks(
   }
   const configured = await hooksPathConfigured(deps, repoPath);
   if (configured) {
-    // The two lines a user adds to their hook manager (to be documented in the README, Task 8):
-    //   pre-commit:  agentteams git-hook pre-commit --agentteams-managed
-    //   post-commit: agentteams git-hook post-commit --agentteams-managed || true
+    // The README ("Hook managers") documents the guarded lines to add to the hook manager.
     return {
       status: 'skipped',
-      detail: `git hooks not installed: core.hooksPath is set (${oneLinePath(configured)}); add 'agentteams git-hook pre-commit' / 'post-commit' to your hook manager — see README`,
+      detail: `git hooks not installed: core.hooksPath is set (${oneLinePath(configured)}); add the agentteams lines to your hook manager; see README → Hook managers`,
     };
   }
 

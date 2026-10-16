@@ -13,6 +13,11 @@ describe('managed instruction block', () => {
     expect(block).toContain('Finish: commit, then `agentteams done <task> -m "<summary>"` (pushes the branch, completes the task).');
     expect(block).toContain('Commits touching files another agent claimed are blocked by a pre-commit check; message the owner rather than overriding.');
   });
+  it('points completion at agentteams done, with complete_task only for local teams', () => {
+    expect(block).not.toContain('with a short summary and your branch name');
+    expect(block).toContain('When finished, run `agentteams done <task> -m "<summary>"`');
+    expect(block).toContain('`complete_task` only for a local-only team');
+  });
   it('appends to existing content with one blank line', () => {
     expect(upsertManagedBlock('# My project\n', block)).toBe(`# My project\n\n${block}`);
   });

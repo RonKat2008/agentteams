@@ -99,8 +99,8 @@ describe('installGitHooks', () => {
     await git(repo, 'config', 'core.hooksPath', '.githooks');
     const r = await installGitHooks(deps, repo, { command });
     expect(r.status).toBe('skipped');
-    expect(r.detail).toContain('git-hook pre-commit');
-    expect(r.detail).toContain("'post-commit'");
+    expect(r.detail).toContain('core.hooksPath is set');
+    expect(r.detail).toContain('see README → Hook managers');
     expect(existsSync(join(repo, '.git/hooks/pre-commit'))).toBe(false);
     expect(existsSync(join(repo, '.githooks'))).toBe(false);
   });
