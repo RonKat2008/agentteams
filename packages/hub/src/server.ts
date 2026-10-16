@@ -11,6 +11,8 @@ export interface HubOptions {
   databaseUrl?: string;
   port?: number;
   host?: string;
+  mode?: 'local' | 'hosted';
+  allowedHosts?: string[];
 }
 
 export interface RunningHub {
@@ -27,7 +29,8 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     throw err;
   }
   const hostname = opts.host ?? '127.0.0.1';
-  const app = createApp(createContext(db, { dialect }), hostname === '127.0.0.1' ? { allowedHosts: ['127.0.0.1', 'localhost'] } : {});
+  const allowedHosts = opts.allowedHosts ?? (hostname === '127.0.0.1' ? ['127.0.0.1', 'localhost'] : undefined);
+  const app = createApp(createContext(db, { dialect }), { mode: opts.mode, ...(allowedHosts ? { allowedHosts } : {}) });
 
   return new Promise((resolve, reject) => {
     // Only guards startup (e.g. EADDRINUSE); detached once listening so a later error cannot destroy the db.

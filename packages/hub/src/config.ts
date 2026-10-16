@@ -19,3 +19,35 @@ export function parsePort(value: string | undefined): number {
   }
   return port;
 }
+
+export interface HubConfig {
+  mode: 'local' | 'hosted';
+  host: string;
+  port: number;
+  home: string;
+  databaseUrl?: string;
+  allowedHosts: string[];
+}
+
+const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
+
+function parseMode(value: string | undefined): 'local' | 'hosted' {
+  if (value === undefined || value === '' || value === 'local') return 'local';
+  if (value === 'hosted') return 'hosted';
+  throw new Error(`AGENTTEAMS_MODE must be "local" or "hosted" (got "${value}")`);
+}
+
+/** Reads the hub's environment into a validated config; throws with a clear message on bad input. */
+export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfig {
+  const mode = parseMode(env.AGENTTEAMS_MODE);
+  const listed = (env.AGENTTEAMS_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter((h) => h !== '');
+  if (mode === 'hosted' && listed.length === 0) throw new Error('AGENTTEAMS_ALLOWED_HOSTS is required in hosted mode');
+  return {
+    mode,
+    host: env.AGENTTEAMS_HOST || '127.0.0.1',
+    port: parsePort(env.AGENTTEAMS_PORT),
+    home: resolveHome(env.AGENTTEAMS_HOME, homeDir),
+    databaseUrl: env.DATABASE_URL || undefined,
+    allowedHosts: listed.length > 0 ? listed : LOCAL_HOSTS,
+  };
+}

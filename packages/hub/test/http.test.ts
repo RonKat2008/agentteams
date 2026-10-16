@@ -33,7 +33,7 @@ async function bootstrap() {
 
 describe('public routes', () => {
   it('reports health', async () => {
-    expect(await (await app.request('/health')).json()).toEqual({ ok: true });
+    expect(await (await app.request('/health')).json()).toEqual({ ok: true, mode: 'local' });
   });
 
   it('creates and joins teams with 201', async () => {
@@ -200,5 +200,59 @@ describe('git-layer routes', () => {
     expect((await getJson('/api/team/tasks/99', ashKey)).status).toBe(404);
     expect((await getJson('/api/team/tasks/abc', ashKey)).status).toBe(400);
     expect((await app.request('/api/team/tasks/abc/claim', json({}, ashKey))).status).toBe(400);
+  });
+});
+
+describe('hardening', () => {
+  it('reports the configured mode on /health', async () => {
+    const hosted = createApp(env.ctx, { mode: 'hosted' });
+    expect(await (await hosted.request('/health')).json()).toEqual({ ok: true, mode: 'hosted' });
+  });
+
+  it('rejects a 70 KB body with 413', async () => {
+    const res = await app.request('/api/teams', json({ name: 'x'.repeat(70 * 1024) }));
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: { code: 'invalid', message: 'request body too large' } });
+  });
+
+  it('rate limits unauthenticated routes per IP (10/min)', async () => {
+    let t = 0;
+    const limited = createApp(env.ctx, { mode: 'hosted', now: () => t });
+    const hit = () => limited.request('/api/join/preview', {
+      ...json({ inviteCode: 'aaaa-bbbb-cccc-dddd' }), headers: { 'content-type': 'application/json', 'fly-client-ip': '9.9.9.9' },
+    });
+    for (let i = 0; i < 10; i++) expect((await hit()).status).not.toBe(429);
+    const res = await hit();
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+    const body = await res.json();
+    expect(body.error.code).toBe('rate_limited');
+    expect(body.error.message).toMatch(/^too many requests; retry in \d+s$/);
+    const other = await limited.request('/api/join/preview', {
+      ...json({ inviteCode: 'aaaa-bbbb-cccc-dddd' }), headers: { 'content-type': 'application/json', 'fly-client-ip': '8.8.8.8' },
+    });
+    expect(other.status).not.toBe(429);
+    t += 60_000;
+    expect((await hit()).status).not.toBe(429);
+  });
+
+  it('rate limits authenticated requests per agent (60/min)', async () => {
+    let t = 0;
+    const limited = createApp(env.ctx, { now: () => t, rateLimits: { agentPerMin: 60, ipPerMin: 10 } });
+    const created = await (await limited.request('/api/teams', json({
+      name: 'rl', member: 'ronit', tool: 'claude', repo: { provider: 'local' },
+    }))).json();
+    for (let i = 0; i < 60; i++) expect((await limited.request('/api/team/status', get(created.apiKey))).status).toBe(200);
+    const res = await limited.request('/api/team/status', get(created.apiKey));
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).not.toBeNull();
+    t += 60_000;
+    expect((await limited.request('/api/team/status', get(created.apiKey))).status).toBe(200);
+  });
+
+  it('sets WWW-Authenticate on 401 from /mcp', async () => {
+    const res = await app.request('/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe('Bearer realm="agentteams"');
   });
 });
