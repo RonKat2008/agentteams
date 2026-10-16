@@ -184,7 +184,7 @@ describe('MCP proxy', () => {
     }) as unknown as Client;
     const netError = (code: string) => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(code), { code }) });
 
-    it.each(['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'EAI_AGAIN'])('retries once after a %s network failure', async (code) => {
+    it.each(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'])('retries once after a %s network failure', async (code) => {
       let calls = 0;
       let connects = 0;
       const first = { callTool: async () => { calls++; throw netError(code); }, close: async () => undefined } as unknown as Client;
@@ -192,6 +192,17 @@ describe('MCP proxy', () => {
       const res = await downstream.callTool({ name: 'team_status', arguments: {} });
       expect(textOf(res)).toBe('fine');
       expect(calls).toBe(2);
+      await downstream.close();
+    });
+
+    it('never retries ECONNRESET: the request may have been sent, so the outcome is ambiguous', async () => {
+      let calls = 0;
+      const c = { callTool: async () => { calls++; throw netError('ECONNRESET'); }, close: async () => undefined } as unknown as Client;
+      const downstream = await proxyWith(async () => c);
+      const res = await downstream.callTool({ name: 'send_message', arguments: {} });
+      expect(res.isError).toBe(true);
+      expect(textOf(res)).toContain('may or may not have completed');
+      expect(calls).toBe(1);
       await downstream.close();
     });
 

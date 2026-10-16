@@ -36,7 +36,7 @@ function isAuthRejection(e: unknown): boolean {
   return err.code === 401 || err.name === 'UnauthorizedError' || /\bHTTP 401\b/.test(err.message ?? '');
 }
 
-const CONNECT_PHASE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'EAI_AGAIN']);
+const CONNECT_PHASE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
 
 function errCode(e: unknown): unknown {
   return typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined;
@@ -114,8 +114,8 @@ export async function createProxyServer(opts: ProxyOptions) {
   });
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (!opts.connect) return errorResult('agentteams: no team credentials for this directory');
-    // Retry once only for connect-phase failures (ECONNREFUSED, ENOTFOUND, ECONNRESET, EAI_AGAIN, a stale
-    // session 404, or the initial connect throwing). Never after an HTTP 5xx, a timeout or ConnectionClosed:
+    // Retry once only for connect-phase failures (ECONNREFUSED, ENOTFOUND, EAI_AGAIN, a stale
+    // session 404, or the initial connect throwing). Never after ECONNRESET (it can follow a sent request), after an HTTP 5xx, a timeout or ConnectionClosed:
     // the hub may already have processed the call. Other McpErrors are genuine protocol/tool errors.
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
