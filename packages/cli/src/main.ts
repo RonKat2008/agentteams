@@ -16,6 +16,7 @@ import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
+const TRUST_HUB_HELP = 'send your GitHub token to a non-official hosted hub without asking (required when not interactive)';
 
 function parsePositive(name: string) {
   return (v: string): number => {
@@ -31,7 +32,7 @@ function parseLimit(v: string): number {
   return n;
 }
 
-const agentOpt = (def?: string) => new Option('--agent <tool>', 'claude | codex | other').choices(TOOLS).default(def);
+const agentOpt = (def?: string) => new Option('--agent <tool>', TOOLS.join(' | ')).choices(TOOLS).default(def);
 
 function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   const program = new Command('agentteams')
@@ -43,20 +44,24 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   const sub = (name: string) => program.command(name).exitOverride();
 
-  sub('up').description('Run a local hub').option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
-    .action(async (o: { port?: string }) => (await import('./commands/up.js')).upCommand(deps, o));
+  sub('up').description('Run a local hub (add --share to expose it over a Cloudflare tunnel)')
+    .option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
+    .option('--share', 'run in hosted mode behind a public Cloudflare quick tunnel')
+    .action(async (o: { port?: string; share?: boolean }) => (await import('./commands/up.js')).upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
-    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>')
+    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
-    .addOption(new Option('--local', 'local-only team (no GitHub link)').conflicts('newRepo'))
+    .addOption(new Option('--local', 'local-only repo (no GitHub link); this is NOT the local hub, use --hub local for that').conflicts('newRepo'))
     .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
     .addOption(new Option('--private', 'new repo is private (default)').conflicts('public'))
     .addOption(new Option('--public', 'new repo is public'))
     .option('--owner <org>', 'GitHub owner/org for --new-repo').option('--no-install')
+    .option('--trust-hub', TRUST_HUB_HELP)
     .action((name: string, o: { public?: boolean } & CreateOpts) =>
       createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
-    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>').option('--no-install')
+    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)').option('--no-install')
+    .option('--trust-hub', TRUST_HUB_HELP)
     .option('--no-clone', 'do not clone the team repo; use the current directory')
     .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
     .action((code: string, o) => joinCommand(deps, code, o));
@@ -117,7 +122,8 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   sub('mcp').description('(internal) stdio MCP proxy')
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
-    .action(async (o: { tool: ToolKind }) => (await import('./mcpProxy.js')).runMcpProxy(deps, o.tool));
+    .option('--repo <path>', 'resolve team credentials for this repo instead of the current directory')
+    .action(async (o: { tool: ToolKind; repo?: string }) => (await import('./mcpProxy.js')).runMcpProxy(deps, o.tool, { repo: o.repo }));
   return program;
 }
 

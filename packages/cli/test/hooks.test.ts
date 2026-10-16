@@ -117,6 +117,27 @@ describe('runHook', () => {
     expect(left.length + Number(/(\d+) new team message/.exec(text)![1])).toBe(10);
   });
 
+  it('does not consume messages on events the dialect cannot deliver context for (copilot user-prompt-submit)', async () => {
+    const cpRepo = '/work/cp-app';
+    const [codex] = await loadCredentials(t.deps);
+    await saveCredential(t.deps, { ...codex!, repoPath: cpRepo, tool: 'copilot' });
+    await ronitSend('ash-codex', 'Run the tests', 'command');
+    expect((await runHook('user-prompt-submit', JSON.stringify({ cwd: cpRepo }), 'copilot', t.deps)).stdout).toBe('');
+    const left = (await new HubClient(hub.url, { apiKey: codex!.apiKey }).ping(false)).messages;
+    expect(left.map((m) => m.body)).toEqual(['Run the tests']);
+    const post = JSON.parse((await runHook('post-tool-use', JSON.stringify({ cwd: cpRepo }), 'copilot', t.deps)).stdout) as { additionalContext: string };
+    expect(post.additionalContext).toContain('Run the tests');
+  });
+
+  it('cursor user-prompt-submit is a heartbeat only and leaves messages unread', async () => {
+    const cuRepo = '/work/cu-app';
+    const [codex] = await loadCredentials(t.deps);
+    await saveCredential(t.deps, { ...codex!, repoPath: cuRepo, tool: 'cursor' });
+    await ronitSend('ash-codex', 'hello cursor', 'fyi');
+    expect((await runHook('user-prompt-submit', JSON.stringify({ workspace_roots: [cuRepo] }), 'cursor', t.deps)).stdout).toBe('');
+    expect((await new HubClient(hub.url, { apiKey: codex!.apiKey }).ping(false)).messages).toHaveLength(1);
+  });
+
   it('stays silent and fast when the hub is down or stdin is garbage', async () => {
     await hub.close();
     hub = await startHub({ dbPath: join(dir, 'other.db'), port: 0 }); // credential still points at the dead port

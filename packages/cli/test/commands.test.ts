@@ -40,6 +40,26 @@ describe('agentteams commands', () => {
     expect(existsSync(join(t.deps.cwd, 'CLAUDE.md'))).toBe(true);
   });
 
+  it('create prints which hub it uses, and --local help says it is not the local hub', async () => {
+    const t = mk({}, { claude: { code: 0 } });
+    expect(await run(t, 'create', 'hub-line', '--hub', hub.url, '--local', '--no-install')).toBe(0);
+    expect(t.out).toContain(`Hub: ${hub.url} (${new URL(hub.url).host})`);
+    const h = mk();
+    await run(h, 'create', '--help');
+    expect(h.out.join('\n')).toContain('--hub local');
+  });
+
+  it('create/install warn loudly when running from an npx cache', async () => {
+    const t = mk({}, { claude: { code: 0 } });
+    const { runInstallers } = await import('../src/commands/install.js');
+    const cred = { repoPath: t.deps.cwd, tool: 'claude' as const, hubUrl: hub.url, teamName: 'x', agentName: 'a-claude', apiKey: 'k', createdAt: 'x' };
+    await runInstallers(t.deps, cred, { binPath: '/h/.npm/_npx/ab/node_modules/agentteams/dist/bin.js' });
+    expect(t.err.join('\n')).toContain('npm i -g agentteams && agentteams install');
+    const t2 = mk({}, { claude: { code: 0 } });
+    await runInstallers(t2.deps, { ...cred, repoPath: t2.deps.cwd }, { binPath: '/usr/lib/node_modules/agentteams/dist/bin.js' });
+    expect(t2.err.join('\n')).not.toContain('npm i -g');
+  });
+
   it('create detects the GitHub origin and status shows the repo', async () => {
     const t = mk({}, { 'git remote get-url origin': { stdout: 'git@github.com:ronit/my-app.git' } });
     expect(await run(t, 'create', 's-gh', '--hub', hub.url, '--no-install')).toBe(0);

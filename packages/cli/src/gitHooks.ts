@@ -5,12 +5,12 @@ import { PRE_COMMIT_BLOCKED } from './exitCodes.js';
 import { oneLine } from './format.js';
 import { currentBranch, headCommit, stagedFiles } from './git.js';
 import { HubClient } from './hubClient.js';
+import { orderedToolKinds } from './tools/registry.js';
 
 export type { GitHookName } from './install/gitHooks.js';
 
 const HOOK_TIMEOUT_MS = 2000;
 const CHECK_BATCH_SIZE = 1000;
-const TOOL_ORDER = ['claude', 'codex', 'other'] as const;
 
 type Deps = Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec' | 'err'>;
 
@@ -20,11 +20,11 @@ const TASK_BRANCH = /^at\/(.+)\/\d+$/;
 /**
  * Git hooks are tool-agnostic. On a task branch (at/<agent>/<n>) the credential for that agent wins,
  * so claude and codex sharing a repo are not mistaken for each other. Otherwise (or if no credential
- * matches) fall back to a fixed order (claude, codex, other) so the choice is deterministic.
+ * matches) fall back to a fixed order (claude, codex, then the other tools) so the choice is deterministic.
  */
 async function pickCredential(deps: Deps): Promise<Credential | null> {
   const found: Credential[] = [];
-  for (const tool of TOOL_ORDER) {
+  for (const tool of orderedToolKinds()) {
     const cred = await resolveCredentialForCwd(deps, deps.cwd, tool);
     if (cred) found.push(cred);
   }

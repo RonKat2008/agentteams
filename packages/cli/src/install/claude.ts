@@ -1,14 +1,16 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ToolKind } from '@agentteams/shared';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { gitPath } from '../git.js';
 import { writeInstructionFile } from '../instructions.js';
-import { cliCommand } from '../paths.js';
+import { cliArgv, cliCommand, shellQuote } from '../paths.js';
+import { addToGitExclude } from '../tools/gitExclude.js';
+import type { InstallReport } from '../tools/types.js';
 import { mergeManagedHooks, type HooksJson } from './hooksConfig.js';
 
-export interface InstallReport { tool: ToolKind; done: string[]; warnings: string[] }
+export type { InstallReport };
+
+type CliArgv = ReturnType<typeof cliArgv>;
 
 const EXCLUDE_LINE = '.claude/settings.local.json';
 
@@ -21,24 +23,17 @@ async function readText(path: string): Promise<string | null> {
   }
 }
 
-async function registerMcp(deps: CliDeps, cred: Credential, report: InstallReport): Promise<void> {
+async function registerMcp(deps: CliDeps, cred: Credential, report: InstallReport, cli: CliArgv): Promise<void> {
   const cwd = cred.repoPath;
-  const url = `${cred.hubUrl}/mcp`;
+  const argv = [cli.command, ...cli.args, 'mcp', '--tool', 'claude', '--repo', cred.repoPath];
   await deps.exec('claude', ['mcp', 'remove', 'agentteams', '--scope', 'local'], { cwd });
-  const res = await deps.exec(
-    'claude',
-    ['mcp', 'add', '--transport', 'http', '--scope', 'local', 'agentteams', url, '--header', `Authorization: Bearer ${cred.apiKey}`],
-    { cwd },
-  );
+  const res = await deps.exec('claude', ['mcp', 'add', '--scope', 'local', 'agentteams', '--', ...argv], { cwd });
   if (res.code === 0) {
-    report.done.push('registered MCP server "agentteams" with Claude Code');
+    report.done.push('registered MCP server "agentteams" with Claude Code (stdio proxy)');
   } else if (res.code === 127) {
-    report.warnings.push(
-      `Claude Code CLI not found; register the MCP server manually: claude mcp add --transport http --scope local agentteams ${url} --header "Authorization: Bearer <key from ~/.agentteams/credentials.json>"`,
-    );
+    report.warnings.push(`Claude Code CLI not found; register the MCP server manually: claude mcp add --scope local agentteams -- ${argv.map(shellQuote).join(' ')}`);
   } else {
-    const first = res.stderr.split('\n')[0] ?? '';
-    report.warnings.push(`claude mcp add failed: ${first.split(cred.apiKey).join('<redacted>')}`);
+    report.warnings.push(`claude mcp add failed: ${(res.stderr.split('\n')[0] ?? '').split(cred.apiKey).join('<redacted>')}`);
   }
 }
 
@@ -62,26 +57,14 @@ async function installHooks(repo: string, cli: string, report: InstallReport): P
 }
 
 async function gitExclude(deps: Pick<CliDeps, 'exec'>, repo: string, report: InstallReport): Promise<void> {
-  let path: string;
-  try {
-    path = await gitPath(deps, repo, 'info/exclude');
-  } catch {
-    return; // not a git repo
-  }
-  try {
-    const existing = (await readText(path)) ?? '';
-    if (existing.split('\n').some((l) => l.trim() === EXCLUDE_LINE)) return;
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`}${EXCLUDE_LINE}\n`);
-  } catch (err) {
-    report.warnings.push(`could not update git exclude: ${(err as Error).message}`);
-  }
+  const warning = await addToGitExclude(deps, repo, EXCLUDE_LINE);
+  if (warning) report.warnings.push(warning);
 }
 
-export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli?: string } = {}): Promise<InstallReport> {
+export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli?: string; argv?: CliArgv } = {}): Promise<InstallReport> {
   const report: InstallReport = { tool: 'claude', done: [], warnings: [] };
   const repo = cred.repoPath;
-  await registerMcp(deps, cred, report);
+  await registerMcp(deps, cred, report, opts.argv ?? cliArgv());
   await installHooks(repo, opts.cli ?? cliCommand(), report);
   await gitExclude(deps, repo, report);
   await writeInstructionFile(join(repo, 'CLAUDE.md'), cred.teamName);
@@ -94,10 +77,10 @@ export async function installClaudeForWorktree(
   deps: CliDeps,
   cred: Credential,
   worktreePath: string,
-  opts: { cli?: string } = {},
+  opts: { cli?: string; argv?: CliArgv } = {},
 ): Promise<InstallReport> {
   const report: InstallReport = { tool: 'claude', done: [], warnings: [] };
-  await registerMcp(deps, { ...cred, repoPath: worktreePath }, report);
+  await registerMcp(deps, { ...cred, repoPath: worktreePath }, report, opts.argv ?? cliArgv());
   await installHooks(worktreePath, opts.cli ?? cliCommand(), report);
   await gitExclude(deps, worktreePath, report);
   return report;

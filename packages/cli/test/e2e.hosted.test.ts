@@ -65,14 +65,14 @@ describe('hosted team end to end', () => {
   it('create, join, access request, grant, task claim, status, and no token leaks', async () => {
     const ronit = mk('ronit', 'tok-ronit', ronitGh);
     await realExec('git', ['init', '-q'], { cwd: ronit.deps.cwd });
-    expect(await run(ronit, 'create', 'app', '--repo', 'me/app', '--hub', hub.url, '--no-install')).toBe(0);
+    expect(await run(ronit, 'create', 'app', '--repo', 'me/app', '--hub', hub.url, '--trust-hub', '--no-install')).toBe(0);
     const rc = (await resolveCredential(ronit.deps, ronit.deps.cwd, 'claude'))!;
     expect(rc.agentName).toBe('ronit-claude');
     const code = /Invite code: (\S+)/.exec(ronit.out.join('\n'))![1]!;
 
     const dylan = mk('dylan', 'tok-dylan', []);
     await realExec('git', ['init', '-q'], { cwd: dylan.deps.cwd });
-    expect(await run(dylan, 'join', code, '--hub', hub.url, '--agent', 'codex', '--no-install', '--no-clone')).toBe(0);
+    expect(await run(dylan, 'join', code, '--hub', hub.url, '--trust-hub', '--agent', 'codex', '--no-install', '--no-clone')).toBe(0);
     const dc = (await resolveCredential(dylan.deps, dylan.deps.cwd, 'codex'))!;
     expect(dc.agentName).toBe('dylanx-codex');
 
@@ -103,7 +103,7 @@ describe('hosted team end to end', () => {
 
     // A join without a gh token is refused.
     const nogh = mk('nogh', null, []);
-    expect(await run(nogh, 'join', code, '--hub', hub.url, '--no-install', '--no-clone')).toBe(1);
+    expect(await run(nogh, 'join', code, '--hub', hub.url, '--trust-hub', '--no-install', '--no-clone')).toBe(1);
     expect(nogh.err.join('\n')).toContain('gh is not logged in');
 
     const out = everything();

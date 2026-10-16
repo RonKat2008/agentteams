@@ -5,3 +5,5 @@ coverage/
 *.db-*
 .vercel
 .env*
+packages/agentteams/LICENSE
+packages/agentteams/README.md
