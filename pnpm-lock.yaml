@@ -257,6 +257,10 @@ importers:
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5
+    optionalDependencies:
+      cloudflared:
+        specifier: ^0.7.3
+        version: 0.7.3
 
   packages/hub:
     dependencies:
