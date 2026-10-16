@@ -82,7 +82,9 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('worktree').description('Claim a task and give it its own git worktree and branch')
     .addArgument(new Argument('<task>', 'task number').argParser(parsePositive('task')))
     .addOption(agentOpt()).option('--base <ref>', 'branch point (default: the repo default branch)')
-    .action((task: number, o: { agent?: ToolKind; base?: string }) => worktreeCommand(deps, task, o));
+    .option('--remove', "remove this task's worktree instead (the branch is kept)")
+    .option('--force', 'with --remove: discard uncommitted changes')
+    .action((task: number, o: { agent?: ToolKind; base?: string; remove?: boolean; force?: boolean }) => worktreeCommand(deps, task, o));
   const taskArg = () => new Argument('<task>', 'task number').argParser(parsePositive('task'));
   sub('done').description('Push this task branch and mark the task done')
     .addArgument(taskArg()).addOption(agentOpt())

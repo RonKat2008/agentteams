@@ -8,7 +8,7 @@ import { installClaudeForWorktree } from '../install/claude.js';
 import { installGitHooks } from '../install/gitHooks.js';
 import { clientFor, refExists, requireCredential, teamDefaultBranch } from './shared.js';
 
-export interface WorktreeOpts { agent?: ToolKind; base?: string }
+export interface WorktreeOpts { agent?: ToolKind; base?: string; remove?: boolean; force?: boolean }
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
 
@@ -32,16 +32,34 @@ async function pickBase(deps: CliDeps, client: HubClient, root: string, base: st
   return d;
 }
 
+/** Removes this task's worktree (the branch is kept). Refuses uncommitted changes unless `force`. */
+async function removeWorktree(deps: CliDeps, task: number, root: string, branch: string, path: string, force: boolean): Promise<void> {
+  if (!(await exists(path))) throw new Error(`no worktree for task #${task} at ${path}`);
+  if (!(await isWorktreeOn(deps, path, branch))) throw new Error(`${path} exists and is not this task's worktree`);
+  if (!force) {
+    const status = await git(deps, path, ['status', '--porcelain']);
+    if (status.code !== 0) throw new Error(`git status failed in ${path}: ${status.stderr.trim() || `exit ${status.code}`}`);
+    if (status.stdout.trim()) {
+      throw new Error(`${path} has uncommitted changes; commit or stash them, or re-run with --force to discard them`);
+    }
+  }
+  const args = ['worktree', 'remove', ...(force ? ['--force'] : []), path];
+  const res = await git(deps, root, args);
+  if (res.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr.trim() || `exit ${res.code}`}`);
+  deps.out(`Removed worktree ${path} (branch ${branch} kept)`);
+}
+
 export async function worktreeCommand(deps: CliDeps, task: number, opts: WorktreeOpts): Promise<void> {
   const cred = await requireCredential(deps, opts.agent);
   const root = (await mainRepoRoot(deps, deps.cwd)) ?? (await gitTopLevel(deps, deps.cwd));
   if (!root) throw new Error('not inside a git repository');
 
-  const client = clientFor(deps, cred);
-  await client.claimTask(task);
-
   const branch = `at/${cred.agentName}/${task}`;
   const path = join(dirname(root), `${basename(root)}.at`, `${cred.agentName}-${task}`);
+  if (opts.remove) return removeWorktree(deps, task, root, branch, path, Boolean(opts.force));
+
+  const client = clientFor(deps, cred);
+  await client.claimTask(task);
 
   if (await exists(path)) {
     if (!(await isWorktreeOn(deps, path, branch))) throw new Error(`${path} exists and is not this task's worktree`);
