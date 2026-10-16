@@ -38,7 +38,7 @@ export async function currentBranch(deps: Deps, cwd: string): Promise<string> {
 }
 
 export async function stagedFiles(deps: Deps, cwd: string): Promise<string[]> {
-  const r = await git(deps, cwd, ['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMRD']);
+  const r = await git(deps, cwd, ['diff', '--cached', '--name-only', '--no-renames', '-z', '--diff-filter=ACMRD']);
   if (r.code !== 0) return [];
   return r.stdout.split('\0').filter((f) => f !== '');
 }
