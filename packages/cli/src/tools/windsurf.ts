@@ -42,8 +42,7 @@ export async function installWindsurf(
     if (isWritten(status)) report.done.push(`registered MCP server "agentteams" in ${shown}`);
   }
   for (const dir of ['.devin', '.windsurf']) {
-    await writeOwnedRulesFile(join(cred.repoPath, dir, 'rules', 'agentteams.md'), ['trigger: always_on'], cred.teamName, RULES_EXTRA);
-    report.done.push(`wrote ${dir}/rules/agentteams.md`);
+    await writeOwnedRulesFile(cred.repoPath, `${dir}/rules/agentteams.md`, ['trigger: always_on'], cred.teamName, report, RULES_EXTRA);
   }
   report.done.push('Windsurf/Devin hooks cannot inject context: teammate messages arrive only when the agent calls read_inbox, as the rules instruct');
   return report;

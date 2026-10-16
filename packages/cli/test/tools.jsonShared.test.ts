@@ -128,6 +128,30 @@ describe.each([
   });
 });
 
+describe.each([
+  ['cursor', '.cursor/rules/agentteams.mdc'],
+  ['windsurf', '.devin/rules/agentteams.md'],
+  ['windsurf', '.windsurf/rules/agentteams.md'],
+] as Array<[ToolKind, string]>)('owned rules file: %s %s', (tool, rel) => {
+  it('is written with a managed marker and rewritten on reinstall', async () => {
+    await getAdapter(tool).install(t.deps, credFor(tool));
+    expect(readFileSync(join(t.deps.cwd, rel), 'utf8')).toContain('<!-- agentteams:managed -->');
+    const r = await getAdapter(tool).install(t.deps, credFor(tool, t.deps.cwd));
+    expect(r.warnings.filter((w) => w.includes(rel))).toEqual([]);
+  });
+  it('a user file without the marker is left untouched with a warning', async () => {
+    seed(rel, '# my own rules\n');
+    const r = await getAdapter(tool).install(t.deps, credFor(tool));
+    expect(readFileSync(join(t.deps.cwd, rel), 'utf8')).toBe('# my own rules\n');
+    expect(r.warnings).toContain(`${rel} exists and is not managed by agentteams; left untouched`);
+  });
+  it('a file from an older install (frontmatter + managed block, no marker) is still ours', async () => {
+    seed(rel, '---\nalwaysApply: true\n---\n\n<!-- agentteams:start -->\nold\n<!-- agentteams:end -->\n');
+    await getAdapter(tool).install(t.deps, credFor(tool));
+    expect(readFileSync(join(t.deps.cwd, rel), 'utf8')).toContain('<!-- agentteams:managed -->');
+  });
+});
+
 describe('launch hints', () => {
   it('every adapter names how to start it', () => {
     const expected: Partial<Record<ToolKind, string>> = { claude: 'claude', codex: 'codex', gemini: 'gemini', copilot: 'copilot', droid: 'droid', opencode: 'opencode', cursor: 'cursor .' };

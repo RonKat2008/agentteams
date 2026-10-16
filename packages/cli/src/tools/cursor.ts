@@ -47,11 +47,12 @@ export async function installCursor(deps: CliDeps, cred: Credential, opts: { cli
   const report: InstallReport = { tool: 'cursor', done: [], warnings: [] };
   await installProject(deps, cred.repoPath, opts.cli ?? cliCommand(), opts.argv ?? cliArgv(), report);
   await writeOwnedRulesFile(
-    join(cred.repoPath, '.cursor', 'rules', 'agentteams.mdc'),
+    cred.repoPath,
+    '.cursor/rules/agentteams.mdc',
     ['description: agentteams multi-agent coordination', 'alwaysApply: true'],
     cred.teamName,
+    report,
   );
-  report.done.push('wrote .cursor/rules/agentteams.mdc');
   await writeInstructionFile(join(cred.repoPath, 'AGENTS.md'), cred.teamName);
   report.done.push('updated AGENTS.md');
   report.done.push('Cursor has no per-prompt context hook: teammate messages arrive after tool calls and when the agent stops; restart Cursor and enable the project MCP server once');
