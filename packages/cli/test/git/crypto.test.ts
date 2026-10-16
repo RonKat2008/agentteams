@@ -28,6 +28,13 @@ describe('crypto', () => {
     expect(decrypt(newTeamKey(), a)).toBeNull();
     expect(decrypt(newTeamKey(), Buffer.alloc(5))).toBeNull();
   });
+  it('binds AAD: wrong or missing AAD fails', () => {
+    const k = newTeamKey();
+    const a = encrypt(k, Buffer.from('x'), Buffer.from('ctx'));
+    expect(decrypt(k, a, Buffer.from('ctx'))?.toString()).toBe('x');
+    expect(decrypt(k, a, Buffer.from('other'))).toBeNull();
+    expect(decrypt(k, a)).toBeNull();
+  });
   it('signs and verifies, rejecting other keys, data and malformed input', () => {
     const kp = newAgentKeyPair();
     expect(Buffer.from(kp.publicKey, 'base64url')).toHaveLength(32);
@@ -38,5 +45,14 @@ describe('crypto', () => {
     expect(verify(newAgentKeyPair().publicKey, Buffer.from('data'), sig)).toBe(false);
     expect(verify('not-a-key', Buffer.from('data'), sig)).toBe(false);
     expect(verify(kp.publicKey, Buffer.from('data'), sig.subarray(1))).toBe(false);
+  });
+  it('verify never throws on wrong types', () => {
+    const sig = Buffer.alloc(64);
+    for (const bad of [undefined, null, 5, {}, () => 1, 'x'.repeat(43)]) {
+      expect(verify(bad as never, Buffer.from('d'), sig)).toBe(false);
+    }
+    const pk = newAgentKeyPair().publicKey;
+    expect(verify(pk, 'd' as never, sig)).toBe(false);
+    expect(verify(pk, Buffer.from('d'), 'x' as never)).toBe(false);
   });
 });

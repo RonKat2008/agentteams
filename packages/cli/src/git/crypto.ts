@@ -44,18 +44,20 @@ function keyBytes(key: string): Buffer {
 }
 
 /** Output layout: nonce(12) | tag(16) | ciphertext. */
-export function encrypt(teamKey: string, plaintext: Buffer): Buffer {
+export function encrypt(teamKey: string, plaintext: Buffer, aad?: Buffer): Buffer {
   const nonce = randomBytes(NONCE_LEN);
   const cipher = createCipheriv('aes-256-gcm', keyBytes(teamKey), nonce);
+  if (aad) cipher.setAAD(aad);
   const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return Buffer.concat([nonce, cipher.getAuthTag(), ct]);
 }
 
 /** Returns null when the key is wrong or any byte was altered. Never throws. */
-export function decrypt(teamKey: string, data: Buffer): Buffer | null {
-  if (data.length < NONCE_LEN + TAG_LEN) return null;
+export function decrypt(teamKey: string, data: Buffer, aad?: Buffer): Buffer | null {
+  if (!Buffer.isBuffer(data) || data.length < NONCE_LEN + TAG_LEN) return null;
   try {
     const decipher = createDecipheriv('aes-256-gcm', keyBytes(teamKey), data.subarray(0, NONCE_LEN));
+    if (aad) decipher.setAAD(aad);
     decipher.setAuthTag(data.subarray(NONCE_LEN, NONCE_LEN + TAG_LEN));
     return Buffer.concat([decipher.update(data.subarray(NONCE_LEN + TAG_LEN)), decipher.final()]);
   } catch {
@@ -71,10 +73,16 @@ export function newAgentKeyPair(): AgentKeyPair {
   };
 }
 
-function publicKeyObject(publicKey: string): KeyObject | null {
-  const raw = Buffer.from(publicKey, 'base64url');
-  if (raw.length !== KEY_LEN) return null;
+/** True when the string is a base64url-encoded 32-byte value (shape check only). */
+export function isKeyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length === 43 && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function publicKeyObject(publicKey: unknown): KeyObject | null {
+  if (!isKeyString(publicKey)) return null;
   try {
+    const raw = Buffer.from(publicKey, 'base64url');
+    if (raw.length !== KEY_LEN) return null;
     return createPublicKey({ key: Buffer.concat([SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
   } catch {
     return null;
@@ -90,7 +98,7 @@ export function sign(privateKey: string, data: Buffer): Buffer {
 /** False for any bad signature or malformed key; never throws. */
 export function verify(publicKey: string, data: Buffer, signature: Buffer): boolean {
   const key = publicKeyObject(publicKey);
-  if (!key || signature.length !== SIGNATURE_LEN) return false;
+  if (!key || !Buffer.isBuffer(data) || !Buffer.isBuffer(signature) || signature.length !== SIGNATURE_LEN) return false;
   try {
     return nodeVerify(null, data, key, signature);
   } catch {

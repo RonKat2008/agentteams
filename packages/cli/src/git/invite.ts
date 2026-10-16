@@ -9,7 +9,7 @@ const ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 const KEY_LEN = 32;
 const MAX_TEAM_ID = 64;
 const MAX_REMOTE = 512;
-const MAX_CODE = INVITE_PREFIX.length + Math.ceil(((KEY_LEN + 1 + MAX_TEAM_ID + MAX_REMOTE) * 8) / 5);
+export const MAX_INVITE_LENGTH = INVITE_PREFIX.length + Math.ceil(((KEY_LEN + 1 + MAX_TEAM_ID + MAX_REMOTE) * 8) / 5);
 const TEAM_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 export interface Invite {
@@ -51,19 +51,33 @@ function base32Decode(text: string): Buffer | null {
       bits -= 8;
     }
   }
-  // Leftover bits must be zero padding (canonical encoding).
-  if ((value & ((1 << bits) - 1)) !== 0) return null;
+  // Canonical encoding: fewer than 5 leftover bits, all zero.
+  if (bits >= 5 || (value & ((1 << bits) - 1)) !== 0) return null;
   return Buffer.from(out);
 }
 
-/** https://, ssh://, scp-like git@host:path, file://, or an absolute path (the last two mostly for tests). */
-export function isValidRemote(remote: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  if (remote.length === 0 || remote.length > MAX_REMOTE || /[\s\x00-\x1f]/.test(remote)) return false;
-  if (/^(https|ssh):\/\/[^/\s]+(\/.*)?$/.test(remote)) return true;
-  if (/^file:\/\/.+/.test(remote)) return true;
-  if (/^git@[A-Za-z0-9._-]+:\S+$/.test(remote)) return true;
-  return remote.startsWith('/') && remote.length > 1;
+const HOST = '[A-Za-z0-9][A-Za-z0-9.-]*';
+const USER = '[A-Za-z0-9][A-Za-z0-9._-]*';
+const URL_RE = new RegExp(`^(?:https|ssh)://(?:${USER}@)?${HOST}(?::\\d{1,5})?(/\\S*)?$`);
+const SCP_RE = new RegExp(`^git@${HOST}:(\\S+)$`);
+// Control, format (incl. bidi overrides U+202A-202E, U+2066-2069), separator and whitespace characters.
+const FORBIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Z}\s]/u;
+
+/** No path segment may start with '-', which git could read as an option. */
+function safeSegments(path: string): boolean {
+  return path.split('/').every((seg) => !seg.startsWith('-'));
+}
+
+/** https://, ssh://, git@host:path, file:///path, or an absolute path (the last two mostly for tests). */
+export function isValidRemote(remote: unknown): remote is string {
+  if (typeof remote !== 'string' || remote.length === 0 || remote.length > MAX_REMOTE) return false;
+  if (FORBIDDEN_CHARS.test(remote)) return false;
+  const url = URL_RE.exec(remote);
+  if (url) return safeSegments(url[1] ?? '');
+  const scp = SCP_RE.exec(remote);
+  if (scp) return safeSegments(scp[1]!);
+  if (remote.startsWith('file:///')) return remote.length > 8 && safeSegments(remote.slice(7));
+  return remote.startsWith('/') && remote.length > 1 && safeSegments(remote);
 }
 
 export function encodeInvite(invite: Invite): string {
@@ -82,7 +96,7 @@ export function decodeInvite(code: string): Invite {
   if (!trimmed.startsWith(INVITE_PREFIX)) {
     throw new InviteError(`not an agentteams invite code (expected it to start with "${INVITE_PREFIX}")`);
   }
-  if (trimmed.length > MAX_CODE) throw new InviteError('invite code is too long');
+  if (trimmed.length > MAX_INVITE_LENGTH) throw new InviteError('invite code is too long');
   const body = trimmed.slice(INVITE_PREFIX.length);
   if (body.length === 0) throw new InviteError('invite code is empty after the prefix');
   const payload = base32Decode(body);
@@ -93,7 +107,12 @@ export function decodeInvite(code: string): Invite {
   if (idLen === 0 || idLen > MAX_TEAM_ID || payload.length <= idEnd) throw new InviteError('invite code is truncated or corrupt');
   const teamId = payload.subarray(KEY_LEN + 1, idEnd).toString('utf8');
   if (!TEAM_ID_RE.test(teamId)) throw new InviteError('invite code has an invalid team id');
-  const remote = payload.subarray(idEnd).toString('utf8');
+  let remote: string;
+  try {
+    remote = new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(idEnd));
+  } catch {
+    throw new InviteError('invite code has an invalid remote encoding');
+  }
   if (!isValidRemote(remote)) {
     throw new InviteError('invite code has an unsupported remote (use https://, ssh://, git@host:path, file:// or an absolute path)');
   }
