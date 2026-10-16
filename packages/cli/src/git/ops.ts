@@ -6,15 +6,16 @@
  * - `id` is a ULID minted from that same HLC time (see mintOpId): its 48-bit time field is the HLC physical
  *   millisecond and the top 14 bits of its 80-bit "random" field are the HLC counter. So for two ops with
  *   different `ts`, ULID order equals `ts` order. Replay rejects any op whose id does not match its ts.
- * - `agent` is the author's agent id. Agent ids are ULIDs minted at join time (captureBootstrapOp uses the
- *   bootstrap op's own id), exactly like the HTTP hub's, so readInbox's broadcast rule (`message.id > agent.id`)
- *   means "sent after the agent joined" on every replica. The bootstrap op's input.agentId must equal its
- *   author; the first registration of an agent id (in total order) wins.
+ * - `agent` is the author's agent id: the id of its own bootstrap op (`createTeam`/`join` require
+ *   op.id === op.agent === input.agentId), so agent ids are ULIDs minted from the join's HLC time, like the
+ *   HTTP hub's, and readInbox's broadcast rule (`message.id > agent.id`) means "sent after the agent joined"
+ *   (at millisecond granularity) on every replica.
+ * - An op's identity is (agent, id): different agents can never shadow or collide with each other's ops.
  * - `input` is the service input after validation with the same zod schema the service/MCP tool uses.
  *
  * This module only type-imports the hub; the registry is built from the lazily imported `@agentteams/hub/core`.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   AssignTaskInput, ClaimFilesInput, ClaimOverrideInput, ClaimTaskInput, CommitInput, CompleteTaskInput, CreateTaskInput,
@@ -93,6 +94,19 @@ export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
   };
 }
 
+/**
+ * Ops that can succeed without doing what their author wanted. The op stays applied (the outcome is part
+ * of the deterministic view) but its author gets a local notice with the returned text.
+ */
+export const OUTCOME_NOTICES: Partial<Record<OpName, (result: unknown) => string | null>> = {
+  claimFiles: (result) => {
+    const r = result as { granted?: boolean; conflicts?: Array<{ agent: string; glob: string }> } | null;
+    if (!r || (r.granted !== false && (r.conflicts?.length ?? 0) === 0)) return null;
+    const held = (r.conflicts ?? []).map((c) => `${c.glob} (${c.agent})`).join(', ');
+    return `your file claim was refused by the team log${held ? `: already claimed ${held}` : ''}`;
+  },
+};
+
 // ---- ULIDs derived from HLC time -----------------------------------------------------------------
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -144,20 +158,24 @@ export function opIdMatchesTs(id: unknown, ts: unknown): boolean {
 }
 
 /**
- * Deterministic id source for replaying one op: the op id, then op id + 1, + 2, ... (as 128-bit integers).
+ * Deterministic row-id source for replaying one op by `agent`: the n-th id (n = 0, 1, ...) is the ULID
+ * with time = the op's HLC millisecond and random part = the first 80 bits of SHA-256(agent \0 opId \0 n).
  *
- * Why this keeps ids globally monotonic in total order: every id an op produces shares the op's
- * (HLC ms, HLC counter) prefix, because the 2 reserved zero bits leave 2^64 increments of headroom before
- * a carry could reach the counter. Ops are applied in (ts, agent, id) order and ts is (ms, counter), so for
- * ops with different ts every id of the earlier op sorts below every id of the later one. Two ops with
- * identical ts (different authors) get id ranges ordered by their random bits rather than by author:
- * still identical on every replica, just not tied to the author tie-break.
+ * - Time-ordered: rows of an op sort after every row of ops in earlier milliseconds and before every row of
+ *   ops in later ones, which is what readInbox's broadcast rule (`m.id > actor.id`) needs. Within one
+ *   millisecond (same op, or several ops sharing the ms) the order is deterministic but arbitrary.
+ * - Bound to the author: the random part hashes (agent, op id, n), so an agent cannot aim its rows at
+ *   another agent's ids; a collision needs an 80-bit truncated SHA-256 second preimage.
  */
-export function opIdSequence(opId: string): () => string {
-  const base = decodeUlid(opId);
-  if (base === null) throw new Error(`invalid op id: ${opId}`);
-  let next = 0n;
-  return () => encodeUlid(base + next++);
+export function rowIdSequence(agent: string, opId: string, ts: string): () => string {
+  const t = parseHlc(ts);
+  if (!t) throw new Error(`invalid HLC timestamp: ${ts}`);
+  const time = BigInt(t.ms) << RANDOM_BITS;
+  let n = 0;
+  return () => {
+    const digest = createHash('sha256').update(`${agent}\0${opId}\0${n++}`).digest();
+    return encodeUlid(time | BigInt(`0x${digest.subarray(0, 10).toString('hex')}`));
+  };
 }
 
 // ---- Capture --------------------------------------------------------------------------------------

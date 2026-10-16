@@ -5,7 +5,9 @@ import { createHlc, formatHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp, mintOpId } from '../../src/git/ops.js';
 import { loadAgentKeys, rebuildView, takeNotices } from '../../src/git/replay.js';
 import { decodeSegment, encodeSegment, type Op } from '../../src/git/segment.js';
-import { Scenario, TEAM_ID, batches, openReplica, prng, shuffle, type Replica, type ScenarioAgent } from './replayHelpers.js';
+import {
+  Scenario, TEAM_ID, TEST_NOW, batches, buildLog, openReplica, prng, shuffle, type Built, type Replica, type ScenarioAgent,
+} from './replayHelpers.js';
 
 const open: Replica[] = [];
 async function replica(source: () => unknown[], localAgentId?: string): Promise<Replica> {
@@ -17,77 +19,9 @@ afterEach(async () => {
   while (open.length) await open.pop()!.close();
 });
 
-interface Built {
-  s: Scenario;
-  ops: Op[];
-  ronit: ScenarioAgent;
-  dylan: ScenarioAgent;
-  ash: ScenarioAgent;
-  kai: ScenarioAgent;
-  claimByDylan: Op;
-  claimByKai: Op;
-  rejectedCreate: Op;
-}
-
-/** A realistic log: team create, 3 joins, tasks, direct and broadcast messages, reads, claims, commits, conflicts. */
-async function buildLog(): Promise<Built> {
-  const s = await Scenario.start();
-  const ronit = await s.createTeam('ronit');
-  s.tick();
-  const dylan = await s.join('dylan');
-  s.tick(5);
-  const ash = await s.join('ash', 'codex');
-  s.tick();
-  await s.op(ronit, 'sendMessage', { to: 'all', body: 'welcome, early birds', kind: 'fyi' });
-  s.tick();
-  const kai = await s.join('kai', 'cursor');
-  s.tick();
-  await s.op(ronit, 'createTask', { title: 'Build the parser', description: 'src/a', assignee: 'dylan-claude' });
-  await s.op(ronit, 'createTask', { title: 'Write docs' }); // same ms: HLC counter 1
-  s.tick();
-  await s.op(dylan, 'claimTask', { task: 1 });
-  await s.op(dylan, 'claimFiles', { globs: ['src/a/**'] });
-  s.tick();
-  await s.op(ash, 'claimFiles', { globs: ['src/a/x.ts'] }); // conflicts: not granted, no change
-  await s.op(ash, 'sendMessage', { to: 'dylan-claude', body: 'need help with src/a?', kind: 'question' });
-  s.tick();
-  await s.op(dylan, 'markRead', { messageIds: await s.unread(dylan) });
-  await s.op(dylan, 'recordCommit', {
-    sha: 'aaaaaaa1', branch: 'task-1', message: 'parser: tokens', files: ['src/a/y.ts'], insertions: 10, deletions: 1,
-  });
-  s.tick();
-  await s.op(ash, 'recordCommit', {
-    sha: 'bbbbbbb2', branch: 'task-x', message: 'touch a', files: ['src/a/z.ts', 'README.md'], insertions: 2, deletions: 0,
-  });
-  await s.op(ash, 'recordClaimOverride', { paths: ['src/a/z.ts'], sha: 'bbbbbbb2' });
-  s.tick();
-  await s.op(dylan, 'updateTask', { task: 1, note: 'halfway', status: 'in_progress' });
-  await s.op(dylan, 'completeTask', { task: 1, summary: 'parser done', branch: 'task-1' });
-  s.tick();
-  await s.op(ronit, 'markMerged', { task: 1, pr: 'https://example.com/pr/1' });
-  await s.op(ronit, 'assignTask', { task: 2, assignee: 'ash-codex' });
-  s.tick();
-  await s.op(ash, 'claimTask', { task: 2 });
-  await s.op(ronit, 'sendMessage', { to: 'all', body: 'standup in 5', kind: 'fyi' });
-  s.tick();
-  await s.op(kai, 'markRead', { messageIds: await s.unread(kai) });
-  await s.op(dylan, 'releaseFiles', {});
-  await s.op(ash, 'markRead', { messageIds: await s.unread(ash) });
-  s.tick();
-  await s.op(ronit, 'setOrchestrator', { agent: 'ash-codex' });
-  s.tick();
-  await s.op(ash, 'createTask', { title: 'Fix the flaky test' });
-  s.tick();
-  const rejectedCreate = await s.op(ronit, 'createTask', { title: 'not allowed any more' }); // no longer orchestrator
-  s.tick();
-  // Concurrent claims of task 3: neither author saw the other's op. Dylan's is earlier.
-  const claimByDylan = await s.op(dylan, 'claimTask', { task: 3 });
-  s.tick(3);
-  const claimByKai = await s.op(kai, 'claimTask', { task: 3 }, { observe: false });
-  s.tick();
-  await s.op(ash, 'sendMessage', { to: 'all', body: 'thanks all', kind: 'fyi' });
-  return { s, ops: [...s.ops], ronit, dylan, ash, kai, claimByDylan, claimByKai, rejectedCreate };
-}
+const rowsOf = async (r: Replica) =>
+  new Map((await r.store.ctx.db.selectFrom('applied_ops').selectAll().execute()).map((x) => [`${x.agent}/${x.op_id}`, x]));
+const rowOf = async (r: Replica, op: Pick<Op, 'agent' | 'id'>) => (await rowsOf(r)).get(`${op.agent}/${op.id}`);
 
 let log: Built;
 let reference: string;
@@ -108,6 +42,7 @@ describe('applyOps determinism', () => {
     expect(tasks[2]!.assignee_agent_id).toBe(log.dylan.id);
     const reads = await log.s.live.store.ctx.db.selectFrom('message_reads').selectAll().execute();
     expect(reads.length).toBeGreaterThan(0);
+    expect(log.sameTsPair[0].ts).toBe(log.sameTsPair[1].ts);
   });
 
   it('produces a byte-identical view for every arrival order and batching, equal to a rebuild', async () => {
@@ -133,9 +68,24 @@ describe('applyOps determinism', () => {
     }
 
     const rebuilt = await replica(() => all);
-    const summary = await rebuildView(rebuilt.store, { source: { allOps: async () => all }, teamId: TEAM_ID });
+    const summary = await rebuildView(rebuilt.store, { source: { allOps: async () => all }, teamId: TEAM_ID, nowMs: TEST_NOW });
     expect(summary).toMatchObject({ rebuilt: true, applied: all.length - 2, rejected: 2 });
     expect(await rebuilt.dump()).toBe(reference);
+  });
+
+  it('converges when two agents share one ts, whichever arrives first', async () => {
+    const [a, b] = log.sameTsPair;
+    const rest = log.ops.filter((o) => o !== a && o !== b);
+    const ab = await replica(() => log.ops);
+    const ba = await replica(() => log.ops);
+    await ab.apply([...rest, a]);
+    await ab.apply([b]);
+    await ba.apply([...rest, b]);
+    await ba.apply([a]);
+    expect(await ab.dump()).toBe(reference);
+    expect(await ba.dump()).toBe(reference);
+    expect((await rowOf(ab, a))?.status).toBe('applied');
+    expect((await rowOf(ab, b))?.status).toBe('applied');
   });
 
   it('applies incrementally and rebuilds when a late op sorts before applied ones', async () => {
@@ -153,9 +103,7 @@ describe('applyOps determinism', () => {
     expect(second.applied + second.rejected).toBe(log.ops.length);
     expect(await r.dump()).toBe(reference);
 
-    // A further op that sorts last is incremental again.
-    const tail = await r.apply([]);
-    expect(tail).toEqual({ applied: 0, rejected: 0, duplicates: 0, rebuilt: false });
+    expect(await r.apply([])).toEqual({ applied: 0, rejected: 0, duplicates: 0, deferred: 0, rebuilt: false });
   });
 
   it('treats re-applying the same ops as a no-op', async () => {
@@ -163,92 +111,64 @@ describe('applyOps determinism', () => {
     await r.apply(log.ops);
     const before = await r.dump();
     const again = await r.apply(shuffle(log.ops, prng(9)));
-    expect(again).toEqual({ applied: 0, rejected: 0, duplicates: log.ops.length, rebuilt: false });
+    expect(again).toEqual({ applied: 0, rejected: 0, duplicates: log.ops.length, deferred: 0, rebuilt: false });
     expect(await r.dump()).toBe(before);
   });
 });
 
-describe('conflicts', () => {
+describe('conflicts and notices', () => {
   it('resolves concurrent claimTask the same way everywhere and notifies the loser', async () => {
     const forKai = await replica(() => log.ops, log.kai.id);
     const forDylan = await replica(() => log.ops, log.dylan.id);
     await forKai.apply(log.ops);
-    // Dylan's machine sees its own claim, then kai's, out of order with everything else.
     await forDylan.apply(shuffle(log.ops, prng(42)));
     for (const r of [forKai, forDylan]) {
       const task = await r.store.ctx.db.selectFrom('tasks').selectAll().where('number', '=', 3).executeTakeFirstOrThrow();
       expect(task.assignee_agent_id).toBe(log.dylan.id);
-      const row = await r.store.ctx.db.selectFrom('applied_ops').selectAll().where('op_id', '=', log.claimByKai.id).executeTakeFirstOrThrow();
-      expect(row.status).toBe('rejected');
-      expect(row.error).toContain('only the assignee (dylan-claude) can claim task #3');
+      expect(await rowOf(r, log.claimByKai)).toMatchObject({ status: 'rejected', error: 'forbidden' });
     }
     expect(await forKai.dump()).toBe(await forDylan.dump());
 
     const notices = await takeNotices(forKai.store, log.kai.id);
     expect(notices).toHaveLength(1);
     expect(notices[0]!.opId).toBe(log.claimByKai.id);
-    expect(notices[0]!.body).toMatch(/Your claimTask .* was rejected .*dylan-claude/);
+    expect(notices[0]!.body).toMatch(/Your claimTask .* was rejected .*only the assignee \(dylan-claude\) can claim task #3/);
     expect(await takeNotices(forKai.store, log.kai.id)).toEqual([]); // delivered once
     expect(await takeNotices(forDylan.store, log.dylan.id)).toEqual([]);
   });
 
+  it('tells the author when its claimFiles is refused, while the op stays applied', async () => {
+    const r = await replica(() => log.ops, log.ash.id);
+    await r.apply(log.ops);
+    expect(await rowOf(r, log.ashClaimFiles)).toMatchObject({ status: 'applied', error: null });
+    const notices = await takeNotices(r.store, log.ash.id);
+    expect(notices.map((n) => n.opId)).toEqual([log.ashClaimFiles.id]);
+    expect(notices[0]!.body).toContain('your file claim was refused by the team log: already claimed src/a/** (dylan-claude)');
+  });
+
   it('keeps a notice across rebuilds without duplicating it, and withdraws it if the op later succeeds', async () => {
     const r = await replica(() => log.ops, log.kai.id);
-    const withoutDylanClaim = log.ops.filter((o) => o !== log.claimByDylan);
-    // Without dylan's earlier claim, kai's claim of task 3 succeeds.
-    await r.apply(withoutDylanClaim);
-    expect(await takeNoticesPeek(r, log.kai.id)).toEqual([]);
-    // The late, earlier claim arrives: rebuild, kai's claim is now rejected.
-    await r.apply([log.claimByDylan]);
-    expect((await takeNoticesPeek(r, log.kai.id)).map((n) => n.op_id)).toEqual([log.claimByKai.id]);
-    await rebuildView(r.store, { source: { allOps: async () => log.ops }, teamId: TEAM_ID, localAgentId: log.kai.id });
-    expect((await takeNoticesPeek(r, log.kai.id)).map((n) => n.op_id)).toEqual([log.claimByKai.id]);
+    const peek = async () =>
+      (await r.store.ctx.db.selectFrom('replica_notices').select('op_id').where('agent_id', '=', log.kai.id).execute()).map((n) => n.op_id);
+    await r.apply(log.ops.filter((o) => o !== log.claimByDylan)); // kai's claim succeeds
+    expect(await peek()).toEqual([]);
+    await r.apply([log.claimByDylan]); // rebuild: kai's claim now loses
+    expect(await peek()).toEqual([log.claimByKai.id]);
+    await rebuildView(r.store, { source: { allOps: async () => log.ops }, teamId: TEAM_ID, localAgentId: log.kai.id, nowMs: TEST_NOW });
+    expect(await peek()).toEqual([log.claimByKai.id]);
   });
 
   it('rejects an orchestrator-only op by a non-orchestrator', async () => {
     const r = await replica(() => log.ops);
     await r.apply(log.ops);
-    const row = await r.store.ctx.db.selectFrom('applied_ops').selectAll().where('op_id', '=', log.rejectedCreate.id).executeTakeFirstOrThrow();
-    expect(row).toMatchObject({ status: 'rejected', error: 'forbidden: only the orchestrator (ash-codex) can create tasks' });
+    expect(await rowOf(r, log.rejectedCreate)).toMatchObject({ status: 'rejected', error: 'forbidden' });
     const titles = (await r.store.ctx.db.selectFrom('tasks').select('title').execute()).map((t) => t.title);
     expect(titles).not.toContain('not allowed any more');
   });
 });
 
-async function takeNoticesPeek(r: Replica, agentId: string) {
-  return r.store.ctx.db.selectFrom('replica_notices').selectAll().where('agent_id', '=', agentId).orderBy('op_id').execute();
-}
-
 describe('registration', () => {
-  it('rejects a duplicate join with a different key (first registration wins), accepts the identical key', async () => {
-    const s = await Scenario.start();
-    open.push(s.live);
-    await s.createTeam('ronit');
-    s.tick();
-    const dylan = await s.join('dylan');
-    s.tick();
-    const hlc = createHlc(() => s.now);
-    hlc.observe(s.ops.at(-1)!.ts);
-    const reJoin = (publicKey: string): Op => {
-      const ts = hlc.tick();
-      return {
-        v: 1, id: mintOpId(ts), ts, agent: dylan.id, op: 'join',
-        input: { teamId: TEAM_ID, member: 'dylan', tool: 'claude', agentId: dylan.id, agentName: 'dylan-claude', publicKey },
-      };
-    };
-    const hijack = reJoin(newAgentKeyPair().publicKey);
-    const same = reJoin(dylan.publicKey);
-    await s.live.apply([hijack, same]);
-    const rows = await s.live.store.ctx.db.selectFrom('applied_ops').selectAll().where('op_id', 'in', [hijack.id, same.id]).execute();
-    const byId = new Map(rows.map((r) => [r.op_id, r]));
-    expect(byId.get(hijack.id)).toMatchObject({ status: 'rejected', error: 'conflict: this agent is already registered with a different key' });
-    expect(byId.get(same.id)).toMatchObject({ status: 'applied' });
-    const key = await s.live.store.ctx.db.selectFrom('agent_keys').selectAll().where('agent_id', '=', dylan.id).executeTakeFirstOrThrow();
-    expect(key.public_key).toBe(dylan.publicKey);
-    expect(key.registered_op_id).toBe(dylan.id);
-  });
-
-  it('rejects a join that takes an existing name, a join for another agent, a second createTeam and unknown authors', async () => {
+  it('rejects a join that takes a name, targets another team or agent, a second createTeam and unknown authors', async () => {
     const s = await Scenario.start();
     open.push(s.live);
     await s.createTeam('ronit');
@@ -267,15 +187,16 @@ describe('registration', () => {
     const { op: forOther } = captureBootstrapOp(hlc, 'join', {
       teamId: TEAM_ID, member: 'mal', tool: 'claude', agentName: 'mal-claude', publicKey: newAgentKeyPair().publicKey,
     });
-    const impersonation = { ...forOther, agent: twin.id }; // claims another agent's identity
+    const impersonation = { ...forOther, agent: twin.id }; // registers someone else's id
+    const wrongInputId = { ...forOther, input: { ...(forOther.input as object), agentId: twin.id } };
     const ghost = captureOp(hlc, mintOpId(hlc.tick()), 'sendMessage', { to: 'all', body: 'boo' });
-    await s.live.apply([secondTeam, otherTeamJoin, impersonation, ghost]);
-    const errors = new Map((await s.live.store.ctx.db.selectFrom('applied_ops').selectAll().execute()).map((r) => [r.op_id, r]));
-    expect(errors.get(twin.id)).toMatchObject({ status: 'rejected', error: 'conflict: agent name "ronit-claude" is already taken in this team' });
-    expect(errors.get(secondTeam.id)).toMatchObject({ status: 'rejected', error: 'conflict: the team already exists; createTeam is valid only once' });
-    expect(errors.get(otherTeamJoin.id)).toMatchObject({ status: 'rejected', error: 'forbidden: op belongs to a different team' });
-    expect(errors.get(impersonation.id)).toMatchObject({ status: 'rejected', error: 'forbidden: an agent can only register its own key' });
-    expect(errors.get(ghost.id)).toMatchObject({ status: 'rejected', error: 'unauthorized: unknown agent' });
+    await s.live.apply([secondTeam, otherTeamJoin, impersonation, wrongInputId, ghost]);
+    expect(await rowOf(s.live, s.ops[1]!)).toMatchObject({ status: 'rejected', error: 'conflict' });
+    expect(await rowOf(s.live, secondTeam)).toMatchObject({ status: 'rejected', error: 'conflict' });
+    expect(await rowOf(s.live, otherTeamJoin)).toMatchObject({ status: 'rejected', error: 'wrong-team' });
+    expect(await rowOf(s.live, impersonation)).toMatchObject({ status: 'rejected', error: 'bootstrap-id' });
+    expect(await rowOf(s.live, wrongInputId)).toMatchObject({ status: 'rejected', error: 'bootstrap-id' });
+    expect(await rowOf(s.live, ghost)).toMatchObject({ status: 'rejected', error: 'unknown-agent' });
     const agents = await s.live.store.ctx.db.selectFrom('agents').select('name').execute();
     expect(agents.map((a) => a.name)).toEqual(['ronit-claude']);
   });
@@ -295,25 +216,12 @@ describe('envelope validation', () => {
     const badInput: Op = { ...base, id: mintOpId(badInputTs), ts: badInputTs, input: { to: 'all' } };
     const before = await r.store.ctx.db.selectFrom('messages').select('id').execute();
     const summary = await r.apply([badTs, badId, unknownOp, badInput, { nonsense: true }]);
-    expect(summary).toEqual({ applied: 0, rejected: 5, duplicates: 0, rebuilt: false });
-    const rows = new Map((await r.store.ctx.db.selectFrom('applied_ops').selectAll().execute()).map((x) => [x.op_id, x]));
-    expect(rows.get(badTs.id)).toMatchObject({ status: 'rejected', ts: null, error: 'invalid: malformed timestamp' });
-    expect(rows.get(badId.id)).toMatchObject({ status: 'rejected', ts: null, error: 'invalid: op id does not match its timestamp' });
-    expect(rows.get(unknownOp.id)).toMatchObject({ status: 'rejected', error: 'invalid: unknown op "dropTables"' });
-    expect(rows.get(badInput.id)!.error).toMatch(/^invalid: /);
+    expect(summary).toEqual({ applied: 0, rejected: 5, duplicates: 0, deferred: 0, rebuilt: false });
+    expect(await rowOf(r, badTs)).toMatchObject({ status: 'rejected', ts: null, error: 'malformed' });
+    expect(await rowOf(r, badId)).toMatchObject({ status: 'rejected', ts: null, error: 'malformed' });
+    expect(await rowOf(r, unknownOp)).toMatchObject({ status: 'rejected', error: 'unknown-op' });
+    expect(await rowOf(r, badInput)).toMatchObject({ status: 'rejected', error: 'invalid' });
     expect(await r.store.ctx.db.selectFrom('messages').select('id').execute()).toEqual(before);
-  });
-
-  it('rebuilds when a different op reuses a known id, choosing the same winner on every replica', async () => {
-    const original = log.ops[3]!;
-    const forged: Op = { ...original, input: { to: 'all', body: 'forged', kind: 'fyi' } };
-    const a = await replica(() => [...log.ops, forged]);
-    const b = await replica(() => [...log.ops, forged]);
-    await a.apply(log.ops);
-    const summary = await a.apply([forged]);
-    expect(summary.rebuilt).toBe(true);
-    await b.apply([forged, ...log.ops]);
-    expect(await a.dump()).toBe(await b.dump());
   });
 });
 
@@ -349,18 +257,18 @@ describe('segment round trip', () => {
 describe('failure handling', () => {
   it('rolls the whole batch back and rethrows on an unexpected error', async () => {
     const r = await replica(() => log.ops);
-    await r.apply(log.ops.slice(0, 10));
+    const late = log.ops[5]!;
+    await r.apply(log.ops.slice(0, 10).filter((o) => o !== late));
     const before = await r.dump();
     const failing = { allOps: async () => { throw new Error('object store unreadable'); } };
-    // ops[0] already applied, so the batch is "late" and needs the (failing) source for a rebuild.
-    await expect(r.apply([log.ops[10]!, log.ops[2]!, { ...log.ops[1]!, input: { changed: true } }], { source: failing }))
-      .rejects.toThrow('object store unreadable');
+    // The late op forces a rebuild, which needs the (failing) source.
+    await expect(r.apply([log.ops[10]!, late], { source: failing })).rejects.toThrow('object store unreadable');
     expect(await r.dump()).toBe(before);
     // Corrupt the schema under the replayer: a non-domain SQL error must not be recorded as a rejection.
     await r.store.ctx.db.schema.dropTable('commits').execute();
     await expect(r.apply(log.ops.slice(10))).rejects.toThrow(/commits/);
     const count = await r.store.ctx.db.selectFrom('applied_ops').select((eb) => eb.fn.countAll().as('n')).executeTakeFirstOrThrow();
-    expect(Number(count.n)).toBe(10);
+    expect(Number(count.n)).toBe(9);
   });
 });
 
@@ -370,16 +278,15 @@ describe('broadcast visibility', () => {
     await r.apply(shuffle(log.ops, prng(7)));
     const inbox = async (a: ScenarioAgent) =>
       (await core.readInbox(r.store.ctx, await r.actor(a.id), { markRead: false })).map((m) => m.body);
-    // kai joined after "welcome, early birds" and read everything else it could see.
-    const kaiAll = await r.store.ctx.db.selectFrom('messages').select(['body', 'id']).where('to_agent_id', 'is', null).execute();
+    const broadcasts = await r.store.ctx.db.selectFrom('messages').select(['body', 'id']).where('to_agent_id', 'is', null).execute();
     const kaiActor = await r.actor(log.kai.id);
-    const visibleToKai = kaiAll.filter((m) => m.id > kaiActor.id).map((m) => m.body).sort();
-    expect(visibleToKai).toEqual(['standup in 5', 'thanks all']);
-    expect(await inbox(log.kai)).toEqual(['thanks all']); // standup was marked read by kai's markRead op
-    // ronit never sees its own broadcasts; ash's later broadcast reaches ronit.
+    const visibleToKai = broadcasts.filter((m) => m.id > kaiActor.id).map((m) => m.body).sort();
+    // kai joined after "welcome, early birds"; its own broadcast is visible by id but excluded as sender.
+    expect(visibleToKai).toEqual(['same tick from dylan', 'same tick from kai', 'standup in 5', 'thanks all']);
+    expect((await inbox(log.kai)).sort()).toEqual(['same tick from dylan', 'thanks all']); // standup was marked read
     expect(await inbox(log.ronit)).toEqual(expect.arrayContaining(['thanks all']));
     expect(await inbox(log.ronit)).not.toContain('standup in 5');
-    // dylan joined before the welcome, so it is in dylan's inbox (dylan never marked it read: it read earlier).
-    expect(await inbox(log.dylan)).toEqual(expect.arrayContaining(['standup in 5', 'thanks all']));
+    expect(await inbox(log.dylan)).toEqual(expect.arrayContaining(['standup in 5', 'thanks all', 'same tick from kai']));
+    expect(await inbox(log.dylan)).not.toContain('same tick from dylan');
   });
 });

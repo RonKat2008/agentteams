@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as core from '@agentteams/hub/core';
 import { createHlc, formatHlc } from '../../src/git/hlc.js';
 import {
-  OP_SCHEMAS, buildRegistry, canonicalJson, captureBootstrapOp, captureOp, compareOps, mintOpId, opIdMatchesTs, opIdSequence,
+  OP_SCHEMAS, buildRegistry, canonicalJson, captureBootstrapOp, captureOp, compareOps, mintOpId, opIdMatchesTs, rowIdSequence,
 } from '../../src/git/ops.js';
 
 const T = Date.UTC(2026, 9, 16, 12);
@@ -35,15 +35,22 @@ describe('op ids', () => {
     expect(opIdMatchesTs(chars.join(''), ts)).toBe(false);
   });
 
-  it('successors start at the op id, increase, and stay below the next HLC tick', () => {
+  it('row ids are time-ordered by ms, deterministic, and bound to (agent, op id)', () => {
     const ts = formatHlc(T, 7);
-    const id = mintOpId(ts, () => (1n << 64n) - 3n);
-    const next = opIdSequence(id);
-    const ids = Array.from({ length: 10 }, () => next());
-    expect(ids[0]).toBe(id);
-    expect([...ids].sort()).toEqual(ids);
-    expect(new Set(ids).size).toBe(10);
-    expect(ids[9]! < mintOpId(formatHlc(T, 8), () => 0n)).toBe(true);
+    const id = mintOpId(ts);
+    const take = (agent: string, opId: string, t: string) => {
+      const next = rowIdSequence(agent, opId, t);
+      return Array.from({ length: 5 }, () => next());
+    };
+    const ids = take('AGENTAAAAAAA', id, ts);
+    expect(take('AGENTAAAAAAA', id, ts)).toEqual(ids); // deterministic
+    expect(new Set(ids).size).toBe(5);
+    expect(ids.every((x) => x.slice(0, 10) === id.slice(0, 10))).toBe(true); // ULID time = ts ms
+    const other = take('AGENTBBBBBBB', id, ts); // same op id, other agent: unrelated ids
+    expect(other.some((x) => ids.includes(x))).toBe(false);
+    const nextMs = take('AGENTAAAAAAA', id, formatHlc(T + 1, 0));
+    expect(ids.every((x) => nextMs.every((y) => x < y))).toBe(true);
+    expect(() => rowIdSequence('AGENTAAAAAAA', id, 'bad')).toThrow();
   });
 });
 

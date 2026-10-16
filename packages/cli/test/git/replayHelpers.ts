@@ -13,6 +13,8 @@ import type { Op } from '../../src/git/segment.js';
 
 export const TEAM_ID = 'team-alpha';
 export const T0 = Date.UTC(2026, 9, 16, 12, 0, 0);
+/** Local wall time the test replicas use for deferring future ops (well after every scenario op). */
+export const TEST_NOW = Date.UTC(2026, 9, 17);
 
 export interface Replica {
   store: ReplayStore;
@@ -32,7 +34,7 @@ export async function openReplica(source: () => unknown[] = () => [], localAgent
   return {
     store,
     apply: (ops, opts = {}) => applyOps(store, ops, {
-      source: { allOps: async () => source() }, teamId: TEAM_ID,
+      source: { allOps: async () => source() }, teamId: TEAM_ID, nowMs: TEST_NOW,
       ...(localAgentId === undefined ? {} : { localAgentId }), ...opts,
     }),
     async dump() {
@@ -162,4 +164,89 @@ export function batches<T>(items: readonly T[], rand: () => number, maxBatch = 5
     i += n;
   }
   return out;
+}
+
+export interface Built {
+  s: Scenario;
+  ops: Op[];
+  ronit: ScenarioAgent;
+  dylan: ScenarioAgent;
+  ash: ScenarioAgent;
+  kai: ScenarioAgent;
+  createTask1: Op;
+  ashClaimFiles: Op;
+  claimByDylan: Op;
+  claimByKai: Op;
+  rejectedCreate: Op;
+  sameTsPair: [Op, Op];
+}
+
+/**
+ * A realistic log: team create, 3 joins, tasks, direct and broadcast messages, reads, claims, commits,
+ * an orchestrator change, an orchestrator-only rejection, a claim race, and two ops sharing one ts.
+ */
+export async function buildLog(): Promise<Built> {
+  const s = await Scenario.start();
+  const ronit = await s.createTeam('ronit');
+  s.tick();
+  const dylan = await s.join('dylan');
+  s.tick(5);
+  const ash = await s.join('ash', 'codex');
+  s.tick();
+  await s.op(ronit, 'sendMessage', { to: 'all', body: 'welcome, early birds', kind: 'fyi' });
+  s.tick();
+  const kai = await s.join('kai', 'cursor');
+  s.tick();
+  const createTask1 = await s.op(ronit, 'createTask', { title: 'Build the parser', description: 'src/a', assignee: 'dylan-claude' });
+  await s.op(ronit, 'createTask', { title: 'Write docs' }); // same ms: HLC counter 1
+  s.tick();
+  await s.op(dylan, 'claimTask', { task: 1 });
+  await s.op(dylan, 'claimFiles', { globs: ['src/a/**'] });
+  s.tick();
+  const ashClaimFiles = await s.op(ash, 'claimFiles', { globs: ['src/a/x.ts'] }); // conflicts: refused, notice
+  await s.op(ash, 'sendMessage', { to: 'dylan-claude', body: 'need help with src/a?', kind: 'question' });
+  s.tick();
+  await s.op(dylan, 'markRead', { messageIds: await s.unread(dylan) });
+  await s.op(dylan, 'recordCommit', {
+    sha: 'aaaaaaa1', branch: 'task-1', message: 'parser: tokens', files: ['src/a/y.ts'], insertions: 10, deletions: 1,
+  });
+  s.tick();
+  await s.op(ash, 'recordCommit', {
+    sha: 'bbbbbbb2', branch: 'task-x', message: 'touch a', files: ['src/a/z.ts', 'README.md'], insertions: 2, deletions: 0,
+  });
+  await s.op(ash, 'recordClaimOverride', { paths: ['src/a/z.ts'], sha: 'bbbbbbb2' });
+  s.tick();
+  await s.op(dylan, 'updateTask', { task: 1, note: 'halfway', status: 'in_progress' });
+  await s.op(dylan, 'completeTask', { task: 1, summary: 'parser done', branch: 'task-1' });
+  s.tick();
+  await s.op(ronit, 'markMerged', { task: 1, pr: 'https://example.com/pr/1' });
+  await s.op(ronit, 'assignTask', { task: 2, assignee: 'ash-codex' });
+  s.tick();
+  await s.op(ash, 'claimTask', { task: 2 });
+  await s.op(ronit, 'sendMessage', { to: 'all', body: 'standup in 5', kind: 'fyi' });
+  s.tick();
+  await s.op(kai, 'markRead', { messageIds: await s.unread(kai) });
+  await s.op(dylan, 'releaseFiles', {});
+  await s.op(ash, 'markRead', { messageIds: await s.unread(ash) });
+  s.tick();
+  await s.op(ronit, 'setOrchestrator', { agent: 'ash-codex' });
+  s.tick();
+  await s.op(ash, 'createTask', { title: 'Fix the flaky test' });
+  s.tick();
+  const rejectedCreate = await s.op(ronit, 'createTask', { title: 'not allowed any more' }); // no longer orchestrator
+  s.tick();
+  // Concurrent claims of task 3: neither author saw the other's op. Dylan's is earlier.
+  const claimByDylan = await s.op(dylan, 'claimTask', { task: 3 });
+  s.tick(3);
+  const claimByKai = await s.op(kai, 'claimTask', { task: 3 }, { observe: false });
+  s.tick();
+  await s.op(ash, 'sendMessage', { to: 'all', body: 'thanks all', kind: 'fyi' });
+  s.tick();
+  // Two agents, one identical ts (same ms, counter 0): neither observed the other.
+  const pairA = await s.op(dylan, 'sendMessage', { to: 'all', body: 'same tick from dylan', kind: 'fyi' });
+  const pairB = await s.op(kai, 'sendMessage', { to: 'all', body: 'same tick from kai', kind: 'fyi' }, { observe: false });
+  return {
+    s, ops: [...s.ops], ronit, dylan, ash, kai, createTask1, ashClaimFiles, claimByDylan, claimByKai, rejectedCreate,
+    sameTsPair: [pairA, pairB],
+  };
 }

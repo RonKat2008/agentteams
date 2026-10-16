@@ -143,15 +143,19 @@ const migrations: Record<string, Migration> = {
         .addColumn('registered_op_id', 'text', (c) => c.notNull())
         .execute();
 
+      // One row per distinct op content: identity is (agent, op_id); an agent that equivocates (two contents
+      // under one id) gets one winner row plus 'equivocation' rows for the losers, hence hash in the key.
       await db.schema.createTable('applied_ops')
-        .addColumn('op_id', 'text', (c) => c.primaryKey())
+        .addColumn('agent', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('hash', 'text', (c) => c.notNull())
         .addColumn('ts', 'text')
-        .addColumn('agent', 'text')
         .addColumn('status', 'text', (c) => c.notNull())
         .addColumn('error', 'text')
-        .addColumn('hash', 'text', (c) => c.notNull())
+        .addPrimaryKeyConstraint('applied_ops_pk', ['agent', 'op_id', 'hash'])
         .execute();
       await db.schema.createIndex('applied_ops_order_idx').on('applied_ops').columns(['ts', 'agent', 'op_id']).execute();
+      await db.schema.createIndex('applied_ops_id_idx').on('applied_ops').columns(['op_id']).execute();
 
       await db.schema.createTable('replica_state')
         .addColumn('key', 'text', (c) => c.primaryKey())
@@ -159,13 +163,20 @@ const migrations: Record<string, Migration> = {
         .execute();
 
       await db.schema.createTable('replica_notices')
-        .addColumn('op_id', 'text', (c) => c.primaryKey())
         .addColumn('agent_id', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
         .addColumn('body', 'text', (c) => c.notNull())
         .addColumn('created_at', 'text', (c) => c.notNull())
         .addColumn('delivered_at', 'text')
+        .addPrimaryKeyConstraint('replica_notices_pk', ['agent_id', 'op_id'])
         .execute();
-      await db.schema.createIndex('replica_notices_agent_idx').on('replica_notices').columns(['agent_id', 'op_id']).execute();
+
+      // Trust-on-first-use signing keys. Local and permanent: a rebuild never touches it.
+      await db.schema.createTable('agent_key_pins')
+        .addColumn('agent_id', 'text', (c) => c.primaryKey())
+        .addColumn('public_key', 'text', (c) => c.notNull())
+        .addColumn('pinned_at', 'text', (c) => c.notNull())
+        .execute();
     },
   },
 };

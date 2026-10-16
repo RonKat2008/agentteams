@@ -104,16 +104,19 @@ export interface AgentKeysTable {
   registered_op_id: string;
 }
 
-/** Every op this replica has evaluated. Part of the replicated view (identical on every replica). */
+/**
+ * Every op this replica has evaluated. Part of the replicated view (identical on every replica).
+ * Identity is (agent, op_id); `hash` (sha256 of the canonical op JSON) separates equivocating variants.
+ */
 export interface AppliedOpsTable {
+  agent: string;
   op_id: string;
-  /** HLC time; null when the op's envelope was malformed (such ops take no part in the total order). */
-  ts: string | null;
-  agent: string | null;
-  status: 'applied' | 'rejected';
-  error: string | null;
-  /** sha256 of the canonical op JSON; a different op reusing an id forces a rebuild. */
   hash: string;
+  /** HLC time; null for malformed envelopes and equivocation losers (they take no part in the total order). */
+  ts: string | null;
+  status: 'applied' | 'rejected';
+  /** A stable code (DomainError code or a fixed category), never free text. */
+  error: string | null;
 }
 
 /** Local key/value state of this replica; never wiped by a rebuild, never replicated. */
@@ -124,11 +127,18 @@ export interface ReplicaStateTable {
 
 /** Local-only notices for this replica's own agent (e.g. "your op was rejected"); survive rebuilds. */
 export interface ReplicaNoticesTable {
-  op_id: string;
   agent_id: string;
+  op_id: string;
   body: string;
   created_at: string;
   delivered_at: string | null;
+}
+
+/** Local trust-on-first-use pins of agent signing keys; never wiped, never replaced. */
+export interface AgentKeyPinsTable {
+  agent_id: string;
+  public_key: string;
+  pinned_at: string;
 }
 
 export interface Database {
@@ -144,6 +154,7 @@ export interface Database {
   applied_ops: AppliedOpsTable;
   replica_state: ReplicaStateTable;
   replica_notices: ReplicaNoticesTable;
+  agent_key_pins: AgentKeyPinsTable;
 }
 
 export type TeamRow = Selectable<TeamsTable>;

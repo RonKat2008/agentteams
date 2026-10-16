@@ -34,7 +34,6 @@ export async function createReplicatedTeam(
 ): Promise<{ teamId: string; agentName: string }> {
   const p = parseInput(ReplicatedCreateTeamInput, input);
   requireSelf(authorId, p.agentId);
-  const opId = ctx.newId(); // replay: the first id is the op's own id
   const nowIso = ctx.now().toISOString();
   await withTx(ctx, async (tx) => {
     const existing = await tx.db.selectFrom('teams').select('id').limit(1).executeTakeFirst();
@@ -47,7 +46,7 @@ export async function createReplicatedTeam(
       repo_provider: p.repo.provider, repo_slug: p.repo.slug ?? null, default_branch: p.repo.defaultBranch,
       orchestrator_agent_id: p.agentId, created_by_member: p.member, creator_agent_id: p.agentId, created_at: nowIso,
     }).execute();
-    await insertAgent(tx, p.teamId, p, opId, nowIso);
+    await insertAgent(tx, p.teamId, p, nowIso);
     await logEvent(tx, p.teamId, p.agentId, 'team_created', { name: p.name, repo: p.repo });
     await logEvent(tx, p.teamId, p.agentId, 'agent_joined', { agent: p.agentName, member: p.member, tool: p.tool, githubLogin: null });
   });
@@ -64,7 +63,6 @@ export async function registerReplicatedAgent(
 ): Promise<{ agentName: string; alreadyRegistered: boolean }> {
   const p = parseInput(ReplicatedJoinInput, input);
   requireSelf(authorId, p.agentId);
-  const opId = ctx.newId(); // replay: the first id is the op's own id
   const nowIso = ctx.now().toISOString();
   return withTx(ctx, async (tx) => {
     const team = await tx.db.selectFrom('teams').select('id').where('id', '=', p.teamId).executeTakeFirst();
@@ -79,7 +77,7 @@ export async function registerReplicatedAgent(
     const row = await tx.db.selectFrom('agents').select('id').where('id', '=', p.agentId).executeTakeFirst();
     if (row) throw new DomainError('conflict', 'this agent is already registered');
     await requireNameFree(tx, p.teamId, p.agentName);
-    await insertAgent(tx, p.teamId, p, opId, nowIso);
+    await insertAgent(tx, p.teamId, p, nowIso);
     await logEvent(tx, p.teamId, p.agentId, 'agent_joined', { agent: p.agentName, member: p.member, tool: p.tool, githubLogin: null });
     return { agentName: p.agentName, alreadyRegistered: false };
   });
@@ -88,7 +86,7 @@ export async function registerReplicatedAgent(
 async function insertAgent(
   tx: HubContext, teamId: string,
   p: { agentId: string; agentName: string; member: string; tool: ReplicatedJoinInput['tool']; publicKey: string },
-  opId: string, nowIso: string,
+  nowIso: string,
 ): Promise<void> {
   await tx.db.insertInto('agents').values({
     id: p.agentId, team_id: teamId, name: p.agentName, member: p.member, tool: p.tool,
@@ -96,6 +94,6 @@ async function insertAgent(
     api_key_hash: apiKeyHashOf(p.agentId), last_seen_at: nowIso, created_at: nowIso, github_login: null, github_id: null,
   }).execute();
   await tx.db.insertInto('agent_keys').values({
-    agent_id: p.agentId, team_id: teamId, public_key: p.publicKey, registered_op_id: opId,
+    agent_id: p.agentId, team_id: teamId, public_key: p.publicKey, registered_op_id: p.agentId, // bootstrap ops have op.id === op.agent === agentId
   }).execute();
 }
