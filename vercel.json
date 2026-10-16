@@ -5,7 +5,7 @@
   "buildCommand": "pnpm build && node packages/hub/dist/bin-migrate.js",
   "outputDirectory": "public",
   "functions": {
-    "api/index.ts": { "excludeFiles": "{**/better-sqlite3/**,**/node_modules/better-sqlite3/**}" }
+    "api/index.mjs": { "excludeFiles": "{**/better-sqlite3/**,**/node_modules/better-sqlite3/**}" }
   },
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
 }
