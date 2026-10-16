@@ -52,8 +52,9 @@ function runHook(event, input) {
 
 export const AgentTeams = async ({ client, directory }) => {
   const cwd = directory;
-  const reprompted = new Set(); // sessions we just re-prompted: their next idle must not block again
-  const lastBlock = new Map();  // sessionID -> last command text sent
+  // Sessions we just re-prompted: their next idle is sent as stop_hook_active, so the hub never blocks (or consumes)
+  // twice in a row. No text-based dedupe: by the time we see a block the hub has already consumed those messages.
+  const reprompted = new Set();
 
   const inject = (sessionID, text) =>
     client.session.prompt({ path: { id: sessionID }, body: { noReply: true, parts: [{ type: 'text', text }] } }).catch(() => {});
@@ -74,8 +75,6 @@ export const AgentTeams = async ({ client, directory }) => {
         const loop = reprompted.delete(id);
         const r = await runHook('stop', { cwd, stop_hook_active: loop });
         if (!r || typeof r.block !== 'string' || r.block === '') return;
-        if (lastBlock.get(id) === r.block) return;
-        lastBlock.set(id, r.block);
         reprompted.add(id);
         // A real prompt (starts a turn). Not awaited: it resolves when the whole turn ends.
         client.session.prompt({ path: { id }, body: { parts: [{ type: 'text', text: r.block }] } }).catch(() => reprompted.delete(id));

@@ -106,6 +106,8 @@ describe('generated opencode plugin (real module, fake CLI + fake client)', () =
     writeFileSync(cli, `import { appendFileSync } from 'node:fs';
 let s=''; process.stdin.on('data',d=>s+=d); process.stdin.on('end',()=>{
   appendFileSync(${JSON.stringify(join(dir, 'log.txt'))}, process.argv.slice(2).join(' ')+' '+s+'\\n');
+  // Like the real hub: a stop hook flagged as a loop never blocks.
+  if(process.argv[3]==='stop' && JSON.parse(s||'{}').stop_hook_active===true) return;
   const r=${JSON.stringify(replies)}[process.argv[3]]; if(r!==undefined) process.stdout.write(JSON.stringify(r));
 });`);
     const file = join(dir, 'agentteams.mjs');
@@ -135,17 +137,25 @@ let s=''; process.stdin.on('data',d=>s+=d); process.stdin.on('end',()=>{
     expect(calls).toEqual([]);
   });
 
-  it('on idle re-prompts (real prompt) once, marks the follow-up idle as a stop loop, never repeats the same command', async () => {
+  it('on idle re-prompts (real prompt) once and marks the follow-up idle as a stop loop', async () => {
     const hooks = await load({ stop: { block: 'do the thing' } });
     const idle = { event: { type: 'session.idle', properties: { sessionID: 's1' } } };
     await hooks.event(idle);
     expect(calls).toEqual([{ path: { id: 's1' }, body: { parts: [{ type: 'text', text: 'do the thing' }] } }]);
-    await hooks.event(idle); // idle after our own prompt
-    await hooks.event(idle); // and again, same command text
+    await hooks.event(idle); // idle after our own prompt: a loop, never blocks
     expect(calls).toHaveLength(1);
     const log = readFileSync(join(dir, 'log.txt'), 'utf8').trim().split('\n');
     expect(log[0]).toContain('"stop_hook_active":false');
     expect(log[1]).toContain('"stop_hook_active":true');
+  });
+
+  it('delivers a repeated identical command consumed by a later, non-loop idle (2 consumed -> 2 delivered)', async () => {
+    const hooks = await load({ stop: { block: 'run the tests' } });
+    const idle = { event: { type: 'session.idle', properties: { sessionID: 's1' } } };
+    await hooks.event(idle); // consumes command #1 -> prompt
+    await hooks.event(idle); // loop idle after our prompt -> nothing
+    await hooks.event(idle); // later idle: hub consumed command #2 (same text) -> must prompt again
+    expect(calls.map((c) => c.body.parts[0]?.text)).toEqual(['run the tests', 'run the tests']);
   });
 
   it('ignores sub-agent sessions at start and survives a broken CLI', async () => {
