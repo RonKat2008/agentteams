@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export type ErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'invalid';
+export type ErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'invalid' | 'rate_limited';
 
 export class DomainError extends Error {
   constructor(

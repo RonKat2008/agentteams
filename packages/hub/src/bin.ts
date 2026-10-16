@@ -16,7 +16,9 @@ try {
 } catch (err) {
   config = fail((err as Error).message);
 }
-mkdirSync(config.home, { recursive: true, mode: 0o700 });
+if (!config.databaseUrl) mkdirSync(config.home, { recursive: true, mode: 0o700 });
+
+const redact = (message: string) => message.replace(/postgres(?:ql)?:\/\/\S+/gi, 'postgres://***');
 
 const hub = await startHub({
   dbPath: join(config.home, 'hub.db'),
@@ -25,7 +27,7 @@ const hub = await startHub({
   host: config.host,
   mode: config.mode,
   allowedHosts: config.allowedHosts,
-}).catch((err: Error) => fail(`failed to start: ${err.message}`));
+}).catch((err: Error) => fail(`failed to start: ${redact(err.message)}`));
 // Never log DATABASE_URL or other secrets.
 console.log(
   config.mode === 'hosted'

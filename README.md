@@ -139,6 +139,10 @@ Hosted mode is planned for a later release. The local hub only accepts local con
 non-local `Host` headers), so teammates cannot reach it over the network yet. You can pass `--hub <url>`
 to `create`/`join` to point at a different hub, but remote access needs hosted mode.
 
+Hosting notes: in hosted mode the hub trusts `Fly-Client-IP` and `X-Forwarded-For` as set by a fronting
+proxy for per-IP rate limiting (IPv6 clients are bucketed by /64), so it must sit behind Fly or a proxy that
+overwrites those headers. Rate limits are in memory, per instance. `/health` is exempt from the Host allowlist.
+
 ## Run the hub on its own
 
 ```bash

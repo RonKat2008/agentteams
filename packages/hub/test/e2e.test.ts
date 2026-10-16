@@ -78,7 +78,7 @@ describe('hub over real HTTP', () => {
     // fetch() ignores a Host override, so speak raw HTTP.
     const { port } = new URL(hub.url);
     const status = await new Promise<number | undefined>((resolve, reject) => {
-      const req = request({ host: '127.0.0.1', port, path: '/health', headers: { host: 'evil.example' } }, (res) => {
+      const req = request({ host: '127.0.0.1', port, path: '/api/team/status', headers: { host: 'evil.example' } }, (res) => {
         res.resume();
         resolve(res.statusCode);
       });

@@ -145,7 +145,7 @@ describe('local hardening', () => {
 describe('host allowlist', () => {
   it('refuses requests whose Host is not allowed', async () => {
     const strict = createApp(env.ctx, { allowedHosts: ['127.0.0.1', 'localhost'] });
-    const evil = await strict.request('http://evil.example/health');
+    const evil = await strict.request('http://evil.example/api/team/status');
     expect(evil.status).toBe(403);
     expect(await evil.json()).toEqual({ error: { code: 'forbidden', message: 'host not allowed' } });
     expect((await strict.request('http://127.0.0.1:4747/health')).status).toBe(200);
@@ -254,5 +254,30 @@ describe('hardening', () => {
     const res = await app.request('/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     expect(res.status).toBe(401);
     expect(res.headers.get('www-authenticate')).toBe('Bearer realm="agentteams"');
+  });
+
+  it('exempts /health from the Host allowlist but not other routes', async () => {
+    const hosted = createApp(env.ctx, { mode: 'hosted', allowedHosts: ['hub.example.com'] });
+    const headers = { host: '10.0.0.5:8080' };
+    expect((await hosted.request('/health', { headers })).status).toBe(200);
+    expect((await hosted.request('/api/team/status', { headers })).status).toBe(403);
+  });
+
+  it('rejects an oversized /mcp body with 413', async () => {
+    const res = await app.request('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer x' },
+      body: JSON.stringify({ pad: 'x'.repeat(70 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('throttles failed auth against the IP limit', async () => {
+    const hosted = createApp(env.ctx, { mode: 'hosted', now: () => 0 });
+    const guess = (path: string) => hosted.request(path, { headers: { authorization: 'Bearer nope', 'fly-client-ip': '7.7.7.7' } });
+    for (let i = 0; i < 10; i++) expect((await guess(i % 2 ? '/api/team/status' : '/mcp')).status).toBe(401);
+    const res = await guess('/api/team/status');
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).not.toBeNull();
   });
 });

@@ -19,7 +19,7 @@ import {
 export type AppEnv = { Variables: { actor: Actor } };
 
 const STATUS: Record<ErrorCode, ContentfulStatusCode> = {
-  unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, invalid: 400,
+  unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, invalid: 400, rate_limited: 429,
 };
 
 function taskNumber(c: Context): number {
@@ -63,6 +63,8 @@ const MAX_BODY_BYTES = 64 * 1024;
 const DEFAULT_RATE_LIMITS = { agentPerMin: 60, ipPerMin: 10 };
 const WWW_AUTHENTICATE = 'Bearer realm="agentteams"';
 
+class AuthPassed extends Error {}
+
 function hostnameOf(host: string): string {
   if (host.startsWith('[')) return host.slice(0, host.indexOf(']') + 1).toLowerCase();
   return host.split(':')[0]!.toLowerCase();
@@ -94,6 +96,9 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'route not found' } }, 404));
 
+  // Registered before the Host allowlist: platform health checks hit the machine with an internal Host.
+  app.get('/health', (c) => c.json({ ok: true, mode }));
+
   if (opts.allowedHosts) {
     const allowed = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));
     app.use('*', async (c, next) => {
@@ -122,8 +127,6 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
     await next();
   });
 
-  app.get('/health', (c) => c.json({ ok: true, mode }));
-
   const ipLimit = createMiddleware<AppEnv>(async (c, next) => {
     const r = ipBucket?.take(clientIp(c, mode));
     if (r && !r.ok) return limited(c, r.retryAfterSec);
@@ -144,7 +147,23 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
     await next();
   });
 
-  app.use('/api/team/*', requireAgent(ctx), agentLimit);
+  // Failed auth spends an IP token so API-key guessing is throttled like the other unauthenticated routes.
+  const authenticated = createMiddleware<AppEnv>(async (c, next) => {
+    try {
+      await requireAgent(ctx)(c, async () => {
+        throw new AuthPassed();
+      });
+    } catch (err) {
+      if (!(err instanceof AuthPassed)) {
+        const r = err instanceof DomainError && err.code === 'unauthorized' ? ipBucket?.take(clientIp(c, mode)) : undefined;
+        if (r && !r.ok) return limited(c, r.retryAfterSec);
+        throw err;
+      }
+    }
+    await next();
+  });
+
+  app.use('/api/team/*', authenticated, agentLimit);
   app.post('/api/team/ping', async (c) => {
     const actor = c.get('actor');
     return c.json({ agent: actor.name, messages: await readInbox(ctx, actor, (await body(c)) as never) });
@@ -171,7 +190,7 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   app.post('/api/team/invite/rotate', async (c) => c.json(await rotateInvite(ctx, c.get('actor'))));
   app.post('/api/team/invite/revoke', async (c) => c.json(await revokeInvite(ctx, c.get('actor'))));
 
-  app.use('/mcp', requireAgent(ctx), agentLimit);
+  app.use('/mcp', authenticated, agentLimit);
   app.get('/mcp', (c) => c.body(null, 405)); // stateless: no server-initiated SSE stream
   app.all('/mcp', async (c) => {
     const server = buildMcpServer(ctx, c.get('actor'));
