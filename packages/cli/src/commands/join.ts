@@ -4,6 +4,7 @@ import { defaultMemberName, type InvitePreview, type ToolKind } from '@agentteam
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
+import { joinLocalTeam, LOCAL_TEAM_LABEL, localInviteMatches } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
 import { checkTeamDir, detectGithubSlug, real, repoRoot } from '../repo.js';
@@ -61,7 +62,25 @@ async function resolveRepoPath(deps: CliDeps, preview: InvitePreview, opts: Join
   return target;
 }
 
+/** Adds another agent to the team in this repo's local database (no hub, no clone). */
+async function joinLocally(deps: CliDeps, code: string, opts: JoinOpts): Promise<void> {
+  const repoPath = await repoRoot(deps, deps.cwd);
+  await checkTeamDir(deps, repoPath);
+  const member = opts.as ?? defaultMemberName(deps.username);
+  const res = await joinLocalTeam(deps, repoPath, { inviteCode: code, tool: opts.agent, member });
+  const cred = {
+    repoPath, tool: opts.agent, hubUrl: '', teamName: res.teamName, agentName: res.agentName,
+    apiKey: res.apiKey, createdAt: new Date().toISOString(), transport: 'local' as const,
+  };
+  await saveCredential(deps, cred);
+  deps.out(`Joined team "${res.teamName}" as ${res.agentName} (local). Repo: ${repoPath}`);
+  deps.out(LOCAL_TEAM_LABEL);
+  if (opts.install) printReport(deps, await runInstallers(deps, cred));
+}
+
 export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): Promise<void> {
+  // A code for the team in this repo's local database joins locally; an explicit --hub always means a hub.
+  if (opts.hub === undefined && (await localInviteMatches(deps, deps.cwd, code))) return joinLocally(deps, code, opts);
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const client = new HubClient(hubUrl, { fetch: deps.fetch });
   const preview = await client.previewInvite(code);

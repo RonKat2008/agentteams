@@ -18,6 +18,21 @@ export interface Credential {
 }
 
 interface CredentialsFile { version: 1; credentials: Credential[] }
+
+const TRANSPORTS: readonly string[] = ['http', 'local', 'git'];
+
+/** An unknown transport must never fall back to http: that would send the API key to whatever hubUrl holds. */
+function checkTransports(file: string, credentials: Credential[]): Credential[] {
+  for (const c of credentials) {
+    const t: unknown = c.transport;
+    if (t !== undefined && !(typeof t === 'string' && TRANSPORTS.includes(t))) {
+      throw new Error(
+        `${file}: the ${c.tool} credential for ${c.repoPath} has an unknown transport ${JSON.stringify(t)} ` +
+        '(expected "http", "local" or "git"); upgrade agentteams, or fix or remove that entry');
+    }
+  }
+  return credentials;
+}
 type Deps = Pick<CliDeps, 'env' | 'homedir'>;
 
 export async function loadCredentials(deps: Deps): Promise<Credential[]> {
@@ -29,11 +44,13 @@ export async function loadCredentials(deps: Deps): Promise<Credential[]> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
+  let parsed: CredentialsFile;
   try {
-    return (JSON.parse(text) as CredentialsFile).credentials ?? [];
+    parsed = JSON.parse(text) as CredentialsFile;
   } catch {
     throw new Error(`${file}: credentials.json is not valid JSON; fix or delete it`);
   }
+  return checkTransports(file, parsed.credentials ?? []);
 }
 
 const sameSlot = (a: Credential, b: Credential) => a.repoPath === b.repoPath && a.tool === b.tool;

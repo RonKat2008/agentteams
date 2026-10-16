@@ -5,9 +5,10 @@ import { saveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
 import { HubClient } from '../hubClient.js';
+import { createLocalTeam, LOCAL_TEAM_LABEL } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
-import { checkTeamDir, detectGithubSlug, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, isGitRepo, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
@@ -27,13 +28,13 @@ async function warnIfNoAccess(deps: CliDeps, slug: string, cwd: string): Promise
   if (res.code !== 0) deps.err(`warning: could not verify access to ${slug} with gh (${firstLine(res.stderr)})`);
 }
 
-async function resolveRepoLink(deps: CliDeps, opts: CreateOpts, repoPath: string): Promise<RepoLink> {
+async function resolveRepoLink(deps: CliDeps, opts: CreateOpts, repoPath: string, quiet = false): Promise<RepoLink> {
   const slug = opts.repo ?? (opts.local ? null : await detectGithubSlug(deps, deps.cwd));
   if (slug) {
     await warnIfNoAccess(deps, slug, repoPath);
     return { provider: 'github', slug, defaultBranch: await defaultBranch(deps, repoPath, slug) };
   }
-  if (!opts.local) deps.err('no GitHub origin found; creating a local-only team (use --repo owner/name to link one)');
+  if (!opts.local && !quiet) deps.err('no GitHub origin found; creating a local-only team (use --repo owner/name to link one)');
   return { provider: 'local', defaultBranch: await defaultBranch(deps, repoPath) };
 }
 
@@ -43,8 +44,13 @@ async function gitOrThrow(deps: CliDeps, cwd: string, args: string[]): Promise<s
   return r.stdout;
 }
 
-/** The exact command teammates run to join (printed by create and by the guided menu). */
-export const teammateJoinCommand = (inviteCode: string, hubUrl: string): string => `agentteams join ${inviteCode} --hub ${hubUrl}`;
+/** The exact command teammates run to join (printed by create and by the guided menu); local teams have no hub URL. */
+export const teammateJoinCommand = (inviteCode: string, hubUrl: string): string =>
+  hubUrl ? `agentteams join ${inviteCode} --hub ${hubUrl}` : `agentteams join ${inviteCode}`;
+
+/** No --hub flag and no AGENTTEAMS_HUB: the team lives in this repo's local database. */
+export const isLocalCreate = (opts: Pick<CreateOpts, 'hub'>, env: NodeJS.ProcessEnv): boolean =>
+  opts.hub === undefined && !env.AGENTTEAMS_HUB;
 
 /** Spec §3A steps 1-3: verify gh, create the local repo with a first commit, create and push the GitHub repo. */
 export function validateNewRepoArgs(name: string, owner?: string): void {
@@ -107,9 +113,35 @@ async function commitInstructions(deps: CliDeps, dir: string): Promise<void> {
   if (push.code !== 0) deps.err(`warning: could not push the instructions commit (${msgOf(push)})`);
 }
 
+const hasRemote = async (deps: CliDeps, repoPath: string): Promise<boolean> => {
+  const r = await deps.exec('git', ['remote'], { cwd: repoPath });
+  return r.code === 0 && r.stdout.trim() !== '';
+};
+
+async function registerLocalTeam(
+  deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink,
+): Promise<{ cred: Credential; result: CreateResult }> {
+  const member = opts.as ?? defaultMemberName(deps.username);
+  const res = await createLocalTeam(deps, repoPath, { name, tool: opts.agent, repo, member });
+  const cred: Credential = {
+    repoPath, tool: opts.agent, hubUrl: '', teamName: res.teamName, agentName: res.agentName,
+    apiKey: res.apiKey, createdAt: new Date().toISOString(), transport: 'local',
+  };
+  deps.out(`Created team "${res.teamName}". You are ${res.agentName} (orchestrator).`);
+  deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
+  deps.out(`Teammates join with: ${teammateJoinCommand(res.inviteCode, '')}`);
+  deps.out(LOCAL_TEAM_LABEL);
+  if (await hasRemote(deps, repoPath)) {
+    deps.out('Note: this repo has a git remote; sharing the team with other computers will come from git sync (not yet available).');
+  }
+  await saveCredential(deps, cred);
+  return { cred, result: { teamName: res.teamName, inviteCode: res.inviteCode, inviteExpiresAt: res.inviteExpiresAt, hubUrl: '' } };
+}
+
 async function registerTeam(
   deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink, githubToken: string | undefined,
 ): Promise<{ cred: Credential; result: CreateResult }> {
+  if (isLocalCreate(opts, deps.env)) return registerLocalTeam(deps, name, opts, repoPath, repo);
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
   const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, tool: opts.agent, repo, ...identity });
@@ -127,12 +159,16 @@ async function registerTeam(
 
 export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<CreateResult> {
   // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
-  await checkTeamDir(opts.newRepo ? { ...deps, err: () => {} } : deps, deps.cwd);
-  // Before any side effect (repo creation); hosted hubs need the gh identity once.
-  const githubToken = await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env), { trustHub: opts.trustHub });
+  const local = isLocalCreate(opts, deps.env);
+  await checkTeamDir(opts.newRepo || local ? { ...deps, err: () => {} } : deps, deps.cwd);
+  if (local && !opts.newRepo && !(await isGitRepo(deps, deps.cwd))) {
+    throw new Error('a local team lives in a git repository; run "git init" here first (or pass --hub <url> to use a hub)');
+  }
+  // Before any side effect (repo creation); hosted hubs need the gh identity once. Local teams have no hub.
+  const githubToken = local ? undefined : await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env), { trustHub: opts.trustHub });
   if (!opts.newRepo) {
     const repoPath = await repoRoot(deps, deps.cwd);
-    const repo = await resolveRepoLink(deps, opts, repoPath);
+    const repo = await resolveRepoLink(deps, opts, repoPath, local);
     const { cred, result } = await registerTeam(deps, name, opts, repoPath, repo, githubToken);
     if (opts.install) printReport(deps, await runInstallers(deps, cred));
     return result;

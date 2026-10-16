@@ -55,7 +55,8 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .option('--share', 'run in hosted mode behind a public Cloudflare quick tunnel')
     .action(async (o: { port?: string; share?: boolean }) => (await import('./commands/up.js')).upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
-    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)')
+    .addOption(agentOpt('claude')).option('--as <member>')
+    .option('--hub <url>', 'use a hub server: its URL, or "local" for http://127.0.0.1:4747 (default: $AGENTTEAMS_HUB, else a team stored in this repo)')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
     .addOption(new Option('--local', 'local-only repo (no GitHub link); this is NOT the local hub, use --hub local for that').conflicts('newRepo'))
     .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
@@ -67,7 +68,9 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       await createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' });
     });
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
-    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)').option('--no-install')
+    .addOption(agentOpt('claude')).option('--as <member>')
+    .option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: this repo\'s team if the code is for it, else $AGENTTEAMS_HUB or the public hub)')
+    .option('--no-install')
     .option('--trust-hub', TRUST_HUB_HELP)
     .option('--no-clone', 'do not clone the team repo; use the current directory')
     .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
