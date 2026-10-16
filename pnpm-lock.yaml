@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@agentteams/hub':
+        specifier: workspace:*
+        version: link:packages/hub
     devDependencies:
       '@types/node':
         specifier: ^22.20.5

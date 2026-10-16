@@ -133,15 +133,46 @@ fi
 
 `create --new-repo` makes a GitHub repo for you, and `join` clones the team repo (skip with `--no-clone`).
 
-## Teammates on other machines
+## Hosting a hub for friends (Vercel)
 
-Hosted mode is planned for a later release. The local hub only accepts local connections (it refuses
-non-local `Host` headers), so teammates cannot reach it over the network yet. You can pass `--hub <url>`
-to `create`/`join` to point at a different hub, but remote access needs hosted mode.
+The hosted hub runs as one Vercel Node function (Hono via `hono/vercel`) backed by Neon Postgres. The
+local hub stays the default; this is only for teammates on other machines.
 
-Hosting notes: in hosted mode the hub trusts `Fly-Client-IP` and `X-Forwarded-For` as set by a fronting
-proxy for per-IP rate limiting (IPv6 clients are bucketed by /64), so it must sit behind Fly or a proxy that
-overwrites those headers. Rate limits are in memory, per instance. `/health` is exempt from the Host allowlist.
+1. `vercel link` in this repo.
+2. Add Neon Postgres from the Vercel Marketplace. It sets `DATABASE_URL`.
+3. Optional, for a custom domain: `vercel env add AGENTTEAMS_ALLOWED_HOSTS` (comma-separated host names).
+   On Vercel it defaults to `VERCEL_PROJECT_PRODUCTION_URL` and `VERCEL_URL`.
+4. `vercel deploy --prod`. The build command (`vercel.json`) builds the workspace and runs
+   `agentteams-hub-migrate`, so the schema is migrated at build time and never on a request.
+   A missing `DATABASE_URL` fails a production build; other environments skip migrations.
+5. Members: `agentteams create my-app --hub https://<project>.vercel.app`. Friends run
+   `agentteams join <code> --hub https://<project>.vercel.app`. The creator runs `agentteams access grant <agent>`.
+
+Layout: `api/index.ts` re-exports `createVercelHandler()` from `@agentteams/hub/vercel` as the
+`GET`/`POST`/... handlers, and `vercel.json` rewrites every path to `/api`. Hosted mode is forced for the
+function. `framework` is `null` because Vercel's zero-config Hono detection expects a single `src/index.ts`
+app entry and this repo is a pnpm workspace whose hub package must be built first; the explicit
+`api/` function plus build command is the more predictable setup.
+
+Security notes:
+
+- Use HTTPS only. The CLI sends your GitHub token only to a hub over `https:`.
+- GitHub tokens are verified once against GitHub and never stored or logged.
+- API keys are stored hashed.
+- Rate limits are in-memory token buckets, so on serverless they are per function instance and only
+  best-effort (a burst spread over several instances is not counted together). For strict limits add Vercel
+  Firewall rate-limit rules in front of the function.
+- Client IPs for the per-IP limits come from `x-vercel-forwarded-for`, then `x-real-ip`, then
+  `Fly-Client-IP` / `X-Forwarded-For` (IPv6 clients are bucketed by /64). Only run hosted mode behind a proxy
+  that sets these. `/health` is exempt from the Host allowlist.
+
+### Self-hosting with Node
+
+```bash
+AGENTTEAMS_MODE=hosted DATABASE_URL=postgres://... AGENTTEAMS_ALLOWED_HOSTS=hub.example.com node packages/hub/dist/bin.js
+```
+
+Run it behind any TLS proxy that overwrites the client-IP headers. Single instance: limits are exact.
 
 ## Run the hub on its own
 

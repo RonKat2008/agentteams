@@ -24,7 +24,7 @@ export interface RunningHub {
 }
 
 export async function startHub(opts: HubOptions): Promise<RunningHub> {
-  const { db, dialect } = createDb({ sqlitePath: opts.dbPath, databaseUrl: opts.databaseUrl });
+  const { db, dialect } = await createDb({ sqlitePath: opts.dbPath, databaseUrl: opts.databaseUrl });
   try {
     await migrateToLatest(db);
   } catch (err) {

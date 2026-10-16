@@ -63,3 +63,14 @@ describe('normalizeIp', () => {
     expect(normalizeIp('1.2.3.4')).toBe('1.2.3.4');
   });
 });
+
+describe('clientIp on Vercel', () => {
+  it('hosted prefers x-vercel-forwarded-for (first entry), then x-real-ip, then Fly/XFF', async () => {
+    expect(await ipFor('hosted', { 'x-vercel-forwarded-for': '4.4.4.4, 5.5.5.5', 'x-real-ip': '6.6.6.6', 'fly-client-ip': '1.1.1.1' })).toBe('4.4.4.4');
+    expect(await ipFor('hosted', { 'x-real-ip': '6.6.6.6', 'fly-client-ip': '1.1.1.1' })).toBe('6.6.6.6');
+    expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1' })).toBe('1.1.1.1');
+  });
+  it('local ignores the Vercel headers', async () => {
+    expect(await ipFor('local', { 'x-vercel-forwarded-for': '4.4.4.4', 'x-real-ip': '6.6.6.6' })).toBe('unknown');
+  });
+});

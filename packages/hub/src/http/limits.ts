@@ -62,12 +62,16 @@ export function normalizeIp(ip: string): string {
  * Client address for rate limiting. Forwarding headers are trusted only in hosted mode (behind the
  * platform proxy); locally they are attacker-controlled, so the socket address is used.
  *
- * SECURITY: hosted mode trusts Fly-Client-IP / X-Forwarded-For exactly as a fronting proxy sets them.
- * The hub must sit behind Fly (or a proxy that overwrites those headers); if it is reachable directly,
+ * SECURITY: hosted mode trusts x-vercel-forwarded-for / x-real-ip / Fly-Client-IP / X-Forwarded-For exactly as
+ * a fronting proxy sets them. The hub must sit behind Vercel or Fly (or a proxy that overwrites those headers); if it is reachable directly,
  * a client can spoof them and evade the per-IP limits. IPv6 addresses are reduced to their /64 prefix.
  */
 export function clientIp(c: Context, mode: 'local' | 'hosted'): string {
   if (mode === 'hosted') {
+    const vercel = c.req.header('x-vercel-forwarded-for')?.split(',')[0]?.trim();
+    if (vercel) return normalizeIp(vercel);
+    const real = c.req.header('x-real-ip')?.trim();
+    if (real) return normalizeIp(real);
     const fly = c.req.header('fly-client-ip')?.trim();
     if (fly) return normalizeIp(fly);
     const first = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();

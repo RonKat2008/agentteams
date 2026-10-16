@@ -12,7 +12,7 @@ const url = process.env.TEST_DATABASE_URL;
 const TABLES = ['activity', 'claims', 'commits', 'message_reads', 'messages', 'tasks', 'agents', 'teams', 'kysely_migration', 'kysely_migration_lock'];
 
 async function resetTables(): Promise<void> {
-  const { db } = createDb({ databaseUrl: url });
+  const { db } = await createDb({ databaseUrl: url });
   try {
     for (const t of TABLES) await sql`DROP TABLE IF EXISTS ${sql.table(t)} CASCADE`.execute(db);
   } finally {
@@ -43,14 +43,14 @@ describe.skipIf(!url)('live postgres', () => {
   });
 
   it('destroy() ends the pool: a later query rejects', async () => {
-    const { db } = createDb({ databaseUrl: url });
+    const { db } = await createDb({ databaseUrl: url });
     await db.selectFrom('teams').selectAll().execute();
     await db.destroy();
     await expect(db.selectFrom('teams').selectAll().execute()).rejects.toThrow();
   });
 
   it('grants exactly one of 10 concurrent overlapping exclusive claims', async () => {
-    const { db, dialect } = createDb({ databaseUrl: url });
+    const { db, dialect } = await createDb({ databaseUrl: url });
     try {
       await migrateToLatest(db);
       const ctx: HubContext = createContext(db, { dialect });

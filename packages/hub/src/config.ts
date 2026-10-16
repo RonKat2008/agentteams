@@ -29,6 +29,13 @@ export interface HubConfig {
   allowedHosts: string[];
 }
 
+/** Host names (no scheme) Vercel gives this deployment: the production alias and the unique deployment URL. */
+function vercelHosts(env: NodeJS.ProcessEnv): string[] {
+  return [env.VERCEL_PROJECT_PRODUCTION_URL, env.VERCEL_URL]
+    .map((u) => (u ?? '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, ''))
+    .filter((h) => h !== '');
+}
+
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
 
 function parseMode(value: string | undefined): 'local' | 'hosted' {
@@ -40,7 +47,8 @@ function parseMode(value: string | undefined): 'local' | 'hosted' {
 /** Reads the hub's environment into a validated config; throws with a clear message on bad input. */
 export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfig {
   const mode = parseMode(env.AGENTTEAMS_MODE);
-  const listed = (env.AGENTTEAMS_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter((h) => h !== '');
+  const explicit = (env.AGENTTEAMS_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter((h) => h !== '');
+  const listed = explicit.length > 0 || mode !== 'hosted' || env.VERCEL !== '1' ? explicit : vercelHosts(env);
   if (mode === 'hosted' && listed.length === 0) throw new Error('AGENTTEAMS_ALLOWED_HOSTS is required in hosted mode');
   return {
     mode,

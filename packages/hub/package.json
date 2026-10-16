@@ -8,13 +8,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./vercel": {
+      "types": "./dist/vercel.d.ts",
+      "default": "./dist/vercel.js"
     }
   },
   "bin": {
-    "agentteams-hub": "./dist/bin.js"
+    "agentteams-hub": "./dist/bin.js",
+    "agentteams-hub-migrate": "./dist/bin-migrate.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/bin.js"
+    "build": "tsc -p tsconfig.json && chmod +x dist/bin.js dist/bin-migrate.js"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.10",
