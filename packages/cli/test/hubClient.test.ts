@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startHub } from '@agentteams/hub';
 import { HubClient, HubError } from '../src/hubClient.js';
@@ -97,5 +99,31 @@ describe('HubClient', () => {
       const c = stub(() => new Response('', { status: 200 }));
       await expect(c.status()).rejects.toMatchObject({ code: 'internal', status: 200 });
     });
+  });
+});
+
+describe('HubClient redirects', () => {
+  it('never follows a redirect (the bearer token must not leave the hub)', async () => {
+    let targetHits = 0;
+    const target: Server = createServer((_req, res) => { targetHits += 1; res.end('{"ok":true,"mode":"local"}'); });
+    await new Promise<void>((r) => target.listen(0, '127.0.0.1', r));
+    const targetUrl = `http://127.0.0.1:${(target.address() as AddressInfo).port}/health`;
+    const redirector: Server = createServer((_req, res) => { res.writeHead(307, { location: targetUrl }); res.end(); });
+    await new Promise<void>((r) => redirector.listen(0, '127.0.0.1', r));
+    try {
+      const url = `http://127.0.0.1:${(redirector.address() as AddressInfo).port}`;
+      const err = await new HubClient(url, { apiKey: 'secret' }).health().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HubError);
+      expect(err).toMatchObject({ code: 'unreachable', message: "hub redirected the request; use the hub's final URL with --hub" });
+      expect(targetHits).toBe(0);
+    } finally {
+      redirector.close(); target.close();
+    }
+  });
+
+  it('keeps the generic unreachable message for network errors', async () => {
+    const err = await new HubClient('http://127.0.0.1:1').health().catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'unreachable' });
+    expect((err as Error).message).toContain('cannot reach the agentteams hub');
   });
 });

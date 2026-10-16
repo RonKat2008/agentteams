@@ -72,6 +72,8 @@ describe('hosted create and join', () => {
     expect(await run(t, 'create', 'hteam', '--repo', 'me/app', '--hub', hosted.url, '--no-install')).toBe(0);
     expect(seenTokens).toEqual([TOKEN]);
     expect(allOutput(t)).not.toContain(TOKEN);
+    const host = new URL(hosted.url).hostname;
+    expect(t.out).toContain(`Verifying your GitHub identity with ${host} (your gh token is sent once and not stored)`);
     expect(t.out.join('\n')).toContain('octo_cat');
     expect((await resolveCredential(t.deps, t.deps.cwd, 'claude'))?.agentName).toContain('octo_cat');
   });

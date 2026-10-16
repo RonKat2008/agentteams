@@ -23,6 +23,7 @@ export async function githubTokenFor(deps: CliDeps, hubUrl: string): Promise<str
   const { mode } = await new HubClient(hubUrl, { fetch: deps.fetch }).health();
   if (mode !== 'hosted') return undefined;
   assertSafeTransport(hubUrl);
+  deps.out(`Verifying your GitHub identity with ${new URL(hubUrl).hostname} (your gh token is sent once and not stored)`);
   const res = await deps.exec('gh', ['auth', 'token']);
   if (res.code === 127) throw new Error('this hub requires GitHub identity: install the GitHub CLI and run gh auth login');
   const token = res.stdout.trim();
