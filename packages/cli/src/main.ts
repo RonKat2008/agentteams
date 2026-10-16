@@ -98,7 +98,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
   const access = sub('access').description('Manage repo access for teammates');
   access.command('grant').exitOverride().description('Invite a teammate\'s GitHub account to the repo with push access')
-    .argument('<agent-or-login>').addOption(agentOpt()).option('--yes', 'skip the confirmation prompt')
+    .argument('<agent-or-login>').addOption(agentOpt()).option('--yes', 'skip the confirmation prompt (CI only)')
     .action((target: string, o: { yes?: boolean; agent?: ToolKind }) => accessGrantCommand(deps, target, o));
   sub('hook').description('(internal) agent hook entry point')
     .addArgument(new Argument('<event>').choices([...HOOK_EVENTS]))

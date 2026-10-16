@@ -7,6 +7,8 @@ import { clientFor, requireCredential } from './shared.js';
 const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
 
+const isCi = (v: string | undefined): boolean => v === 'true' || v === '1';
+
 export async function accessGrantCommand(
   deps: CliDeps, target: string, opts: { yes?: boolean; agent?: ToolKind },
 ): Promise<void> {
@@ -35,7 +37,7 @@ export async function accessGrantCommand(
       deps.out('Cancelled; no access granted.');
       return;
     }
-  } else if (!(opts.yes && deps.env.AGENTTEAMS_ALLOW_GRANT === '1')) {
+  } else if (!(opts.yes && deps.env.AGENTTEAMS_ALLOW_GRANT === '1' && isCi(deps.env.CI))) {
     throw new Error('access grant needs a human: run it in your own terminal (agents cannot grant repo access)');
   }
   const res = await deps.exec('gh', ['api', '-X', 'PUT', `repos/${slug}/collaborators/${login}`, '-f', 'permission=push']);

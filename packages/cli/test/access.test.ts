@@ -17,7 +17,7 @@ let localKey = '';
 const clis: TestCli[] = [];
 const run = (t: TestCli, ...args: string[]) => main(['node', 'agentteams', ...args], t.deps);
 
-interface Opts { allow?: boolean; agents?: { name: string; githubLogin: string | null }[]; tty?: boolean; answer?: string; ghFail?: boolean; local?: boolean }
+interface Opts { allow?: boolean; ci?: string; agents?: { name: string; githubLogin: string | null }[]; tty?: boolean; answer?: string; ghFail?: boolean; local?: boolean }
 async function cli(o: Opts = {}): Promise<{ t: TestCli; gh: string[][]; prompts: string[] }> {
   const gh: string[][] = [];
   const prompts: string[] = [];
@@ -36,7 +36,7 @@ async function cli(o: Opts = {}): Promise<{ t: TestCli; gh: string[][]; prompts:
     : undefined;
   const t = makeTestCli({
     ...(fakeFetch ? { fetch: fakeFetch } : {}),
-    exec, isTTY: o.tty ?? false, env: o.allow ? { AGENTTEAMS_ALLOW_GRANT: '1' } : {},
+    exec, isTTY: o.tty ?? false, env: o.allow ? { AGENTTEAMS_ALLOW_GRANT: '1', CI: o.ci ?? '1' } : {},
     prompt: async (q) => { prompts.push(q); return o.answer ?? ''; },
   });
   clis.push(t);
@@ -76,6 +76,18 @@ describe('access grant', () => {
     expect(t.out.join('\n')).toContain('Invited @bob to me/app with push access (they must accept the GitHub invitation).');
   });
 
+  it('--yes plus AGENTTEAMS_ALLOW_GRANT=1 without CI is refused', async () => {
+    const { t, gh } = await cli({ allow: true, ci: '' });
+    expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(1);
+    expect(gh).toEqual([]);
+  });
+
+  it('CI=true is accepted as well as CI=1', async () => {
+    const { t, gh } = await cli({ allow: true, ci: 'true' });
+    expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(0);
+    expect(gh).toEqual([PUT]);
+  });
+
   it('resolves an agent name to its login', async () => {
     const { t, gh } = await cli({ allow: true });
     const status = await new HubClient(hosted.url, { apiKey: ownerKey }).status();
@@ -113,6 +125,7 @@ describe('access grant', () => {
     expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(1);
     expect(t.err.join('\n')).toContain(REFUSAL);
     expect(t.err.join('\n')).not.toContain('--yes');
+    expect(t.err.join('\n')).not.toContain('AGENTTEAMS_ALLOW_GRANT');
     expect(gh).toEqual([]);
   });
 

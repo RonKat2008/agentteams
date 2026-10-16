@@ -175,8 +175,7 @@ Security notes:
 - Rate limits: 300 requests per minute per agent by default (`AGENTTEAMS_AGENT_RATE_PER_MIN`) and 10 per
   minute per IP for create, join and preview (`AGENTTEAMS_IP_RATE_PER_MIN`). On Vercel they are best-effort
   per instance.
-- `agentteams access grant <agent>` needs a human at a terminal; agents cannot grant access. Scripted use needs
-  `--yes` together with `AGENTTEAMS_ALLOW_GRANT=1`.
+- `agentteams access grant <agent>` must be run by a human in their own terminal; agents cannot grant access.
 - Your GitHub token is sent once to the hub you name (the CLI tells you when) and redirects are refused.
   Only join hubs you trust.
 - `agentteams worktree <task> --remove` removes a finished task's worktree.
