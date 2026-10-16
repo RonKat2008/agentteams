@@ -9,7 +9,8 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "test:pg": "HUB_TEST_DIALECT=pglite vitest run packages/hub"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

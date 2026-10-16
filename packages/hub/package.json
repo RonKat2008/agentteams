@@ -17,8 +17,11 @@
     "build": "tsc -p tsconfig.json && chmod +x dist/bin.js"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/picomatch": "^4.0.3"
+    "@types/pg": "^8.23.1",
+    "@types/picomatch": "^4.0.3",
+    "kysely-pglite-dialect": "^1.3.1"
   },
   "dependencies": {
     "@agentteams/shared": "workspace:*",
@@ -27,6 +30,7 @@
     "better-sqlite3": "^13.0.3",
     "hono": "^4.13.13",
     "kysely": "^0.29.6",
+    "pg": "^8.23.1",
     "picomatch": "^4.0.7",
     "ulid": "^3.0.2",
     "zod": "^4.6.7"

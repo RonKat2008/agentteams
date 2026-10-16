@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Kysely } from 'kysely';
-import { createSqliteDb } from '../src/db/sqlite.js';
+import { makeTestDb, type TestDb } from './helpers.js';
 import { migrateTo, migrateToLatest } from '../src/db/migrations.js';
 import type { Database } from '../src/db/schema.js';
 import { createContext, withTx } from '../src/context.js';
 import { DomainError, parseInput } from '../src/errors.js';
 import { SendMessageInput } from '@agentteams/shared';
 
+let handle: TestDb;
 let db: Kysely<Database>;
 beforeEach(async () => {
-  db = createSqliteDb(':memory:');
+  handle = makeTestDb();
+  db = handle.db;
   await migrateToLatest(db);
 });
 afterEach(async () => {
-  await db.destroy();
+  await handle.close();
 });
 
 const agentRow = (id: string, name: string) => ({
@@ -39,7 +41,8 @@ describe('migrations', () => {
 
 describe('migration 002_git_layer', () => {
   it('dedupes existing commit rows (keeping the lowest id) and adds tasks.merged_at', async () => {
-    const fresh = createSqliteDb(':memory:');
+    const freshHandle = makeTestDb();
+    const fresh = freshHandle.db;
     try {
       await migrateTo(fresh, '0001_init');
       const row = (id: string, sha: string) => ({
@@ -54,20 +57,20 @@ describe('migration 002_git_layer', () => {
       const cols = (await fresh.introspection.getTables()).find((t) => t.name === 'tasks')!.columns.map((c) => c.name);
       expect(cols).toContain('merged_at');
     } finally {
-      await fresh.destroy();
+      await freshHandle.close();
     }
   });
 });
 
 describe('context', () => {
   it('generates increasing ids even within the same millisecond', () => {
-    const ctx = createContext(db, { now: () => new Date('2026-01-01T00:00:00.000Z') });
+    const ctx = createContext(db, { dialect: handle.dialect, now: () => new Date('2026-01-01T00:00:00.000Z') });
     const a = ctx.newId();
     const b = ctx.newId();
     expect(b > a).toBe(true);
   });
   it('withTx rolls back on error', async () => {
-    const ctx = createContext(db);
+    const ctx = createContext(db, { dialect: handle.dialect });
     await expect(
       withTx(ctx, async (tx) => {
         await tx.db.insertInto('agents').values(agentRow('a1', 'ronit-claude')).execute();
@@ -75,6 +78,40 @@ describe('context', () => {
       }),
     ).rejects.toThrow('boom');
     expect(await db.selectFrom('agents').selectAll().execute()).toHaveLength(0);
+  });
+});
+
+describe('withTx retry', () => {
+  const serializationError = () => Object.assign(new Error('could not serialize access'), { code: '40001' });
+
+  it('retries a serialization failure on postgres and succeeds', async () => {
+    const ctx = createContext(db, { dialect: 'postgres' });
+    let calls = 0;
+    const out = await withTx(ctx, async () => {
+      calls++;
+      if (calls === 1) throw serializationError();
+      return 'ok';
+    });
+    expect(out).toBe('ok');
+    expect(calls).toBe(2);
+  });
+  it('gives up after 3 attempts', async () => {
+    const ctx = createContext(db, { dialect: 'postgres' });
+    let calls = 0;
+    await expect(withTx(ctx, async () => { calls++; throw serializationError(); })).rejects.toThrow('could not serialize');
+    expect(calls).toBe(3);
+  });
+  it('does not retry other errors', async () => {
+    const ctx = createContext(db, { dialect: 'postgres' });
+    let calls = 0;
+    await expect(withTx(ctx, async () => { calls++; throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(calls).toBe(1);
+  });
+  it('does not retry on sqlite', async () => {
+    const ctx = createContext(db, { dialect: 'sqlite' });
+    let calls = 0;
+    await expect(withTx(ctx, async () => { calls++; throw serializationError(); })).rejects.toThrow();
+    expect(calls).toBe(1);
   });
 });
 

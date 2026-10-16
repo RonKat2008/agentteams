@@ -1,4 +1,9 @@
+import { PGlite } from '@electric-sql/pglite';
+import { PGliteDialect } from 'kysely-pglite-dialect';
+import { Kysely } from 'kysely';
 import { createSqliteDb } from '../src/db/sqlite.js';
+import type { Dialect } from '../src/db/index.js';
+import type { Database } from '../src/db/schema.js';
 import { migrateToLatest } from '../src/db/migrations.js';
 import { createContext, type Actor, type HubContext } from '../src/context.js';
 import { authenticate, createTeam, joinTeam } from '../src/services/teams.js';
@@ -9,12 +14,29 @@ export interface TestEnv {
   close: () => Promise<void>;
 }
 
+export interface TestDb {
+  db: Kysely<Database>;
+  dialect: Dialect;
+  close: () => Promise<void>;
+}
+
+/** Fresh, empty (unmigrated) in-memory DB. HUB_TEST_DIALECT=pglite selects in-process Postgres, else SQLite. */
+export function makeTestDb(): TestDb {
+  if (process.env.HUB_TEST_DIALECT === 'pglite') {
+    const pglite = new PGlite();
+    const db = new Kysely<Database>({ dialect: new PGliteDialect(pglite) });
+    return { db, dialect: 'postgres', close: () => db.destroy() };
+  }
+  const db = createSqliteDb(':memory:');
+  return { db, dialect: 'sqlite', close: () => db.destroy() };
+}
+
 export async function makeTestContext(start = '2026-01-01T00:00:00.000Z'): Promise<TestEnv> {
   let t = new Date(start).getTime();
-  const db = createSqliteDb(':memory:');
+  const { db, dialect, close } = makeTestDb();
   await migrateToLatest(db);
-  const ctx = createContext(db, { now: () => new Date(t) });
-  return { ctx, advance: (ms) => { t += ms; }, close: () => db.destroy() };
+  const ctx = createContext(db, { now: () => new Date(t), dialect });
+  return { ctx, advance: (ms) => { t += ms; }, close };
 }
 
 export interface SeededTeam {

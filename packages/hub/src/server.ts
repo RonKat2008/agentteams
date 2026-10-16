@@ -3,11 +3,12 @@ import { serve } from '@hono/node-server';
 import { DEFAULT_HUB_PORT } from '@agentteams/shared';
 import { createContext } from './context.js';
 import { migrateToLatest } from './db/migrations.js';
-import { createSqliteDb } from './db/sqlite.js';
+import { createDb } from './db/index.js';
 import { createApp } from './http/app.js';
 
 export interface HubOptions {
-  dbPath: string;
+  dbPath?: string;
+  databaseUrl?: string;
   port?: number;
   host?: string;
 }
@@ -18,7 +19,7 @@ export interface RunningHub {
 }
 
 export async function startHub(opts: HubOptions): Promise<RunningHub> {
-  const db = createSqliteDb(opts.dbPath);
+  const { db, dialect } = createDb({ sqlitePath: opts.dbPath, databaseUrl: opts.databaseUrl });
   try {
     await migrateToLatest(db);
   } catch (err) {
@@ -26,7 +27,7 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     throw err;
   }
   const hostname = opts.host ?? '127.0.0.1';
-  const app = createApp(createContext(db), hostname === '127.0.0.1' ? { allowedHosts: ['127.0.0.1', 'localhost'] } : {});
+  const app = createApp(createContext(db, { dialect }), hostname === '127.0.0.1' ? { allowedHosts: ['127.0.0.1', 'localhost'] } : {});
 
   return new Promise((resolve, reject) => {
     // Only guards startup (e.g. EADDRINUSE); detached once listening so a later error cannot destroy the db.
