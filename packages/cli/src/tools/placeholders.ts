@@ -15,12 +15,10 @@ export function placeholderAdapter(kind: ToolKind, label: string): ToolAdapter {
   };
 }
 
-export const cursorPlaceholder = placeholderAdapter('cursor', 'Cursor');
 export const geminiPlaceholder = placeholderAdapter('gemini', 'Gemini CLI');
 export const copilotPlaceholder = placeholderAdapter('copilot', 'GitHub Copilot');
 export const droidPlaceholder = placeholderAdapter('droid', 'Factory Droid');
 export const opencodePlaceholder = placeholderAdapter('opencode', 'OpenCode');
-export const windsurfPlaceholder = placeholderAdapter('windsurf', 'Windsurf / Devin');
 export const clinePlaceholder = placeholderAdapter('cline', 'Cline');
 export const rooPlaceholder = placeholderAdapter('roo', 'Roo Code');
 export const otherPlaceholder = placeholderAdapter('other', 'Other');

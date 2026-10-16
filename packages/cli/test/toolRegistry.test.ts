@@ -62,10 +62,10 @@ afterEach(() => t.cleanup());
 describe('placeholder adapters', () => {
   it('runInstallers warns for a tool with no installer yet', async () => {
     const report = await runInstallers(t.deps, {
-      repoPath: t.deps.cwd, tool: 'windsurf', hubUrl: 'http://x', teamName: 't', agentName: 'a', apiKey: 'k', createdAt: '2026-01-01T00:00:00.000Z',
+      repoPath: t.deps.cwd, tool: 'roo', hubUrl: 'http://x', teamName: 't', agentName: 'a', apiKey: 'k', createdAt: '2026-01-01T00:00:00.000Z',
     });
-    expect(report.tool).toBe('windsurf');
-    expect(report.warnings).toContain('no installer for tool "windsurf" yet');
+    expect(report.tool).toBe('roo');
+    expect(report.warnings).toContain('no installer for tool "roo" yet');
   });
 });
 
