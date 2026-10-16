@@ -8,19 +8,20 @@ import { geminiAdapter } from './gemini.js';
 import { opencodeAdapter } from './opencode.js';
 import { otherAdapter } from './other.js';
 import { rooAdapter } from './roo.js';
-import { cursorPlaceholder, windsurfPlaceholder } from './placeholders.js';
+import { cursorAdapter } from './cursor.js';
+import { windsurfAdapter } from './windsurf.js';
 import type { ToolAdapter } from './types.js';
 
 /** One entry per ToolKind (the type forces completeness). */
 const ADAPTERS: Record<ToolKind, ToolAdapter> = {
   claude: claudeAdapter,
   codex: codexAdapter,
-  cursor: cursorPlaceholder,
+  cursor: cursorAdapter,
   gemini: geminiAdapter,
   copilot: copilotAdapter,
   droid: droidAdapter,
   opencode: opencodeAdapter,
-  windsurf: windsurfPlaceholder,
+  windsurf: windsurfAdapter,
   cline: clineAdapter,
   roo: rooAdapter,
   other: otherAdapter,
