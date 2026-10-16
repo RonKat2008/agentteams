@@ -27,16 +27,10 @@ export interface HubConfig {
   port: number;
   home: string;
   databaseUrl?: string;
-  allowedHosts: string[];
+  /** Host allowlist; undefined means none is applied (Vercel routes by Host, so it is unnecessary there). */
+  allowedHosts?: string[];
   /** Which header, if any, carries the trusted client IP (hosted mode only). */
   ipSource: IpSource;
-}
-
-/** Host names (no scheme) Vercel gives this deployment: the production alias and the unique deployment URL. */
-function vercelHosts(env: NodeJS.ProcessEnv): string[] {
-  return [env.VERCEL_PROJECT_PRODUCTION_URL, env.VERCEL_URL, env.VERCEL_BRANCH_URL]
-    .map((u) => (u ?? '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, ''))
-    .filter((h) => h !== '');
 }
 
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
@@ -65,15 +59,18 @@ function parseIpSource(env: NodeJS.ProcessEnv, mode: 'local' | 'hosted'): IpSour
 export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfig {
   const mode = parseMode(env.AGENTTEAMS_MODE);
   const explicit = (env.AGENTTEAMS_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter((h) => h !== '');
-  const listed = explicit.length > 0 || mode !== 'hosted' || env.VERCEL !== '1' ? explicit : vercelHosts(env);
-  if (mode === 'hosted' && listed.length === 0) throw new Error('AGENTTEAMS_ALLOWED_HOSTS is required in hosted mode');
+  const onVercel = mode === 'hosted' && env.VERCEL === '1';
+  if (mode === 'hosted' && explicit.length === 0 && !onVercel) {
+    throw new Error('AGENTTEAMS_ALLOWED_HOSTS is required in hosted mode');
+  }
+  const allowedHosts = explicit.length > 0 ? explicit : onVercel ? undefined : LOCAL_HOSTS;
   return {
     mode,
     host: env.AGENTTEAMS_HOST || '127.0.0.1',
     port: parsePort(env.AGENTTEAMS_PORT),
     home: resolveHome(env.AGENTTEAMS_HOME, homeDir),
     databaseUrl: env.DATABASE_URL || undefined,
-    allowedHosts: listed.length > 0 ? listed : LOCAL_HOSTS,
+    ...(allowedHosts ? { allowedHosts } : {}),
     ipSource: parseIpSource(env, mode),
   };
 }

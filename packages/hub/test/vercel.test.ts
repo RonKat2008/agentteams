@@ -43,9 +43,15 @@ describe('createVercelHandler', { timeout: 30_000 }, () => {
     expect(await (await handler(req('/health'))).json()).toMatchObject({ mode: 'hosted' });
   });
 
-  it('rejects a Host header outside the derived allow-list', async () => {
+  it('applies no Host allowlist on Vercel when AGENTTEAMS_ALLOWED_HOSTS is unset (Vercel routes by Host)', async () => {
     const handler = createVercelHandler({ env: { DATABASE_URL: 'postgres://x', VERCEL: '1', VERCEL_URL: HOST }, connect: pgliteHandle });
-    const res = await handler(new Request('https://evil.test/api/anything', { headers: { host: 'evil.test' } }));
+    const res = await handler(new Request('https://custom.example.org/api/team/status', { headers: { host: 'custom.example.org' } }));
+    expect(res.status).toBe(401); // reached auth, not the host guard
+  });
+
+  it('keeps the allowlist on Vercel when AGENTTEAMS_ALLOWED_HOSTS is set explicitly', async () => {
+    const handler = createVercelHandler({ env: { DATABASE_URL: 'postgres://x', VERCEL: '1', AGENTTEAMS_ALLOWED_HOSTS: HOST }, connect: pgliteHandle });
+    const res = await handler(new Request('https://evil.test/api/team/status', { headers: { host: 'evil.test' } }));
     expect(res.status).toBe(403);
   });
 
@@ -67,17 +73,14 @@ describe('createVercelHandler', { timeout: 30_000 }, () => {
 
 describe('loadHubConfig on Vercel', () => {
   const base = { VERCEL: '1', AGENTTEAMS_MODE: 'hosted' };
-  it('defaults allowed hosts to the production URL and deployment URL, scheme stripped', () => {
+  it('applies no host allowlist when AGENTTEAMS_ALLOWED_HOSTS is unset, whatever VERCEL_URL says', () => {
     const c = loadHubConfig({ ...base, VERCEL_PROJECT_PRODUCTION_URL: 'https://app.example.com', VERCEL_URL: 'app-abc.vercel.app' }, '/h');
-    expect(c.allowedHosts).toEqual(['app.example.com', 'app-abc.vercel.app']);
+    expect(c.allowedHosts).toBeUndefined();
   });
-  it('filters empty entries', () => {
-    expect(loadHubConfig({ ...base, VERCEL_URL: 'a.vercel.app', VERCEL_PROJECT_PRODUCTION_URL: '' }, '/h').allowedHosts).toEqual(['a.vercel.app']);
-  });
-  it('an explicit AGENTTEAMS_ALLOWED_HOSTS overrides the default', () => {
+  it('an explicit AGENTTEAMS_ALLOWED_HOSTS is kept', () => {
     expect(loadHubConfig({ ...base, VERCEL_URL: 'a.vercel.app', AGENTTEAMS_ALLOWED_HOSTS: 'mine.dev' }, '/h').allowedHosts).toEqual(['mine.dev']);
   });
-  it('still requires hosts when not on Vercel', () => {
+  it('still requires hosts when hosted outside Vercel', () => {
     expect(() => loadHubConfig({ AGENTTEAMS_MODE: 'hosted', VERCEL_URL: 'a.vercel.app' }, '/h')).toThrow(/ALLOWED_HOSTS/);
   });
 });
@@ -103,12 +106,5 @@ describe('cold start retry', { timeout: 30_000 }, () => {
     await expect(handler(req('/health'))).rejects.toThrow('boom');
     expect((await handler(req('/health'))).status).toBe(200);
     expect(connect).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('loadHubConfig branch url', () => {
-  it('includes VERCEL_BRANCH_URL', () => {
-    const c = loadHubConfig({ VERCEL: '1', AGENTTEAMS_MODE: 'hosted', VERCEL_URL: 'a.vercel.app', VERCEL_BRANCH_URL: 'b-git-x.vercel.app' }, '/h');
-    expect(c.allowedHosts).toEqual(['a.vercel.app', 'b-git-x.vercel.app']);
   });
 });
