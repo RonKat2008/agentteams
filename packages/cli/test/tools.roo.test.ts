@@ -6,6 +6,8 @@ import { getAdapter } from '../src/tools/registry.js';
 import { rooAdapter } from '../src/tools/roo.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
+const excludeLines = (p: string): string[] => (existsSync(p) ? readFileSync(p, 'utf8').split('\n') : []);
+
 let t: TestCli;
 let cred: Credential;
 let exclude: string;
@@ -49,7 +51,9 @@ describe('roo install', () => {
     const cfg = JSON.parse(first[0] as string);
     expect(cfg.mcpServers.mine).toEqual({ command: 'x' });
     expect(cfg.other).toBe(1);
-    expect(existsSync(exclude)).toBe(false);
+    // The user's pre-existing file is not hidden from git; only our backup is.
+    expect(excludeLines(exclude)).not.toContain('.roo/mcp.json');
+    expect(excludeLines(exclude)).toContain('.roo/mcp.json.bak');
   });
 
   it('malformed JSON: warns and leaves it untouched, still writes rules', async () => {

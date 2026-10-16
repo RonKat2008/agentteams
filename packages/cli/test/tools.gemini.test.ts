@@ -6,6 +6,8 @@ import { geminiDialect, installGemini } from '../src/tools/gemini.js';
 import { getAdapter } from '../src/tools/registry.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
+const excludeLines = (p: string): string[] => (existsSync(p) ? readFileSync(p, 'utf8').split('\n') : []);
+
 let t: TestCli;
 let repo: string;
 let cred: Credential;
@@ -80,7 +82,9 @@ describe('gemini install', () => {
     expect(s.hooks.AfterAgent).toHaveLength(2);
     expect(s.hooks.AfterAgent[0].hooks[0].command).toBe('say done');
     expect(JSON.parse(readFileSync(`${settingsPath()}.bak`, 'utf8'))).toEqual(user);
-    expect(existsSync(join(repo, '.git', 'info', 'exclude'))).toBe(false);
+    // The user's pre-existing file is not hidden from git; only our backup is.
+    expect(excludeLines(join(repo, '.git', 'info', 'exclude'))).not.toContain('.gemini/settings.json');
+    expect(excludeLines(join(repo, '.git', 'info', 'exclude'))).toContain('.gemini/settings.json.bak');
   });
 
   it('refuses malformed JSON with a warning and leaves the file untouched', async () => {

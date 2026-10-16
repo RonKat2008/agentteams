@@ -6,6 +6,8 @@ import { installDroid } from '../src/tools/droid.js';
 import { getAdapter } from '../src/tools/registry.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
+const excludeLines = (p: string): string[] => (existsSync(p) ? readFileSync(p, 'utf8').split('\n') : []);
+
 let t: TestCli;
 let repo: string;
 let cred: Credential;
@@ -71,7 +73,11 @@ describe('droid install', () => {
     expect(readJson('hooks.json').Stop).toHaveLength(2);
     expect(readJson('hooks.json').Stop[0].hooks[0].command).toBe('say done');
     expect(JSON.parse(readFileSync(f('hooks.json.bak'), 'utf8'))).toEqual(hooks);
-    expect(existsSync(join(repo, '.git', 'info', 'exclude'))).toBe(false);
+    // The user's pre-existing files are not hidden from git; only our backups are.
+    const lines = excludeLines(join(repo, '.git', 'info', 'exclude'));
+    expect(lines).not.toContain('.factory/mcp.json');
+    expect(lines).not.toContain('.factory/hooks.json');
+    expect(lines).toContain('.factory/hooks.json.bak');
   });
 
   it('refuses malformed JSON with warnings and leaves files untouched', async () => {

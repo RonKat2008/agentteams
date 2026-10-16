@@ -4,8 +4,8 @@ import type { CliDeps } from '../deps.js';
 import { HOOK_EVENT_NAMES, type HookEvent } from '../hookEvents.js';
 import { writeInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand } from '../paths.js';
-import { addToGitExclude } from '../tools/gitExclude.js';
-import { upsertJsonConfig } from '../tools/jsonConfig.js';
+import { InvalidConfigShape, isPlainObject as isObject, isWritten, setMcpEntry } from '../tools/jsonConfig.js';
+import { upsertRepoJson } from '../tools/projectMcp.js';
 import type { InstallReport } from '../tools/types.js';
 import { HOOK_TIMEOUT_SECONDS, hookCommand, isManagedHookCommand } from './hooksConfig.js';
 
@@ -19,16 +19,15 @@ export const INSTRUCTIONS_REL = '.github/copilot-instructions.md';
 
 type Json = Record<string, unknown>;
 type Argv = { command: string; args: string[] };
-const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Events we hook. No user-prompt-submit: Copilot discards its output, so it could only lose messages. */
 export const COPILOT_EVENTS: readonly HookEvent[] = ['session-start', 'post-tool-use', 'stop'];
 
 const isManagedEntry = (e: unknown): boolean => isObject(e) && isManagedHookCommand(e.command);
 
-/** Pure: exactly one managed `command` entry per event (PascalCase names: accepted by both products). */
-export function mergeCopilotHooks(config: Json, cli: string): Json | null {
-  if (config.hooks !== undefined && !isObject(config.hooks)) return null;
+/** Pure: exactly one managed `command` entry per event (PascalCase names: accepted by both products). Throws on bad shapes. */
+export function mergeCopilotHooks(config: Json, cli: string): Json {
+  if (config.hooks !== undefined && !isObject(config.hooks)) throw new InvalidConfigShape('"hooks" is not an object');
   const hooks: Json = { ...(config.hooks as Json | undefined) };
   // Drop managed UserPromptSubmit entries from older installs; keep the user's.
   const ups = hooks[HOOK_EVENT_NAMES['user-prompt-submit']];
@@ -40,7 +39,7 @@ export function mergeCopilotHooks(config: Json, cli: string): Json | null {
   for (const event of COPILOT_EVENTS) {
     const name = HOOK_EVENT_NAMES[event];
     const current = hooks[name];
-    if (current !== undefined && !Array.isArray(current)) return null;
+    if (current !== undefined && !Array.isArray(current)) throw new InvalidConfigShape(`"hooks.${name}" is not an array`);
     const kept = ((current ?? []) as unknown[]).filter((e) => !isManagedEntry(e));
     kept.push({ type: 'command', command: hookCommand(cli, event, 'copilot'), timeout: HOOK_TIMEOUT_SECONDS });
     hooks[name] = kept;
@@ -48,47 +47,27 @@ export function mergeCopilotHooks(config: Json, cli: string): Json | null {
   return { version: 1, ...config, hooks };
 }
 
-/** Pure: sets servers[key].agentteams. Returns null when `key` holds a non-object. */
-export function mergeMcpServer(config: Json, key: 'mcpServers' | 'servers', entry: Json): Json | null {
-  if (config[key] !== undefined && !isObject(config[key])) return null;
-  return { ...config, [key]: { ...(config[key] as Json | undefined), agentteams: entry } };
-}
-
 const mcpArgs = (argv: Argv, repo: string): string[] => [...argv.args, 'mcp', '--tool', 'copilot', '--repo', repo];
 
 async function writeJson(
-  repo: string, rel: string, mutate: (c: Json) => Json | null, doneMsg: string, report: InstallReport,
+  deps: CliDeps, repo: string, rel: string, mutate: (c: Json) => Json, doneMsg: string, report: InstallReport,
 ): Promise<void> {
-  let malformed = false;
-  const status = await upsertJsonConfig(join(repo, rel), (c) => {
-    const next = mutate(c);
-    if (next === null) { malformed = true; return c; }
-    return next;
-  });
-  if (status === 'invalid' || malformed) {
-    report.warnings.push(`${rel} is not valid JSON (or has an unexpected shape); left untouched`);
-    return;
-  }
-  report.done.push(doneMsg);
+  if (isWritten(await upsertRepoJson(deps, repo, rel, mutate, report))) report.done.push(doneMsg);
 }
 
 async function installFiles(deps: CliDeps, repo: string, cli: string, argv: Argv, report: InstallReport): Promise<void> {
-  await writeJson(repo, HOOKS_REL, (c) => mergeCopilotHooks(c, cli), `installed hooks in ${HOOKS_REL} (Copilot CLI + VS Code)`, report);
+  await writeJson(deps, repo, HOOKS_REL, (c) => mergeCopilotHooks(c, cli), `installed hooks in ${HOOKS_REL} (Copilot CLI + VS Code)`, report);
   const args = mcpArgs(argv, repo);
   await writeJson(
-    repo, CLI_MCP_REL,
-    (c) => mergeMcpServer(c, 'mcpServers', { type: 'local', command: argv.command, args, tools: ['*'] }),
+    deps, repo, CLI_MCP_REL,
+    (c) => setMcpEntry(c, 'mcpServers', { type: 'local', command: argv.command, args, tools: ['*'] }),
     `registered MCP server "agentteams" in ${CLI_MCP_REL} (Copilot CLI)`, report,
   );
   await writeJson(
-    repo, VSCODE_MCP_REL,
-    (c) => mergeMcpServer(c, 'servers', { type: 'stdio', command: argv.command, args }),
+    deps, repo, VSCODE_MCP_REL,
+    (c) => setMcpEntry(c, 'servers', { type: 'stdio', command: argv.command, args }),
     `registered MCP server "agentteams" in ${VSCODE_MCP_REL} (VS Code agent mode)`, report,
   );
-  for (const rel of [HOOKS_REL, CLI_MCP_REL, VSCODE_MCP_REL]) {
-    const warning = await addToGitExclude(deps, repo, rel);
-    if (warning) report.warnings.push(warning);
-  }
 }
 
 export interface CopilotOpts { cli?: string; argv?: Argv }

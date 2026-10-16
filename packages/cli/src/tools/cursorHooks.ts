@@ -1,7 +1,7 @@
 import type { ToolKind } from '@agentteams/shared';
 import type { HookEvent } from '../hookEvents.js';
 import { hookCommand, isManagedHookCommand, HOOK_TIMEOUT_SECONDS } from '../install/hooksConfig.js';
-import type { JsonConfig } from './jsonConfig.js';
+import { InvalidConfigShape, isPlainObject as isObj, type JsonConfig } from './jsonConfig.js';
 
 /**
  * Cursor native event -> neutral event. beforeSubmitPrompt is deliberately absent: Cursor ignores any context
@@ -12,10 +12,6 @@ export const CURSOR_EVENTS: ReadonlyArray<readonly [string, HookEvent]> = [
   ['postToolUse', 'post-tool-use'],
   ['stop', 'stop'],
 ];
-
-export class InvalidConfigShape extends Error {}
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Pure: exactly one managed handler per event in a Cursor hooks.json (version 1); user hooks untouched. */
 export function mergeCursorHooks(config: JsonConfig, cli: string, tool: ToolKind): JsonConfig {
@@ -30,10 +26,4 @@ export function mergeCursorHooks(config: JsonConfig, cli: string, tool: ToolKind
     hooks[native] = kept;
   }
   return { version: 1, ...next, hooks };
-}
-
-/** Pure: sets mcpServers.agentteams, leaving every other server alone. */
-export function mergeMcpServer(config: JsonConfig, entry: Record<string, unknown>): JsonConfig {
-  if (config.mcpServers !== undefined && !isObj(config.mcpServers)) throw new InvalidConfigShape('"mcpServers" is not an object');
-  return { ...config, mcpServers: { ...(config.mcpServers as Record<string, unknown> | undefined), agentteams: entry } };
 }

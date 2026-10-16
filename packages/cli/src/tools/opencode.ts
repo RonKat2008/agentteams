@@ -4,12 +4,13 @@ import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { cliArgv } from '../paths.js';
 import { addToGitExclude } from './gitExclude.js';
-import { readTextIfExists } from './jsonConfig.js';
+import { isWritten, readTextIfExists, setMcpEntry } from './jsonConfig.js';
 import { OPENCODE_PLUGIN_MARKER, opencodeDialect, renderOpencodePlugin } from './opencodePlugin.js';
-import { mcpStdioArgv, upsertRepoConfig, withServer, writeRulesFile } from './projectMcp.js';
+import { mcpStdioArgv, upsertRepoJson, writeRulesFile } from './projectMcp.js';
 import type { InstallReport, ToolAdapter } from './types.js';
 
 export const OPENCODE_PLUGIN_PATH = '.opencode/plugins/agentteams.js';
+const CONFIG_REL = 'opencode.json';
 const SCHEMA = 'https://opencode.ai/config.json';
 
 async function installPlugin(deps: CliDeps, repo: string, report: InstallReport): Promise<void> {
@@ -30,6 +31,19 @@ async function installPlugin(deps: CliDeps, repo: string, report: InstallReport)
   if (w) report.warnings.push(w);
 }
 
+/** Machine-specific files: `opencode.json` mcp entry (stdio proxy pinned to `repo`) and the managed plugin. */
+async function installRepoFiles(deps: CliDeps, repo: string, report: InstallReport): Promise<void> {
+  const { command, args } = mcpStdioArgv('opencode', repo);
+  const entry = { type: 'local', command: [command, ...args], enabled: true };
+  const status = await upsertRepoJson(
+    deps, repo, CONFIG_REL,
+    (c) => ({ ...(typeof c.$schema === 'string' ? {} : { $schema: SCHEMA }), ...setMcpEntry(c, 'mcp', entry) }),
+    report,
+  );
+  if (isWritten(status)) report.done.push(`registered MCP server "agentteams" in ${CONFIG_REL}`);
+  await installPlugin(deps, repo, report);
+}
+
 /** OpenCode: `opencode.json` mcp entry + managed plugin (context injection, idle re-prompt) + AGENTS.md. */
 export const opencodeAdapter: ToolAdapter = {
   kind: 'opencode',
@@ -39,14 +53,7 @@ export const opencodeAdapter: ToolAdapter = {
   async install(deps: CliDeps, cred: Credential): Promise<InstallReport> {
     const report: InstallReport = { tool: 'opencode', done: [], warnings: [] };
     const repo = cred.repoPath;
-    const { command, args } = mcpStdioArgv('opencode', repo);
-    const entry = { type: 'local', command: [command, ...args], enabled: true };
-    await upsertRepoConfig(
-      deps, repo, 'opencode.json',
-      (c) => ({ ...(typeof c.$schema === 'string' ? {} : { $schema: SCHEMA }), ...withServer(c, 'mcp', 'agentteams', entry) }),
-      report,
-    );
-    await installPlugin(deps, repo, report);
+    await installRepoFiles(deps, repo, report);
     await writeRulesFile(repo, 'AGENTS.md', cred, report);
     return report;
   },

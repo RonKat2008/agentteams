@@ -8,6 +8,8 @@ import { OPENCODE_PLUGIN_MARKER, opencodeDialect, renderOpencodePlugin } from '.
 import { getAdapter } from '../src/tools/registry.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
+const excludeLines = (p: string): string[] => (existsSync(p) ? readFileSync(p, 'utf8').split('\n') : []);
+
 let t: TestCli;
 let cred: Credential;
 let exclude: string;
@@ -71,7 +73,8 @@ describe('opencode install', () => {
     expect(cfg.mcp.mine).toEqual({ type: 'remote', url: 'https://u' });
     expect(cfg.mcp.agentteams).toBeDefined();
     expect(r.warnings.some((w) => w.includes('machine-specific'))).toBe(true);
-    expect(existsSync(exclude) ? readFileSync(exclude, 'utf8') : '').not.toContain('opencode.json');
+    expect(excludeLines(exclude)).not.toContain('opencode.json');
+    expect(excludeLines(exclude)).toContain('opencode.json.bak');
   });
 
   it('malformed opencode.json: warning, untouched', async () => {

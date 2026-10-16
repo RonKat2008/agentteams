@@ -25,3 +25,15 @@ export async function addToGitExclude(deps: Pick<CliDeps, 'exec'>, repoPath: str
     return `could not update git exclude: ${(err as Error).message}`;
   }
 }
+
+/** Whether `relPath` is already a line in the repo's .git/info/exclude; null when `repoPath` is not a git repo. */
+export async function isGitExcluded(deps: Pick<CliDeps, 'exec'>, repoPath: string, relPath: string): Promise<boolean | null> {
+  let path: string;
+  try {
+    path = await gitPath(deps, repoPath, 'info/exclude');
+  } catch {
+    return null;
+  }
+  const existing = (await readTextIfExists(path).catch(() => null)) ?? '';
+  return existing.split('\n').some((l) => l.trim() === relPath);
+}

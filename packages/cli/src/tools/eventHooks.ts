@@ -29,6 +29,3 @@ export function mergeEventHooks(
   }
   return next;
 }
-
-export const isPlainObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v);

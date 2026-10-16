@@ -5,9 +5,9 @@ import { writeInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand } from '../paths.js';
 import type { HookEvent } from '../hookEvents.js';
 import { isCommonStopLoop, readStringCwd } from './dialects.js';
-import { isPlainObject, mergeEventHooks } from './eventHooks.js';
-import { addToGitExclude } from './gitExclude.js';
-import { upsertJsonConfig } from './jsonConfig.js';
+import { mergeEventHooks } from './eventHooks.js';
+import { InvalidConfigShape, isPlainObject, isWritten, setMcpEntry, UserOwnedEntry } from './jsonConfig.js';
+import { mcpStdioArgv, upsertRepoJson } from './projectMcp.js';
 import type { HookDialect, InstallReport, ToolAdapter } from './types.js';
 
 /** Neutral event -> Gemini CLI native event (docs: geminicli.com/docs/hooks/reference). */
@@ -21,6 +21,7 @@ export const GEMINI_EVENT_NAMES: Record<HookEvent, string> = {
 /** Gemini hook timeouts are milliseconds. */
 const GEMINI_HOOK_TIMEOUT_MS = 10_000;
 const SETTINGS_REL = '.gemini/settings.json';
+type Argv = { command: string; args: string[] };
 
 export const geminiDialect: HookDialect = {
   render(outcome) {
@@ -37,34 +38,40 @@ export const geminiDialect: HookDialect = {
   isStopLoop: isCommonStopLoop,
 };
 
+/**
+ * `.gemini/settings.json`: MCP entry (stdio proxy pinned to `repo`) + hooks. A user-owned "agentteams" server is kept
+ * (warned) while hooks are still installed; any other shape error leaves the file untouched.
+ */
+async function installSettings(deps: CliDeps, repo: string, cli: string, argv: Argv, report: InstallReport): Promise<void> {
+  const entry = mcpStdioArgv('gemini', repo, argv);
+  let skipped: string | null = null;
+  const status = await upsertRepoJson(deps, repo, SETTINGS_REL, (cfg) => {
+    if (cfg.hooks !== undefined && !isPlainObject(cfg.hooks)) throw new InvalidConfigShape('"hooks" is not an object');
+    let next = cfg;
+    try {
+      next = setMcpEntry(cfg, 'mcpServers', entry);
+    } catch (e) {
+      if (!(e instanceof UserOwnedEntry)) throw e;
+      skipped = e.message;
+    }
+    return { ...next, hooks: mergeEventHooks(isPlainObject(cfg.hooks) ? cfg.hooks : {}, GEMINI_EVENT_NAMES, cli, 'gemini', GEMINI_HOOK_TIMEOUT_MS) };
+  }, report);
+  if (!isWritten(status)) return;
+  if (skipped !== null) report.warnings.push(`${SETTINGS_REL}: ${skipped}; MCP server not registered (hooks installed)`);
+  else report.done.push(`registered MCP server "agentteams" in ${SETTINGS_REL}`);
+  report.done.push(`installed hooks in ${SETTINGS_REL}`);
+}
+
 export async function installGemini(
   deps: CliDeps,
   cred: Credential,
-  opts: { cli?: string; argv?: { command: string; args: string[] } } = {},
+  opts: { cli?: string; argv?: Argv } = {},
 ): Promise<InstallReport> {
   const report: InstallReport = { tool: 'gemini', done: [], warnings: [] };
   const repo = cred.repoPath;
   const argv = opts.argv ?? cliArgv();
   const cli = opts.cli ?? cliCommand();
-  const path = join(repo, '.gemini', 'settings.json');
-  const status = await upsertJsonConfig(path, (cfg) => ({
-    ...cfg,
-    mcpServers: {
-      ...(isPlainObject(cfg.mcpServers) ? cfg.mcpServers : {}),
-      agentteams: { command: argv.command, args: [...argv.args, 'mcp', '--tool', 'gemini', '--repo', repo] },
-    },
-    hooks: mergeEventHooks(isPlainObject(cfg.hooks) ? cfg.hooks : {}, GEMINI_EVENT_NAMES, cli, 'gemini', GEMINI_HOOK_TIMEOUT_MS),
-  }));
-  if (status === 'invalid') {
-    report.warnings.push('.gemini/settings.json is not valid JSON; MCP server and hooks not installed');
-  } else {
-    report.done.push('registered MCP server "agentteams" and installed hooks in .gemini/settings.json');
-    // The file embeds absolute paths: keep it out of git, but only when we created it (otherwise it is the user's).
-    if (status === 'created') {
-      const warning = await addToGitExclude(deps, repo, SETTINGS_REL);
-      if (warning) report.warnings.push(warning);
-    }
-  }
+  await installSettings(deps, repo, cli, argv, report);
   await writeInstructionFile(join(repo, 'GEMINI.md'), cred.teamName);
   report.done.push('updated GEMINI.md');
   return report;

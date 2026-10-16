@@ -3,9 +3,8 @@ import { join } from 'node:path';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { cliArgv } from '../paths.js';
-import { InvalidConfigShape, mergeMcpServer } from './cursorHooks.js';
 import { claudeDialect } from './dialects.js';
-import { upsertJsonConfig } from './jsonConfig.js';
+import { isWritten, setMcpEntry, upsertManagedJson } from './jsonConfig.js';
 import { writeOwnedRulesFile } from './rulesFile.js';
 import type { HookDialect, InstallReport, ToolAdapter } from './types.js';
 
@@ -39,14 +38,8 @@ export async function installWindsurf(
   const entry = { command: argv.command, args: [...argv.args, 'mcp', '--tool', 'windsurf', '--repo', cred.repoPath] };
   for (const path of windsurfMcpPaths(deps)) {
     const shown = path.startsWith(deps.homedir) ? `~${path.slice(deps.homedir.length)}` : path;
-    try {
-      const status = await upsertJsonConfig(path, (c) => mergeMcpServer(c, entry));
-      if (status === 'invalid') report.warnings.push(`${shown} is not valid JSON; left untouched`);
-      else report.done.push(`registered MCP server "agentteams" in ${shown}`);
-    } catch (e) {
-      if (!(e instanceof InvalidConfigShape)) throw e;
-      report.warnings.push(`${shown} has an unexpected shape (${e.message}); left untouched`);
-    }
+    const status = await upsertManagedJson(path, shown, (c) => setMcpEntry(c, 'mcpServers', entry), report);
+    if (isWritten(status)) report.done.push(`registered MCP server "agentteams" in ${shown}`);
   }
   for (const dir of ['.devin', '.windsurf']) {
     await writeOwnedRulesFile(join(cred.repoPath, dir, 'rules', 'agentteams.md'), ['trigger: always_on'], cred.teamName, RULES_EXTRA);
