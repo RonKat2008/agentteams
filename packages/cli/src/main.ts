@@ -43,10 +43,12 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   const sub = (name: string) => program.command(name).exitOverride();
 
-  sub('up').description('Run a local hub').option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
-    .action(async (o: { port?: string }) => (await import('./commands/up.js')).upCommand(deps, o));
+  sub('up').description('Run a local hub (add --share to expose it over a Cloudflare tunnel)')
+    .option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
+    .option('--share', 'run in hosted mode behind a public Cloudflare quick tunnel')
+    .action(async (o: { port?: string; share?: boolean }) => (await import('./commands/up.js')).upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
-    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>')
+    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
     .addOption(new Option('--local', 'local-only team (no GitHub link)').conflicts('newRepo'))
     .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
@@ -56,7 +58,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((name: string, o: { public?: boolean } & CreateOpts) =>
       createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
-    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>').option('--no-install')
+    .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)').option('--no-install')
     .option('--no-clone', 'do not clone the team repo; use the current directory')
     .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
     .action((code: string, o) => joinCommand(deps, code, o));
