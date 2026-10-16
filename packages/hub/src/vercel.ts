@@ -31,7 +31,7 @@ export function createVercelHandler(opts: VercelHandlerOptions = {}): (req: Requ
     const { db, dialect } = await (opts.connect ?? ((url) => createDb({ databaseUrl: url })))(config.databaseUrl);
     try {
       const ctx = createContext(db, { dialect, mode: 'hosted', verifyGithub: opts.verifyGithub ?? githubVerifier() });
-      const app = createApp(ctx, { mode: 'hosted', ipSource: config.ipSource, ...(config.allowedHosts ? { allowedHosts: config.allowedHosts } : {}) });
+      const app = createApp(ctx, { mode: 'hosted', ipSource: config.ipSource, rateLimits: config.rateLimits, ...(config.allowedHosts ? { allowedHosts: config.allowedHosts } : {}) });
       return handle(app);
     } catch (err) {
       await db.destroy().catch(() => undefined);

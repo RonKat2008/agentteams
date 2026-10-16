@@ -31,6 +31,7 @@ describe('loadHubConfig', () => {
     expect(loadHubConfig({}, '/h')).toEqual({
       mode: 'local', host: '127.0.0.1', port: 4747, home: '/h/.agentteams', databaseUrl: undefined,
       allowedHosts: ['127.0.0.1', 'localhost'], ipSource: 'socket',
+      rateLimits: { agentPerMin: 300, ipPerMin: 10 },
     });
   });
   it('requires allowed hosts in hosted mode', () => {
@@ -71,5 +72,16 @@ describe('trusted client-IP source', () => {
   });
   it('local mode ignores platform env', () => {
     expect(loadHubConfig({ VERCEL: '1', FLY_APP_NAME: 'a' }, '/h').ipSource).toBe('socket');
+  });
+});
+
+describe('rate limit settings', () => {
+  it('reads AGENTTEAMS_AGENT_RATE_PER_MIN and AGENTTEAMS_IP_RATE_PER_MIN', () => {
+    expect(loadHubConfig({ AGENTTEAMS_AGENT_RATE_PER_MIN: '500', AGENTTEAMS_IP_RATE_PER_MIN: '20' }, '/h').rateLimits)
+      .toEqual({ agentPerMin: 500, ipPerMin: 20 });
+  });
+  it.each(['0', '-5', '1.5', 'abc', ' ', '1e3'])('rejects %j', (bad) => {
+    expect(() => loadHubConfig({ AGENTTEAMS_AGENT_RATE_PER_MIN: bad }, '/h')).toThrow(/AGENTTEAMS_AGENT_RATE_PER_MIN must be a positive integer/);
+    expect(() => loadHubConfig({ AGENTTEAMS_IP_RATE_PER_MIN: bad }, '/h')).toThrow(/AGENTTEAMS_IP_RATE_PER_MIN must be a positive integer/);
   });
 });

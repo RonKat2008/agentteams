@@ -31,6 +31,7 @@ export interface HubConfig {
   allowedHosts?: string[];
   /** Which header, if any, carries the trusted client IP (hosted mode only). */
   ipSource: IpSource;
+  rateLimits: { agentPerMin: number; ipPerMin: number };
 }
 
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
@@ -39,6 +40,17 @@ function parseMode(value: string | undefined): 'local' | 'hosted' {
   if (value === undefined || value === '' || value === 'local') return 'local';
   if (value === 'hosted') return 'hosted';
   throw new Error(`AGENTTEAMS_MODE must be "local" or "hosted" (got "${value}")`);
+}
+
+export const DEFAULT_AGENT_RATE_PER_MIN = 300;
+export const DEFAULT_IP_RATE_PER_MIN = 10;
+
+function parseRate(name: string, value: string | undefined, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+    throw new Error(`${name} must be a positive integer (got "${value}")`);
+  }
+  return Number(value);
 }
 
 const HEADER_NAME = /^[a-z0-9-]+$/;
@@ -72,5 +84,9 @@ export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfi
     databaseUrl: env.DATABASE_URL || undefined,
     ...(allowedHosts ? { allowedHosts } : {}),
     ipSource: parseIpSource(env, mode),
+    rateLimits: {
+      agentPerMin: parseRate('AGENTTEAMS_AGENT_RATE_PER_MIN', env.AGENTTEAMS_AGENT_RATE_PER_MIN, DEFAULT_AGENT_RATE_PER_MIN),
+      ipPerMin: parseRate('AGENTTEAMS_IP_RATE_PER_MIN', env.AGENTTEAMS_IP_RATE_PER_MIN, DEFAULT_IP_RATE_PER_MIN),
+    },
   };
 }

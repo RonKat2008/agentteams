@@ -62,7 +62,7 @@ export interface AppOptions {
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
-const DEFAULT_RATE_LIMITS = { agentPerMin: 60, ipPerMin: 10 };
+const DEFAULT_RATE_LIMITS = { agentPerMin: 300, ipPerMin: 10 };
 const WWW_AUTHENTICATE = 'Bearer realm="agentteams"';
 
 class AuthPassed extends Error {}
@@ -82,6 +82,8 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   const limits = opts.rateLimits ?? (mode === 'hosted' ? DEFAULT_RATE_LIMITS : undefined);
   const ipBucket = limits ? createTokenBucket(limits.ipPerMin, now) : undefined;
   const agentBucket = limits ? createTokenBucket(limits.agentPerMin, now) : undefined;
+  // Hook pings are frequent and automatic; a separate bucket keeps them from starving MCP/tool calls.
+  const pingBucket = limits ? createTokenBucket(limits.agentPerMin, now) : undefined;
 
   const limited = (c: Context, retryAfterSec: number) => {
     c.header('Retry-After', String(retryAfterSec));
@@ -145,7 +147,8 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   app.post('/api/join/preview', async (c) => c.json(await previewInvite(ctx, (await body(c)) as never)));
 
   const agentLimit = createMiddleware<AppEnv>(async (c, next) => {
-    const r = agentBucket?.take(c.get('actor').id);
+    const bucket = c.req.method === 'POST' && c.req.path === '/api/team/ping' ? pingBucket : agentBucket;
+    const r = bucket?.take(c.get('actor').id);
     if (r && !r.ok) return limited(c, r.retryAfterSec);
     await next();
   });

@@ -16,6 +16,7 @@ export interface HubOptions {
   mode?: 'local' | 'hosted';
   allowedHosts?: string[];
   ipSource?: IpSource;
+  rateLimits?: { agentPerMin: number; ipPerMin: number };
   /** Hosted mode only; defaults to the real GitHub verifier. Tests inject a fake. */
   verifyGithub?: GithubVerifier;
 }
@@ -37,7 +38,7 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
   const allowedHosts = opts.allowedHosts ?? (hostname === '127.0.0.1' ? ['127.0.0.1', 'localhost'] : undefined);
   const mode = opts.mode ?? 'local';
   const ctx = createContext(db, { dialect, mode, ...(mode === 'hosted' ? { verifyGithub: opts.verifyGithub ?? githubVerifier() } : {}) });
-  const app = createApp(ctx, { mode: opts.mode, ...(opts.ipSource ? { ipSource: opts.ipSource } : {}), ...(allowedHosts ? { allowedHosts } : {}) });
+  const app = createApp(ctx, { mode: opts.mode, ...(opts.rateLimits ? { rateLimits: opts.rateLimits } : {}), ...(opts.ipSource ? { ipSource: opts.ipSource } : {}), ...(allowedHosts ? { allowedHosts } : {}) });
 
   return new Promise((resolve, reject) => {
     // Only guards startup (e.g. EADDRINUSE); detached once listening so a later error cannot destroy the db.

@@ -28,6 +28,7 @@ const hub = await startHub({
   mode: config.mode,
   allowedHosts: config.allowedHosts,
   ipSource: config.ipSource,
+  ...(config.mode === 'hosted' ? { rateLimits: config.rateLimits } : {}), // local mode is unlimited
 }).catch((err: Error) => fail(`failed to start: ${redact(err.message)}`));
 // Never log DATABASE_URL or other secrets.
 console.log(

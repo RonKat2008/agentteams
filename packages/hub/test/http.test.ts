@@ -250,6 +250,28 @@ describe('hardening', () => {
     expect((await limited.request('/api/team/status', get(created.apiKey))).status).toBe(200);
   });
 
+  it('defaults to 300 requests per minute per agent when hosted', async () => {
+    const created = await (await app.request('/api/teams', json({
+      name: 'rl-default', member: 'ronit', tool: 'claude', repo: { provider: 'local' },
+    }))).json();
+    const hosted = createApp(env.ctx, { mode: 'hosted', now: () => 0 });
+    for (let i = 0; i < 300; i++) expect((await hosted.request('/api/team/status', get(created.apiKey))).status).toBe(200);
+    expect((await hosted.request('/api/team/status', get(created.apiKey))).status).toBe(429);
+  });
+
+  it('gives POST /api/team/ping its own per-agent bucket so hook pings cannot starve other calls', async () => {
+    const limited = createApp(env.ctx, { now: () => 0, rateLimits: { agentPerMin: 3, ipPerMin: 10 } });
+    const created = await (await limited.request('/api/teams', json({
+      name: 'rl-ping', member: 'ronit', tool: 'claude', repo: { provider: 'local' },
+    }))).json();
+    const ping = () => limited.request('/api/team/ping', { ...json({}), headers: { 'content-type': 'application/json', authorization: `Bearer ${created.apiKey}` } });
+    const status = () => limited.request('/api/team/status', get(created.apiKey));
+    for (let i = 0; i < 3; i++) expect((await ping()).status).toBe(200);
+    expect((await ping()).status).toBe(429);
+    for (let i = 0; i < 3; i++) expect((await status()).status).toBe(200);
+    expect((await status()).status).toBe(429);
+  });
+
   it('sets WWW-Authenticate on 401 from /mcp', async () => {
     const res = await app.request('/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     expect(res.status).toBe(401);
