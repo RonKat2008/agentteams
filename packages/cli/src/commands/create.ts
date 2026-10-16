@@ -11,6 +11,8 @@ import { checkTeamDir, detectGithubSlug, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
+export interface CreateResult { teamName: string; inviteCode: string; inviteExpiresAt: string; hubUrl: string }
+
 export interface CreateOpts {
   agent: ToolKind; as?: string; hub?: string; repo?: string; local?: boolean; install: boolean;
   newRepo?: boolean; trustHub?: boolean; visibility?: 'private' | 'public'; owner?: string;
@@ -41,8 +43,11 @@ async function gitOrThrow(deps: CliDeps, cwd: string, args: string[]): Promise<s
   return r.stdout;
 }
 
+/** The exact command teammates run to join (printed by create and by the guided menu). */
+export const teammateJoinCommand = (inviteCode: string, hubUrl: string): string => `agentteams join ${inviteCode} --hub ${hubUrl}`;
+
 /** Spec §3A steps 1-3: verify gh, create the local repo with a first commit, create and push the GitHub repo. */
-function validateNewRepoArgs(name: string, owner?: string): void {
+export function validateNewRepoArgs(name: string, owner?: string): void {
   if (!/^[A-Za-z0-9._-]+$/.test(name) || /^[-.]/.test(name)) {
     throw new Error(`invalid repo name "${name}": use letters, digits, '.', '_' or '-'`);
   }
@@ -104,7 +109,7 @@ async function commitInstructions(deps: CliDeps, dir: string): Promise<void> {
 
 async function registerTeam(
   deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink, githubToken: string | undefined,
-): Promise<Credential> {
+): Promise<{ cred: Credential; result: CreateResult }> {
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
   const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, tool: opts.agent, repo, ...identity });
@@ -114,13 +119,13 @@ async function registerTeam(
   };
   deps.out(`Created team "${res.teamName}". You are ${res.agentName} (orchestrator).`);
   deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
-  deps.out(`Teammates join with: agentteams join ${res.inviteCode} --hub ${hubUrl}`);
+  deps.out(`Teammates join with: ${teammateJoinCommand(res.inviteCode, hubUrl)}`);
   deps.out(`Hub: ${hubLabel(hubUrl)}`);
   await saveCredential(deps, cred);
-  return cred;
+  return { cred, result: { teamName: res.teamName, inviteCode: res.inviteCode, inviteExpiresAt: res.inviteExpiresAt, hubUrl } };
 }
 
-export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<void> {
+export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<CreateResult> {
   // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
   await checkTeamDir(opts.newRepo ? { ...deps, err: () => {} } : deps, deps.cwd);
   // Before any side effect (repo creation); hosted hubs need the gh identity once.
@@ -128,18 +133,21 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
   if (!opts.newRepo) {
     const repoPath = await repoRoot(deps, deps.cwd);
     const repo = await resolveRepoLink(deps, opts, repoPath);
-    const cred = await registerTeam(deps, name, opts, repoPath, repo, githubToken);
+    const { cred, result } = await registerTeam(deps, name, opts, repoPath, repo, githubToken);
     if (opts.install) printReport(deps, await runInstallers(deps, cred));
-    return;
+    return result;
   }
   const dir = await scaffoldNewRepo(deps, name, opts);
   let created = opts.owner ? `${opts.owner}/${name}` : name;
   let stage = 'looking up the new repo';
+  let result: CreateResult;
   try {
     const repo = await newRepoLink(deps, dir);
     created = repo.slug ?? created;
     stage = 'registering the team';
-    const cred = await registerTeam(deps, name, opts, dir, repo, githubToken);
+    const registered = await registerTeam(deps, name, opts, dir, repo, githubToken);
+    const cred = registered.cred;
+    result = registered.result;
     if (opts.install) {
       printReport(deps, await runInstallers(deps, cred));
       await commitInstructions(deps, dir);
@@ -151,4 +159,5 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
       `To finish, run: cd ${dir} && agentteams create ${name}`);
   }
   deps.out(`Next: cd ${name}`);
+  return result;
 }

@@ -44,6 +44,12 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   const sub = (name: string) => program.command(name).exitOverride();
 
+  sub('tui').alias('setup').description('Open the guided menu (also what plain `agentteams` does in a terminal)')
+    .action(async () => {
+      if (!deps.isTTY) throw new Error('the guided menu needs an interactive terminal; see agentteams --help');
+      exit.code = await runTui(deps);
+    });
+
   sub('up').description('Run a local hub (add --share to expose it over a Cloudflare tunnel)')
     .option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
     .option('--share', 'run in hosted mode behind a public Cloudflare quick tunnel')
@@ -57,8 +63,9 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .addOption(new Option('--public', 'new repo is public'))
     .option('--owner <org>', 'GitHub owner/org for --new-repo').option('--no-install')
     .option('--trust-hub', TRUST_HUB_HELP)
-    .action((name: string, o: { public?: boolean } & CreateOpts) =>
-      createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
+    .action(async (name: string, o: { public?: boolean } & CreateOpts) => {
+      await createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' });
+    });
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)').option('--no-install')
     .option('--trust-hub', TRUST_HUB_HELP)
@@ -127,8 +134,13 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   return program;
 }
 
+/** Loaded on demand so hooks, git hooks and the MCP proxy never pay for the prompt library. */
+const runTui = async (deps: CliDeps): Promise<number> => (await import('./tui/menu.js')).runTui(deps);
+
 export async function main(argv: string[], deps: CliDeps = realDeps()): Promise<number> {
   const exit = { code: 0 };
+  // Bare `agentteams` in a terminal opens the menu; without a TTY it keeps printing help.
+  if (argv.length <= 2 && deps.isTTY) return runTui(deps);
   try {
     await buildProgram(deps, exit).parseAsync(argv);
     return exit.code;

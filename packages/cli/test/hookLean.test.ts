@@ -5,6 +5,7 @@ import { makeTestCli } from './helpers.js';
 vi.mock('@agentteams/hub', () => { throw new Error('hub must not load on the hook path'); });
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => { throw new Error('MCP SDK must not load on the hook path'); });
 vi.mock('@modelcontextprotocol/sdk/server/index.js', () => { throw new Error('MCP SDK must not load on the hook path'); });
+vi.mock('@clack/prompts', () => { throw new Error('the guided menu must not load on the hook path'); });
 
 describe('hook path stays lean', () => {
   it('runs a hook without loading @agentteams/hub or the MCP SDK', async () => {
