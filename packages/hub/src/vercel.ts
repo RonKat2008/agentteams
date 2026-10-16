@@ -4,6 +4,7 @@ import { createContext } from './context.js';
 import { createDb, type DbHandle } from './db/index.js';
 import { githubVerifier, type GithubVerifier } from './github.js';
 import { createApp } from './http/app.js';
+import { redact } from './redact.js';
 
 export interface VercelHandlerOptions {
   /** Defaults to process.env. */
@@ -24,7 +25,7 @@ type Fetch = (req: Request) => Response | Promise<Response>;
 export function createVercelHandler(opts: VercelHandlerOptions = {}): (req: Request) => Promise<Response> {
   let pending: Promise<Fetch> | undefined;
 
-  async function build(): Promise<Fetch> {
+  async function buildUnredacted(): Promise<Fetch> {
     const env = { ...(opts.env ?? process.env), AGENTTEAMS_MODE: 'hosted' };
     const config = loadHubConfig(env, '/nonexistent');
     if (!config.databaseUrl) throw new Error('DATABASE_URL is required (add Neon Postgres from the Vercel Marketplace)');
@@ -38,6 +39,11 @@ export function createVercelHandler(opts: VercelHandlerOptions = {}): (req: Requ
       throw err;
     }
   }
+
+  // A malformed DATABASE_URL can end up in a driver's error message; never let it reach the logs.
+  const build = () => buildUnredacted().catch((err: unknown) => {
+    throw new Error(redact(err instanceof Error ? err.message : String(err)));
+  });
 
   return async (req) => {
     pending ??= build().catch((err) => {

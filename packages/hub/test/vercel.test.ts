@@ -108,3 +108,15 @@ describe('cold start retry', { timeout: 30_000 }, () => {
     expect(connect).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('cold start redaction', { timeout: 30_000 }, () => {
+  it('never lets a database URL reach the thrown error', async () => {
+    const secret = 'postgres://user:hunter2@db.internal:5432/app';
+    const connect = vi.fn().mockRejectedValue(new Error(`invalid connection string ${secret}?sslmode=bad`));
+    const handler = createVercelHandler({ env: { DATABASE_URL: secret, VERCEL: '1' }, connect });
+    const err = await handler(req('/health')).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('invalid connection string postgres://***');
+    expect((err as Error).message).not.toContain('hunter2');
+  });
+});

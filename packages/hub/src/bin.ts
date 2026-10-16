@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { loadHubConfig, type HubConfig } from './config.js';
+import { redact } from './redact.js';
 import { startHub } from './server.js';
 
 const fail = (message: string): never => {
@@ -17,8 +18,6 @@ try {
   config = fail((err as Error).message);
 }
 if (!config.databaseUrl) mkdirSync(config.home, { recursive: true, mode: 0o700 });
-
-const redact = (message: string) => message.replace(/postgres(?:ql)?:\/\/\S+/gi, 'postgres://***');
 
 const hub = await startHub({
   dbPath: join(config.home, 'hub.db'),
