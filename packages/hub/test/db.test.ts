@@ -95,10 +95,12 @@ describe('withTx retry', () => {
     expect(out).toBe('ok');
     expect(calls).toBe(2);
   });
-  it('gives up after 3 attempts', async () => {
+  it('gives up after 3 attempts with a conflict DomainError', async () => {
     const ctx = createContext(db, { dialect: 'postgres' });
     let calls = 0;
-    await expect(withTx(ctx, async () => { calls++; throw serializationError(); })).rejects.toThrow('could not serialize');
+    await expect(withTx(ctx, async () => { calls++; throw serializationError(); })).rejects.toMatchObject({
+      code: 'conflict', message: 'the hub is busy; retry the request',
+    });
     expect(calls).toBe(3);
   });
   it('does not retry other errors', async () => {

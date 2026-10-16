@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely';
 import { monotonicFactory } from 'ulid';
 import type { ToolKind } from '@agentteams/shared';
+import { DomainError } from './errors.js';
 import type { GithubVerifier } from './github.js';
 import type { Dialect } from './db/index.js';
 import type { Database } from './db/schema.js';
@@ -57,7 +58,8 @@ export async function withTx<T>(ctx: HubContext, fn: (tx: HubContext) => Promise
     try {
       return await ctx.db.transaction().setIsolationLevel('serializable').execute((trx) => fn({ ...ctx, db: trx }));
     } catch (err) {
-      if (attempt >= MAX_TX_ATTEMPTS || !isRetryable(err)) throw err;
+      if (!isRetryable(err)) throw err;
+      if (attempt >= MAX_TX_ATTEMPTS) throw new DomainError('conflict', 'the hub is busy; retry the request');
       await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS * attempt));
     }
   }
