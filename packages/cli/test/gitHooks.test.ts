@@ -22,6 +22,7 @@ let repo: string;
 let hub: Awaited<ReturnType<typeof startHub>>;
 let ronitKey: string;
 let ashKey: string;
+let inviteCode: string;
 let err: string[];
 
 const git = async (cwd: string, ...args: string[]) => {
@@ -60,6 +61,7 @@ beforeEach(async () => {
   const created = await anon.createTeam({ name: 'dev-squad', member: 'ronit', tool: 'claude', repo: { provider: 'local' } });
   const ash = await anon.joinTeam({ inviteCode: created.inviteCode, member: 'ash', tool: 'codex' });
   ronitKey = created.apiKey;
+  inviteCode = created.inviteCode;
   ashKey = ash.apiKey;
 });
 afterEach(async () => {
@@ -135,6 +137,54 @@ describe('runPreCommit', () => {
     await mcp(ronitKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     await stage('src/a.ts');
     expect(await runPreCommit(mkDeps())).toBe(1);
+  });
+});
+
+describe('agent selection when claude and codex share a repo', () => {
+  let codexKey: string;
+  let wt: string;
+  const depsIn = (cwd: string, env: NodeJS.ProcessEnv = {}): CliDeps => ({ ...mkDeps(env), cwd });
+
+  beforeEach(async () => {
+    const codex = await new HubClient(hub.url).joinTeam({ inviteCode, member: 'ronit', tool: 'codex' });
+    codexKey = codex.apiKey;
+    await saveCredential(mkDeps(), cred(ronitKey));
+    await saveCredential(mkDeps(), { ...cred(codexKey), tool: 'codex', agentName: 'ronit-codex' });
+    writeFileSync(join(repo, 'README.md'), 'x\n');
+    await git(repo, 'add', 'README.md');
+    await git(repo, 'commit', '-q', '-m', 'init');
+    wt = join(tmp, 'repo.at', 'ronit-codex-1');
+    await git(repo, 'worktree', 'add', '-b', 'at/ronit-codex/1', wt);
+  });
+
+  const stageIn = async (cwd: string, f: string) => {
+    mkdirSync(join(cwd, f, '..'), { recursive: true });
+    writeFileSync(join(cwd, f), `${f}\n`);
+    await git(cwd, 'add', f);
+  };
+
+  it('does not block the codex worktree on a claim held by codex itself', async () => {
+    await mcp(codexKey, 'claim_files', { globs: ['src/**'], exclusive: true });
+    await stageIn(wt, 'src/a.ts');
+    expect(await runPreCommit(depsIn(wt))).toBe(0);
+    expect(err).toEqual([]);
+  });
+
+  it('credits the post-commit to ronit-codex on the codex branch', async () => {
+    await stageIn(wt, 'src/a.ts');
+    await git(wt, 'commit', '-q', '-m', 'codex work');
+    expect(await runPostCommit(depsIn(wt))).toBe(0);
+    const res = await fetch(`${hub.url}/api/team/changes`, { headers: { authorization: `Bearer ${ashKey}` } });
+    const rows = (await res.json()) as { agent: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.agent).toBe('ronit-codex');
+  });
+
+  it('still blocks the codex worktree on a claim held by the claude agent', async () => {
+    await mcp(ronitKey, 'claim_files', { globs: ['src/**'], exclusive: true });
+    await stageIn(wt, 'src/a.ts');
+    expect(await runPreCommit(depsIn(wt))).toBe(1);
+    expect(err.join('\n')).toContain('ronit-claude');
   });
 });
 

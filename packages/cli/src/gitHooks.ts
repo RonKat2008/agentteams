@@ -1,7 +1,7 @@
 import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
 import { oneLine } from './format.js';
-import { headCommit, stagedFiles } from './git.js';
+import { currentBranch, headCommit, stagedFiles } from './git.js';
 import { HubClient } from './hubClient.js';
 
 export type { GitHookName } from './install/gitHooks.js';
@@ -11,16 +11,22 @@ const TOOL_ORDER = ['claude', 'codex', 'other'] as const;
 
 type Deps = Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec' | 'err'>;
 
+/** Task branches are named at/<agent>/<task> (see the worktree command). */
+const TASK_BRANCH = /^at\/(.+)\/\d+$/;
+
 /**
- * Git hooks are tool-agnostic: when several credentials match the repo, accept any of them,
- * preferring them in a fixed order (claude, codex, other) so the choice is deterministic.
+ * Git hooks are tool-agnostic. On a task branch (at/<agent>/<n>) the credential for that agent wins,
+ * so claude and codex sharing a repo are not mistaken for each other. Otherwise (or if no credential
+ * matches) fall back to a fixed order (claude, codex, other) so the choice is deterministic.
  */
 async function pickCredential(deps: Deps): Promise<Credential | null> {
+  const found: Credential[] = [];
   for (const tool of TOOL_ORDER) {
     const cred = await resolveCredentialForCwd(deps, deps.cwd, tool);
-    if (cred) return cred;
+    if (cred) found.push(cred);
   }
-  return null;
+  const agent = TASK_BRANCH.exec(await currentBranch(deps, deps.cwd))?.[1];
+  return (agent !== undefined ? found.find((c) => c.agentName === agent) : undefined) ?? found[0] ?? null;
 }
 
 const clientFor = (deps: Deps, cred: Credential): HubClient =>
