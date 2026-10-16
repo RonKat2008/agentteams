@@ -16,13 +16,13 @@ beforeEach(async () => {
   hub = await startHub({ dbPath: join(dir, 'hub.db'), port: 0 });
 });
 afterEach(async () => {
-  await hub.close();
+  await hub.close().catch(() => undefined);
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function downstreamFor(upstream: Client | null, reason?: string) {
+async function downstreamFor(upstream: Client | null) {
   const [a, b] = InMemoryTransport.createLinkedPair();
-  await (await createProxyServer({ connect: upstream ? async () => upstream : null, hubUrl: hub.url, reason })).connect(a);
+  await (await createProxyServer({ connect: upstream ? async () => upstream : null, hubUrl: hub.url })).connect(a);
   const downstream = new Client({ name: 'codex', version: '0' });
   await downstream.connect(b);
   return downstream;
@@ -48,14 +48,6 @@ describe('MCP proxy', () => {
   it('serves an empty tool list without credentials', async () => {
     const downstream = await downstreamFor(null);
     expect((await downstream.listTools()).tools).toEqual([]);
-    await downstream.close();
-  });
-
-  it('reports the distinct reason on calls when credentials exist but the hub is unreachable', async () => {
-    const downstream = await downstreamFor(null, 'agentteams hub unreachable at http://x');
-    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
-    expect(res.isError).toBe(true);
-    expect((res.content as Array<{ text: string }>)[0]!.text).toBe('agentteams hub unreachable at http://x');
     await downstream.close();
   });
 
@@ -88,6 +80,49 @@ describe('MCP proxy', () => {
     expect(up.isError).toBeFalsy();
     expect((up.content as Array<{ text: string }>)[0]!.text).toContain('ronit-codex');
     expect((await downstream.listTools()).tools).toHaveLength(15);
+    await downstream.close();
+  });
+
+  async function proxyTo(apiKey: string) {
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await (await createProxyServer({ connect: () => connectUpstream(hub.url, apiKey), hubUrl: hub.url })).connect(a);
+    const downstream = new Client({ name: 'codex', version: '0' });
+    await downstream.connect(b);
+    return downstream;
+  }
+  const textOf = (r: { content?: unknown }) => (r.content as Array<{ text: string }>)[0]!.text;
+
+  it('reconnects transparently when the hub restarts on the same port', async () => {
+    const created = await new HubClient(hub.url).createTeam({ name: 's', member: 'ronit', tool: 'codex', repo: { provider: 'local' } });
+    const port = Number(new URL(hub.url).port);
+    const downstream = await proxyTo(created.apiKey);
+    expect((await downstream.callTool({ name: 'team_status', arguments: {} })).isError).toBeFalsy();
+
+    await hub.close();
+    hub = await startHub({ dbPath: join(dir, 'hub.db'), port });
+    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(res.isError).toBeFalsy();
+    expect(textOf(res)).toContain('ronit-codex');
+    await downstream.close();
+  });
+
+  it('returns the unreachable error when the hub stays down after a successful call', async () => {
+    const created = await new HubClient(hub.url).createTeam({ name: 's', member: 'ronit', tool: 'codex', repo: { provider: 'local' } });
+    const downstream = await proxyTo(created.apiKey);
+    expect((await downstream.callTool({ name: 'team_status', arguments: {} })).isError).toBeFalsy();
+
+    await hub.close();
+    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe(`agentteams hub unreachable at ${hub.url} — is it running?`);
+    await downstream.close();
+  });
+
+  it('reports a rejected API key distinctly from an unreachable hub', async () => {
+    const downstream = await proxyTo('bad-key');
+    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe("agentteams hub rejected this agent's API key (re-run agentteams join or install)");
     await downstream.close();
   });
 });
