@@ -36,6 +36,43 @@ function isAuthRejection(e: unknown): boolean {
   return err.code === 401 || err.name === 'UnauthorizedError' || /\bHTTP 401\b/.test(err.message ?? '');
 }
 
+const CONNECT_PHASE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'EAI_AGAIN']);
+
+function errCode(e: unknown): unknown {
+  return typeof e === 'object' && e !== null ? (e as { code?: unknown }).code : undefined;
+}
+
+/** HTTP-level failure from the SDK transport (carries the status as `code`). */
+function httpStatus(e: unknown): number | undefined {
+  const code = errCode(e);
+  return e instanceof Error && e.message.startsWith('Streamable HTTP error') && typeof code === 'number' ? code : undefined;
+}
+
+function isTimeout(e: unknown): boolean {
+  return e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError');
+}
+
+/** A network failure that happens while connecting, before the hub could have seen the request. */
+function isConnectPhaseError(e: unknown): boolean {
+  const cause = typeof e === 'object' && e !== null ? (e as { cause?: unknown }).cause : undefined;
+  return [errCode(e), errCode(cause)].some((c) => typeof c === 'string' && CONNECT_PHASE_CODES.has(c));
+}
+
+/** Retry-safe: a connect-phase network error, or a stale-session 404 (the hub did not run the call). Never 5xx or timeouts. */
+function isRetryableCallError(e: unknown): boolean {
+  if (isTimeout(e)) return false;
+  const status = httpStatus(e);
+  if (status !== undefined) return status === 404;
+  return isConnectPhaseError(e);
+}
+
+/** A failed initial connect is retried once, unless it was a server error, a timeout or an auth rejection. */
+function isRetryableConnectError(e: unknown): boolean {
+  if (isTimeout(e) || isAuthRejection(e)) return false;
+  const status = httpStatus(e);
+  return status === undefined || status < 500;
+}
+
 export interface ProxyOptions {
   /** Opens a connection to the hub; null when this directory has no credentials. */
   connect: (() => Promise<Client>) | null;
@@ -77,10 +114,9 @@ export async function createProxyServer(opts: ProxyOptions) {
   });
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (!opts.connect) return errorResult('agentteams: no team credentials for this directory');
-    // Retry once only for failures that happen before the hub could have processed the call: a failed
-    // connect, or a non-McpError transport failure (stale session 404, fetch/network error) from callTool.
-    // McpError ConnectionClosed/RequestTimeout from callTool are ambiguous (the request may have been
-    // sent), so they are never retried. Other McpErrors are genuine protocol/tool errors.
+    // Retry once only for connect-phase failures (ECONNREFUSED, ENOTFOUND, ECONNRESET, EAI_AGAIN, a stale
+    // session 404, or the initial connect throwing). Never after an HTTP 5xx, a timeout or ConnectionClosed:
+    // the hub may already have processed the call. Other McpErrors are genuine protocol/tool errors.
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       let client: Client;
@@ -88,7 +124,8 @@ export async function createProxyServer(opts: ProxyOptions) {
         client = await getUpstream();
       } catch (e) {
         lastError = e;
-        continue;
+        if (isRetryableConnectError(e)) continue;
+        break;
       }
       try {
         return await client.callTool(req.params);
@@ -102,6 +139,8 @@ export async function createProxyServer(opts: ProxyOptions) {
         }
         drop();
         lastError = e;
+        if (isRetryableCallError(e)) continue;
+        return errorResult(isAuthRejection(e) ? AUTH_REJECTED : AMBIGUOUS);
       }
     }
     return errorResult(
