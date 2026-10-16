@@ -4,6 +4,8 @@ import type { CliDeps } from './deps.js';
 
 /** The public hub teams use when no --hub / AGENTTEAMS_HUB is given. */
 export const DEFAULT_HUB_URL = 'https://agentteams-two.vercel.app';
+/** Exact origin of the official public hub: the only hub that receives a GitHub token without confirmation. */
+export const OFFICIAL_HUB_ORIGIN = new URL(DEFAULT_HUB_URL).origin;
 /** What `--hub local` means: the hub started by `agentteams up`. */
 export const LOCAL_HUB_URL = 'http://127.0.0.1:4747';
 
@@ -26,11 +28,18 @@ export function hubUrlFrom(flag: string | undefined, env: NodeJS.ProcessEnv): st
   return raw.replace(/\/+$/, '');
 }
 
+/** Human label for the hub in create/join output. */
+export function hubLabel(hubUrl: string): string {
+  if (hubUrl === DEFAULT_HUB_URL) return `${hubUrl} (public)`;
+  if (hubUrl === LOCAL_HUB_URL) return `${hubUrl} (local)`;
+  try { return `${hubUrl} (${new URL(hubUrl).host})`; } catch { return hubUrl; }
+}
+
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-const binPath = (): string => fileURLToPath(new URL('./bin.js', import.meta.url));
+export const binPath = (): string => fileURLToPath(new URL('./bin.js', import.meta.url));
 
 /** Shell command that re-invokes this CLI (used inside hook configs). */
 export function cliCommand(): string {
@@ -40,4 +49,21 @@ export function cliCommand(): string {
 /** The same invocation as argv parts (for TOML command/args). */
 export function cliArgv(): { command: string; args: string[] } {
   return { command: process.execPath, args: [binPath()] };
+}
+
+const EPHEMERAL_MARKERS = ['/_npx/', '/dlx-', '/.bun/install/cache/', '/bunx-'];
+
+/** Why this binary path is a throwaway package-runner cache (npx, pnpm dlx, bunx), or null for a durable install. */
+export function ephemeralInstallReason(p: string = binPath(), env: NodeJS.ProcessEnv = process.env): string | null {
+  const norm = p.replace(/\\/g, '/');
+  const hit = EPHEMERAL_MARKERS.find((m) => norm.includes(m));
+  if (hit) return `temporary package-runner cache (${p})`;
+  const cache = env.npm_config_cache?.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (cache && norm.startsWith(`${cache}/_npx`)) return `temporary npx cache (${p})`;
+  return null;
+}
+
+export function ephemeralInstallWarning(reason: string): string {
+  return `WARNING: agentteams is running from a ${reason}. Hooks and MCP configs written now will break when that cache is cleaned. ` +
+    'Run: npm i -g agentteams && agentteams install';
 }

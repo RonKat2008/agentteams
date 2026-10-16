@@ -7,9 +7,12 @@ import type { InstallReport } from '../tools/types.js';
 import { installGitHooks } from '../install/gitHooks.js';
 import { mainRepoRoot } from '../git.js';
 import { repoRoot } from '../repo.js';
+import { ephemeralInstallReason, ephemeralInstallWarning } from '../paths.js';
 import { noCredentialsMessage } from './shared.js';
 
-export async function runInstallers(deps: CliDeps, cred: Credential): Promise<InstallReport> {
+export async function runInstallers(deps: CliDeps, cred: Credential, opts: { binPath?: string } = {}): Promise<InstallReport> {
+  const ephemeral = ephemeralInstallReason(opts.binPath, deps.env);
+  if (ephemeral) deps.err(ephemeralInstallWarning(ephemeral));
   const report: InstallReport = await getAdapter(cred.tool).install(deps, cred);
   const git = await installGitHooks(deps, cred.repoPath).catch((e: unknown) => ({
     status: 'skipped' as const, detail: e instanceof Error ? e.message : String(e),
