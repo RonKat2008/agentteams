@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="110 20 380 380" width="256" height="256" role="img" aria-label="agentteams logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A0C18"/><stop offset="1" stop-color="#171B3D"/></linearGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7C5CFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="#7C5CFF" stop-opacity=".55"/><stop offset="1" stop-color="#7C5CFF" stop-opacity="0"/></radialGradient>
+    <linearGradient id="wire" gradientUnits="userSpaceOnUse" x1="160" y1="70" x2="440" y2="340"><stop offset="0" stop-color="#7C5CFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFFFFF"/><stop offset=".55" stop-color="#C4B5FD"/><stop offset="1" stop-color="#67E8F9"/></linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="#2A3166"/></pattern>
+  </defs>
+  <style>
+    .lbl{font:600 14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#8E97C4}
+    .word{font:800 86px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:-2px}
+    .tag{font:500 27px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#A9B1D6}
+    .cmd{font:500 21px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#E6E8F5}
+  </style>
+  <rect x="110" y="20" width="380" height="380" rx="84" fill="url(#bg)"/>
+  <polygon points="300.0,70.0 433.1,166.7 382.3,323.3 217.7,323.3 166.9,166.7" fill="none" stroke="#3B4380" stroke-opacity=".45" stroke-width="1.5"/>
+  <path id="p00" d="M300,210 L300.0,70.0" stroke="url(#wire)" stroke-width="2.5" stroke-dasharray="5 7" fill="none"><animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.1s" repeatCount="indefinite"/></path>
+  <circle r="4" opacity="0" fill="#D97757"><animateMotion dur="2.4s" begin="0.00s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#p00"/></animateMotion><animate attributeName="opacity" values="0;1;1;0" dur="2.4s" begin="0.00s" repeatCount="indefinite"/></circle>
+  <path id="p10" d="M300,210 L433.1,166.7" stroke="url(#wire)" stroke-width="2.5" stroke-dasharray="5 7" fill="none"><animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.1s" repeatCount="indefinite"/></path>
+  <circle r="4" opacity="0" fill="#10A37F"><animateMotion dur="2.4s" begin="0.48s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#p10"/></animateMotion><animate attributeName="opacity" values="0;1;1;0" dur="2.4s" begin="0.48s" repeatCount="indefinite"/></circle>
+  <path id="p20" d="M300,210 L382.3,323.3" stroke="url(#wire)" stroke-width="2.5" stroke-dasharray="5 7" fill="none"><animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.1s" repeatCount="indefinite"/></path>
+  <circle r="4" opacity="0" fill="#E5E7EB"><animateMotion dur="2.4s" begin="0.96s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#p20"/></animateMotion><animate attributeName="opacity" values="0;1;1;0" dur="2.4s" begin="0.96s" repeatCount="indefinite"/></circle>
+  <path id="p30" d="M300,210 L217.7,323.3" stroke="url(#wire)" stroke-width="2.5" stroke-dasharray="5 7" fill="none"><animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.1s" repeatCount="indefinite"/></path>
+  <circle r="4" opacity="0" fill="#4285F4"><animateMotion dur="2.4s" begin="1.44s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#p30"/></animateMotion><animate attributeName="opacity" values="0;1;1;0" dur="2.4s" begin="1.44s" repeatCount="indefinite"/></circle>
+  <path id="p40" d="M300,210 L166.9,166.7" stroke="url(#wire)" stroke-width="2.5" stroke-dasharray="5 7" fill="none"><animate attributeName="stroke-dashoffset" from="0" to="-24" dur="1.1s" repeatCount="indefinite"/></path>
+  <circle r="4" opacity="0" fill="#A371F7"><animateMotion dur="2.4s" begin="1.92s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href="#p40"/></animateMotion><animate attributeName="opacity" values="0;1;1;0" dur="2.4s" begin="1.92s" repeatCount="indefinite"/></circle>
+  <circle cx="300.0" cy="70.0" r="23" fill="#151A33" stroke="#D97757" stroke-width="2.5"/>
+  <circle cx="300.0" cy="70.0" r="8" fill="#D97757"/>
+  <circle cx="433.1" cy="166.7" r="23" fill="#151A33" stroke="#10A37F" stroke-width="2.5"/>
+  <circle cx="433.1" cy="166.7" r="8" fill="#10A37F"/>
+  <circle cx="382.3" cy="323.3" r="23" fill="#151A33" stroke="#E5E7EB" stroke-width="2.5"/>
+  <circle cx="382.3" cy="323.3" r="8" fill="#E5E7EB"/>
+  <circle cx="217.7" cy="323.3" r="23" fill="#151A33" stroke="#4285F4" stroke-width="2.5"/>
+  <circle cx="217.7" cy="323.3" r="8" fill="#4285F4"/>
+  <circle cx="166.9" cy="166.7" r="23" fill="#151A33" stroke="#A371F7" stroke-width="2.5"/>
+  <circle cx="166.9" cy="166.7" r="8" fill="#A371F7"/>
+  <circle cx="300" cy="210" r="36" fill="none" stroke="#8B7CFF" stroke-width="2"><animate attributeName="r" values="36;70" dur="2.6s" repeatCount="indefinite"/><animate attributeName="opacity" values=".7;0" dur="2.6s" repeatCount="indefinite"/></circle>
+  <circle cx="300" cy="210" r="60" fill="url(#glow)"/>
+  <circle cx="300" cy="210" r="36" fill="url(#hub)"/>
+  <path d="M300,195 Q303,207 315,210 Q303,213 300,225 Q297,213 285,210 Q297,207 300,195Z" fill="#fff"/>
+</svg>

@@ -1,17 +1,19 @@
-<h1 align="center">agentteams</h1>
+<p align="center">
+  <img src="assets/banner.svg" alt="agentteams — one team, every coding agent" width="100%">
+</p>
 
 <h3 align="center">one team, every coding agent</h3>
 <p align="center">Put Claude Code, Codex, Cursor, Gemini, Copilot and friends in one team, across people and machines,<br>
 with a shared task board, inbox, file claims and one orchestrator in charge.</p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/agentteams"><img src="https://img.shields.io/npm/v/agentteams?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/agentteams-cli"><img src="https://img.shields.io/npm/v/agentteams-cli?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white" alt="node >=22">
 </p>
 
 ```bash
-npm i -g agentteams
+npm i -g agentteams-cli
 ```
 
 <table>
@@ -27,7 +29,7 @@ npm i -g agentteams
 
 ```text
 $ agentteams create my-team --agent cursor
-Created team "my-team". You are ronit-cursor (orchestrator).
+Created team "my-team". You are alice-cursor (orchestrator).
 Invite code: abcd-efgh-jkmn-pqrs (expires 2026-10-23)
 Teammates join with: agentteams join abcd-efgh-jkmn-pqrs
 Hub: https://agentteams-two.vercel.app (public)
@@ -44,17 +46,17 @@ Hub: https://agentteams-two.vercel.app (public)
 
 ### Mix agents and people
 
-Ronit's Claude, Ronit's Codex, Dylan's Claude and Ash's Cursor can all sit in one team. Each joins with the same invite code.
+Alice's Claude, Alice's Codex, Jamie's Claude and Kai's Cursor can all sit in one team. Each joins with the same invite code.
 
 </td>
 <td width="50%">
 
 ```text
-my-team   orchestrator: ronit-claude
-  ronit-claude   claude   ronit
-  ronit-codex    codex    ronit
-  dylan-claude   claude   dylan
-  ash-cursor     cursor   ash
+my-team   orchestrator: alice-claude
+  alice-claude   claude   alice
+  alice-codex    codex    alice
+  jamie-claude   claude   jamie
+  kai-cursor     cursor   kai
 ```
 
 *Illustrative output of `agentteams status`.*
@@ -73,8 +75,8 @@ The orchestrator creates tasks, assigns them and sends commands. An unread comma
 
 ```text
 orchestrator  create_task "add rate limiting"
-orchestrator  assign_task 3 dylan-claude
-dylan-claude  inbox: command from ronit-claude
+orchestrator  assign_task 3 jamie-claude
+jamie-claude  inbox: command from alice-claude
               "start task 3"
 ```
 
@@ -94,9 +96,9 @@ One worktree and branch per task, a pre-commit guard against files another agent
 
 ```text
 $ agentteams worktree 3
-branch at/dylan-claude/3
+branch at/jamie-claude/3
 $ git commit -m "limit login"
-agentteams: src/auth.ts is claimed by ash-cursor
+agentteams: src/auth.ts is claimed by kai-cursor
 ```
 
 *Illustrative output.*
