@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { sql } from 'kysely';
 import type { Kysely } from 'kysely';
 import { makeTestDb, type TestDb } from './helpers.js';
 import { migrateTo, migrateToLatest } from '../src/db/migrations.js';
@@ -130,5 +131,21 @@ describe('parseInput', () => {
       expect((err as DomainError).code).toBe('invalid');
       expect((err as DomainError).message).toContain('body');
     }
+  });
+});
+
+describe('migration 005_github_id_bigint', () => {
+  const BIG_ID = 5_000_000_000; // above int32
+
+  it('stores GitHub ids beyond 2^31 and reads them back as numbers', async () => {
+    await db.insertInto('agents').values({ ...agentRow('big', 'big-claude'), github_id: BIG_ID }).execute();
+    const row = await db.selectFrom('agents').select('github_id').where('id', '=', 'big').executeTakeFirstOrThrow();
+    expect(Number(row.github_id)).toBe(BIG_ID);
+  });
+
+  it('on Postgres the column is int8', async () => {
+    if (handle.dialect !== 'postgres') return;
+    const res = await sql<{ data_type: string }>`SELECT data_type FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'github_id'`.execute(db);
+    expect(res.rows[0]?.data_type).toBe('bigint');
   });
 });

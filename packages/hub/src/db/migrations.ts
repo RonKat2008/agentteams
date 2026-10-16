@@ -1,4 +1,4 @@
-import { sql, type Kysely } from 'kysely';
+import { PostgresAdapter, sql, type Kysely } from 'kysely';
 import { Migrator, type Migration, type MigrationProvider } from 'kysely/migration';
 import type { Database } from './schema.js';
 
@@ -121,6 +121,15 @@ const migrations: Record<string, Migration> = {
   '004_github_id': {
     async up(db: Kysely<any>) {
       await db.schema.alterTable('agents').addColumn('github_id', 'integer').execute();
+    },
+  },
+  '005_github_id_bigint': {
+    async up(db: Kysely<any>) {
+      // GitHub user ids can exceed int32. Postgres INTEGER is 32-bit; SQLite INTEGER is already 64-bit, so skip it there.
+      // (pg returns int8 as a number: see the type parser in postgres.ts.)
+      if (db.getExecutor().adapter instanceof PostgresAdapter) {
+        await sql`ALTER TABLE agents ALTER COLUMN github_id TYPE bigint`.execute(db);
+      }
     },
   },
 };
