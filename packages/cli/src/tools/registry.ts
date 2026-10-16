@@ -1,8 +1,9 @@
 import { ToolKind } from '@agentteams/shared';
 import { claudeAdapter } from './claude.js';
 import { codexAdapter } from './codex.js';
+import { copilotAdapter } from './copilot.js';
 import {
-  clinePlaceholder, copilotPlaceholder, cursorPlaceholder, droidPlaceholder, geminiPlaceholder,
+  clinePlaceholder,cursorPlaceholder, droidPlaceholder, geminiPlaceholder,
   opencodePlaceholder, otherPlaceholder, rooPlaceholder, windsurfPlaceholder,
 } from './placeholders.js';
 import type { ToolAdapter } from './types.js';
@@ -13,7 +14,7 @@ const ADAPTERS: Record<ToolKind, ToolAdapter> = {
   codex: codexAdapter,
   cursor: cursorPlaceholder,
   gemini: geminiPlaceholder,
-  copilot: copilotPlaceholder,
+  copilot: copilotAdapter,
   droid: droidPlaceholder,
   opencode: opencodePlaceholder,
   windsurf: windsurfPlaceholder,
