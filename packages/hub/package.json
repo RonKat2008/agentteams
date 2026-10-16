@@ -9,6 +9,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
     "./vercel": {
       "types": "./dist/vercel.d.ts",
       "default": "./dist/vercel.js"

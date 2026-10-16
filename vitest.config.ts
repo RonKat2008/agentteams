@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@agentteams/shared': fileURLToPath(new URL('./packages/shared/src/index.ts', import.meta.url)),
+      '@agentteams/hub/core': fileURLToPath(new URL('./packages/hub/src/core.ts', import.meta.url)),
       '@agentteams/hub': fileURLToPath(new URL('./packages/hub/src/index.ts', import.meta.url)),
     },
   },
