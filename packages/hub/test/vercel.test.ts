@@ -17,7 +17,7 @@ async function pgliteHandle() {
   return { db, dialect: 'postgres' as const };
 }
 
-describe('createVercelHandler', () => {
+describe('createVercelHandler', { timeout: 30_000 }, () => {
   it('serves /health in hosted mode using an injected db', async () => {
     const handler = createVercelHandler({ env: { DATABASE_URL: 'postgres://x', VERCEL: '1', VERCEL_URL: HOST }, connect: pgliteHandle });
     const res = await handler(req('/health'));
@@ -86,5 +86,22 @@ describe('createDb', () => {
     expect(handle.dialect).toBe('postgres');
     expect(factory).not.toHaveBeenCalled();
     await handle.db.destroy();
+  });
+});
+
+describe('cold start retry', { timeout: 30_000 }, () => {
+  it('retries after a failed connect', async () => {
+    const connect = vi.fn(pgliteHandle).mockRejectedValueOnce(new Error('boom'));
+    const handler = createVercelHandler({ env: { DATABASE_URL: 'postgres://x', VERCEL: '1', VERCEL_URL: HOST }, connect });
+    await expect(handler(req('/health'))).rejects.toThrow('boom');
+    expect((await handler(req('/health'))).status).toBe(200);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('loadHubConfig branch url', () => {
+  it('includes VERCEL_BRANCH_URL', () => {
+    const c = loadHubConfig({ VERCEL: '1', AGENTTEAMS_MODE: 'hosted', VERCEL_URL: 'a.vercel.app', VERCEL_BRANCH_URL: 'b-git-x.vercel.app' }, '/h');
+    expect(c.allowedHosts).toEqual(['a.vercel.app', 'b-git-x.vercel.app']);
   });
 });

@@ -29,9 +29,14 @@ export function createVercelHandler(opts: VercelHandlerOptions = {}): (req: Requ
     const config = loadHubConfig(env, '/nonexistent');
     if (!config.databaseUrl) throw new Error('DATABASE_URL is required (add Neon Postgres from the Vercel Marketplace)');
     const { db, dialect } = await (opts.connect ?? ((url) => createDb({ databaseUrl: url })))(config.databaseUrl);
-    const ctx = createContext(db, { dialect, mode: 'hosted', verifyGithub: opts.verifyGithub ?? githubVerifier() });
-    const app = createApp(ctx, { mode: 'hosted', allowedHosts: config.allowedHosts });
-    return handle(app);
+    try {
+      const ctx = createContext(db, { dialect, mode: 'hosted', verifyGithub: opts.verifyGithub ?? githubVerifier() });
+      const app = createApp(ctx, { mode: 'hosted', allowedHosts: config.allowedHosts });
+      return handle(app);
+    } catch (err) {
+      await db.destroy().catch(() => undefined);
+      throw err;
+    }
   }
 
   return async (req) => {

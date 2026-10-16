@@ -3,7 +3,8 @@ import { createDb } from './db/index.js';
 import { migrateToLatest } from './db/migrations.js';
 
 // Run as the Vercel build command (or by hand). Never logs DATABASE_URL.
-const url = process.env.DATABASE_URL;
+// Prefer the direct (unpooled) connection: migrations need session-level behaviour a pooler may not give.
+const url = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 if (!url) {
   // Only production (or AGENTTEAMS_MIGRATE_REQUIRED=1) treats a missing database as fatal.
   console.error('agentteams-hub-migrate: DATABASE_URL is not set; skipping migrations');

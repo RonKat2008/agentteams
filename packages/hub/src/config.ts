@@ -31,7 +31,7 @@ export interface HubConfig {
 
 /** Host names (no scheme) Vercel gives this deployment: the production alias and the unique deployment URL. */
 function vercelHosts(env: NodeJS.ProcessEnv): string[] {
-  return [env.VERCEL_PROJECT_PRODUCTION_URL, env.VERCEL_URL]
+  return [env.VERCEL_PROJECT_PRODUCTION_URL, env.VERCEL_URL, env.VERCEL_BRANCH_URL]
     .map((u) => (u ?? '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, ''))
     .filter((h) => h !== '');
 }

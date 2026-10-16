@@ -139,9 +139,14 @@ The hosted hub runs as one Vercel Node function (Hono via `hono/vercel`) backed 
 local hub stays the default; this is only for teammates on other machines.
 
 1. `vercel link` in this repo.
-2. Add Neon Postgres from the Vercel Marketplace. It sets `DATABASE_URL`.
+2. Add Neon Postgres from the Vercel Marketplace. It sets `DATABASE_URL`. The function should use the
+   pooled (`-pooler`) URL; the migration step prefers `DATABASE_URL_UNPOOLED` when present. The pool is
+   capped at 3 connections per instance on Vercel (override with `PG_POOL_MAX`).
 3. Optional, for a custom domain: `vercel env add AGENTTEAMS_ALLOWED_HOSTS` (comma-separated host names).
-   On Vercel it defaults to `VERCEL_PROJECT_PRODUCTION_URL` and `VERCEL_URL`.
+   On Vercel it defaults to `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL` and `VERCEL_BRANCH_URL`; extra
+   custom domains need `AGENTTEAMS_ALLOWED_HOSTS`. Preview deployments sit behind Vercel Deployment Protection.
+   Builds run migrations, so give Preview its own Neon branch database; a preview without database
+   variables skips migration and then fails at runtime.
 4. `vercel deploy --prod`. The build command (`vercel.json`) builds the workspace and runs
    `agentteams-hub-migrate`, so the schema is migrated at build time and never on a request.
    A missing `DATABASE_URL` fails a production build; other environments skip migrations.
@@ -150,9 +155,10 @@ local hub stays the default; this is only for teammates on other machines.
 
 Layout: `api/index.ts` re-exports `createVercelHandler()` from `@agentteams/hub/vercel` as the
 `GET`/`POST`/... handlers, and `vercel.json` rewrites every path to `/api`. Hosted mode is forced for the
-function. `framework` is `null` because Vercel's zero-config Hono detection expects a single `src/index.ts`
-app entry and this repo is a pnpm workspace whose hub package must be built first; the explicit
-`api/` function plus build command is the more predictable setup.
+function. `framework` is `null` because this repo is a pnpm workspace whose hub package must be built
+first, and an explicit `api/` function plus build command is predictable. (Vercel may also support Hono with
+zero configuration; this setup was not checked against that flow or against a live deploy.) `vercel.json`
+excludes `better-sqlite3` from the function bundle, which is Postgres-only.
 
 Security notes:
 

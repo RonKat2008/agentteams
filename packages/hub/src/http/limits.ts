@@ -72,11 +72,17 @@ export function clientIp(c: Context, mode: 'local' | 'hosted'): string {
     if (vercel) return normalizeIp(vercel);
     const real = c.req.header('x-real-ip')?.trim();
     if (real) return normalizeIp(real);
+    // On Vercel only Vercel's own headers are trustworthy; Fly/XFF could be client-supplied.
+    if (process.env.VERCEL === '1') return fallbackIp(c);
     const fly = c.req.header('fly-client-ip')?.trim();
     if (fly) return normalizeIp(fly);
     const first = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
     if (first) return normalizeIp(first);
   }
+  return fallbackIp(c);
+}
+
+function fallbackIp(c: Context): string {
   try {
     const address = getConnInfo(c).remote.address;
     return address ? normalizeIp(address) : 'unknown';

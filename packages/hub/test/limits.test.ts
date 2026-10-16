@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { clientIp, createTokenBucket, normalizeIp } from '../src/http/limits.js';
 
 describe('createTokenBucket', () => {
@@ -72,5 +72,17 @@ describe('clientIp on Vercel', () => {
   });
   it('local ignores the Vercel headers', async () => {
     expect(await ipFor('local', { 'x-vercel-forwarded-for': '4.4.4.4', 'x-real-ip': '6.6.6.6' })).toBe('unknown');
+  });
+});
+
+describe('clientIp with VERCEL=1', () => {
+  it('ignores Fly and X-Forwarded-For fallbacks', async () => {
+    vi.stubEnv('VERCEL', '1');
+    try {
+      expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' })).toBe('unknown');
+      expect(await ipFor('hosted', { 'x-real-ip': '6.6.6.6', 'x-forwarded-for': '2.2.2.2' })).toBe('6.6.6.6');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
