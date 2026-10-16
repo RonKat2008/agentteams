@@ -1,6 +1,7 @@
 {
   "name": "agentteams",
   "private": true,
+  "packageManager": "pnpm@12.8.1",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -9,12 +10,17 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "test:pg": "HUB_TEST_DIALECT=pglite vitest run packages/hub --testTimeout=30000 --hookTimeout=30000",
+    "test:pg-live": "vitest run packages/hub/test/postgres.live.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "@vitest/coverage-v8": "^5.0.4",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4"
+  },
+  "dependencies": {
+    "@agentteams/hub": "workspace:*"
   }
 }

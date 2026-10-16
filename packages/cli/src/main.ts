@@ -1,5 +1,6 @@
 import { Argument, Command, CommanderError, Option } from 'commander';
 import { ToolKind } from '@agentteams/shared';
+import { accessGrantCommand } from './commands/access.js';
 import { createCommand, type CreateOpts } from './commands/create.js';
 import { installCommand } from './commands/install.js';
 import { inviteCommand } from './commands/invite.js';
@@ -9,11 +10,9 @@ import { orchestratorCommand } from './commands/orchestrator.js';
 import { statusCommand } from './commands/status.js';
 import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
-import { upCommand } from './commands/up.js';
 import { realDeps, type CliDeps } from './deps.js';
 import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
-import { runMcpProxy } from './mcpProxy.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
@@ -45,7 +44,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   const sub = (name: string) => program.command(name).exitOverride();
 
   sub('up').description('Run a local hub').option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
-    .action((o: { port?: string }) => upCommand(deps, o));
+    .action(async (o: { port?: string }) => (await import('./commands/up.js')).upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
@@ -83,7 +82,9 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('worktree').description('Claim a task and give it its own git worktree and branch')
     .addArgument(new Argument('<task>', 'task number').argParser(parsePositive('task')))
     .addOption(agentOpt()).option('--base <ref>', 'branch point (default: the repo default branch)')
-    .action((task: number, o: { agent?: ToolKind; base?: string }) => worktreeCommand(deps, task, o));
+    .option('--remove', "remove this task's worktree instead (the branch is kept)")
+    .option('--force', 'with --remove: discard uncommitted changes')
+    .action((task: number, o: { agent?: ToolKind; base?: string; remove?: boolean; force?: boolean }) => worktreeCommand(deps, task, o));
   const taskArg = () => new Argument('<task>', 'task number').argParser(parsePositive('task'));
   sub('done').description('Push this task branch and mark the task done')
     .addArgument(taskArg()).addOption(agentOpt())
@@ -95,6 +96,10 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('merged').description('Record that a task branch was merged (orchestrator only)')
     .addArgument(taskArg()).addOption(agentOpt()).option('--pr <url>', 'pull request URL')
     .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
+  const access = sub('access').description('Manage repo access for teammates');
+  access.command('grant').exitOverride().description('Invite a teammate\'s GitHub account to the repo with push access')
+    .argument('<agent-or-login>').addOption(agentOpt()).option('--yes', 'skip the confirmation prompt (CI only)')
+    .action((target: string, o: { yes?: boolean; agent?: ToolKind }) => accessGrantCommand(deps, target, o));
   sub('hook').description('(internal) agent hook entry point')
     .addArgument(new Argument('<event>').choices([...HOOK_EVENTS]))
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
@@ -112,7 +117,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   sub('mcp').description('(internal) stdio MCP proxy')
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
-    .action((o: { tool: ToolKind }) => runMcpProxy(deps, o.tool));
+    .action(async (o: { tool: ToolKind }) => (await import('./mcpProxy.js')).runMcpProxy(deps, o.tool));
   return program;
 }
 

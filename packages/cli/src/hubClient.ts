@@ -23,6 +23,12 @@ function parseJson(text: string): unknown {
   }
 }
 
+/** undici surfaces `redirect: 'error'` as TypeError('fetch failed') with a cause mentioning the redirect. */
+function isRedirectError(e: unknown): boolean {
+  const cause = (e as { cause?: { message?: unknown } } | undefined)?.cause;
+  return /redirect/i.test(`${(e as Error | undefined)?.message ?? ''} ${typeof cause?.message === 'string' ? cause.message : ''}`);
+}
+
 export class HubClient {
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
@@ -43,9 +49,13 @@ export class HubClient {
         headers,
         body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
         signal: AbortSignal.timeout(this.timeoutMs),
+        redirect: 'error',
       });
       text = await res.text();
-    } catch {
+    } catch (e) {
+      if (isRedirectError(e)) {
+        throw new HubError('unreachable', "hub redirected the request; use the hub's final URL with --hub", 0);
+      }
       throw new HubError('unreachable', `cannot reach the agentteams hub at ${this.baseUrl} — is it running? (start it with: agentteams up)`, 0);
     }
     const data = parseJson(text);
@@ -64,6 +74,9 @@ export class HubClient {
     return s ? `?${s}` : '';
   }
 
+  health() {
+    return this.request<{ ok: true; mode: 'local' | 'hosted' }>('GET', '/health');
+  }
   createTeam(input: CreateTeamInput) {
     return this.request<{ teamId: string; teamName: string; agentName: string; apiKey: string; inviteCode: string; inviteExpiresAt: string }>('POST', '/api/teams', input);
   }

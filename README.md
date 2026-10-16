@@ -133,11 +133,70 @@ fi
 
 `create --new-repo` makes a GitHub repo for you, and `join` clones the team repo (skip with `--no-clone`).
 
-## Teammates on other machines
+## Hosting a hub for friends (Vercel)
 
-Hosted mode is planned for a later release. The local hub only accepts local connections (it refuses
-non-local `Host` headers), so teammates cannot reach it over the network yet. You can pass `--hub <url>`
-to `create`/`join` to point at a different hub, but remote access needs hosted mode.
+The hosted hub runs as one Vercel Node function (Hono via `hono/vercel`) backed by Neon Postgres. The
+local hub stays the default; this is only for teammates on other machines.
+
+1. `vercel link` in this repo.
+2. Add Neon Postgres from the Vercel Marketplace. It sets `DATABASE_URL`. The function should use the
+   pooled (`-pooler`) URL; the migration step prefers `DATABASE_URL_UNPOOLED` when present. The pool is
+   capped at 3 connections per instance on Vercel (override with `PG_POOL_MAX`).
+3. Allowed hosts: on Vercel no host allowlist is applied unless `AGENTTEAMS_ALLOWED_HOSTS` is set. If you set it
+   (comma-separated host names), include every domain, including `<project>.vercel.app`. Self-hosting needs it.
+   Builds run migrations, so give Preview its own Neon branch database; a preview without database
+   variables skips migration and then fails at runtime.
+4. `vercel deploy --prod`. The build command (`vercel.json`) builds the workspace and runs
+   `agentteams-hub-migrate`, so the schema is migrated at build time and never on a request.
+   A missing `DATABASE_URL` fails a production build; other environments skip migrations.
+5. Members: `agentteams create my-app --hub https://<project>.vercel.app`. Friends run
+   `agentteams join <code> --hub https://<project>.vercel.app`. The creator runs `agentteams access grant <agent>`.
+
+Layout: `api/index.mjs` (plain ESM, so no TypeScript compile step is needed) re-exports `createVercelHandler()` from `@agentteams/hub/vercel` as the
+`GET`/`POST`/... handlers, and `vercel.json` rewrites every path to `/api`. Hosted mode is forced for the
+function. `framework` is `null` because this repo is a pnpm workspace whose hub package must be built
+first, and an explicit `api/` function plus build command is predictable. (Vercel may also support Hono with
+zero configuration; this setup was not checked against that flow or against a live deploy.) `vercel.json`
+excludes `better-sqlite3` from the function bundle, which is Postgres-only.
+
+Security notes:
+
+- Use HTTPS only. The CLI sends your GitHub token only to a hub over `https:`.
+- GitHub tokens are verified once against GitHub and never stored or logged.
+- API keys are stored hashed.
+- Rate limits are in-memory token buckets, so on serverless they are per function instance and only
+  best-effort (a burst spread over several instances is not counted together). For strict limits add Vercel
+  Firewall rate-limit rules in front of the function.
+- Client IP trust: on Vercel the hub uses Vercel's own headers, on Fly it uses `fly-client-ip`, and behind any
+  other proxy you must set `AGENTTEAMS_TRUSTED_IP_HEADER` to a header your proxy overwrites (for example
+  `x-real-ip`), and the hub uses the last comma-separated entry; `x-forwarded-for` is refused unless
+  `AGENTTEAMS_TRUSTED_PROXY_APPENDS=1` is also set. Otherwise the socket address is used. IPv6 clients
+  are bucketed by /64. `/health` is exempt from the Host allowlist.
+- Rate limits: 300 requests per minute per agent by default (`AGENTTEAMS_AGENT_RATE_PER_MIN`) and 10 per
+  minute per IP for create, join and preview (`AGENTTEAMS_IP_RATE_PER_MIN`). On Vercel they are best-effort
+  per instance.
+- `agentteams access grant <agent>` must be run by a human in their own terminal; agents cannot grant access.
+- Your GitHub token is sent once to the hub you name (the CLI tells you when) and redirects are refused.
+  Only join hubs you trust.
+- `agentteams worktree <task> --remove` removes a finished task's worktree.
+
+### First-deploy checklist
+
+- [ ] `curl https://<prod>/health` returns `{"ok":true,"mode":"hosted"}`.
+- [ ] `curl https://<prod>/nope` returns a JSON 404 from the hub.
+- [ ] `curl -sI https://<prod>/api/team/status` returns 401 with `WWW-Authenticate`.
+- [ ] The build log shows the migrations ran.
+- [ ] Runtime `DATABASE_URL` is the Neon pooled URL.
+- [ ] Previews use a Neon branch database.
+- [ ] Deployment Protection is off for production, or you use the production domain.
+
+### Self-hosting with Node
+
+```bash
+AGENTTEAMS_MODE=hosted DATABASE_URL=postgres://... AGENTTEAMS_ALLOWED_HOSTS=hub.example.com node packages/hub/dist/bin.js
+```
+
+Run it behind any TLS proxy that overwrites the client-IP headers. Single instance: limits are exact.
 
 ## Run the hub on its own
 

@@ -25,6 +25,8 @@ export interface AgentsTable {
   api_key_hash: string;
   last_seen_at: string | null;
   created_at: string;
+  github_login: string | null;
+  github_id: number | null;
 }
 
 export interface MessagesTable {

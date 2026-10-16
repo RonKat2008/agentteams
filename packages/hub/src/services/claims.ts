@@ -39,10 +39,11 @@ const toView = ({ agentId: _agentId, ...view }: ClaimView & { agentId: string })
 
 export async function claimFiles(ctx: HubContext, actor: Actor, input: ClaimFilesInput): Promise<ClaimResult> {
   const p = parseInput(ClaimFilesInput, input);
-  const nowIso = ctx.now().toISOString();
-  const expiresAt = new Date(ctx.now().getTime() + p.ttlMin * MS_PER_MIN).toISOString();
   // Check and write in one transaction so concurrent claims cannot interleave.
   return withTx(ctx, async (tx): Promise<ClaimResult> => {
+    // Computed inside the body so a serialization retry uses a fresh clock reading.
+    const nowIso = tx.now().toISOString();
+    const expiresAt = new Date(tx.now().getTime() + p.ttlMin * MS_PER_MIN).toISOString();
     const others = (await listActiveClaims(tx, actor.teamId)).filter((c) => c.agentId !== actor.id);
     const conflicts = others.filter((c) => (p.exclusive || c.exclusive) && p.globs.some((g) => globsOverlap(g, c.glob)));
     if (conflicts.length > 0) return { granted: false, claims: [], conflicts: conflicts.map(toView) };

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm build && node packages/hub/dist/bin-migrate.js",
+  "outputDirectory": "public",
+  "functions": {
+    "api/index.mjs": { "excludeFiles": "{**/better-sqlite3/**,**/node_modules/better-sqlite3/**}" }
+  },
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
+}

@@ -1,11 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import type { InvitePreview, ToolKind } from '@agentteams/shared';
+import { defaultMemberName, type InvitePreview, type ToolKind } from '@agentteams/shared';
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
+import { githubTokenFor } from './hostedAuth.js';
 import { hubUrlFrom } from '../paths.js';
-import { checkTeamDir, defaultMemberName, detectGithubSlug, real, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, real, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 
 export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean; clone: boolean; dir?: string }
@@ -45,7 +46,8 @@ async function resolveRepoPath(deps: CliDeps, preview: InvitePreview, opts: Join
   const local = await detectGithubSlug(deps, deps.cwd);
   if (local?.toLowerCase() === slug.toLowerCase()) return repoRoot(deps, deps.cwd);
   if (!opts.clone) {
-    deps.err(`warning: this team is linked to ${slug} but this directory's origin is ${local ?? 'none'}`);
+    const origin = local ?? ((await deps.exec('git', ['remote', 'get-url', 'origin'], { cwd: deps.cwd })).code === 0 ? 'not a GitHub repo' : 'none');
+    deps.err(`warning: this team is linked to ${slug} but this directory's origin is ${origin}`);
     return repoRoot(deps, deps.cwd);
   }
   const target = opts.dir ? (isAbsolute(opts.dir) ? opts.dir : resolve(deps.cwd, opts.dir)) : join(deps.cwd, slug.split('/')[1]!);
@@ -63,10 +65,11 @@ export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): 
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const client = new HubClient(hubUrl, { fetch: deps.fetch });
   const preview = await client.previewInvite(code);
+  const githubToken = await githubTokenFor(deps, hubUrl); // before cloning anything
   const repoPath = await resolveRepoPath(deps, preview, opts);
   await checkTeamDir(deps, repoPath);
-  const member = opts.as ?? defaultMemberName(deps.username);
-  const res = await client.joinTeam({ inviteCode: code, member, tool: opts.agent });
+  const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
+  const res = await client.joinTeam({ inviteCode: code, tool: opts.agent, ...identity });
   const cred = {
     repoPath, tool: opts.agent, hubUrl, teamName: res.teamName, agentName: res.agentName,
     apiKey: res.apiKey, createdAt: new Date().toISOString(),

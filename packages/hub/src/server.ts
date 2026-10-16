@@ -1,15 +1,24 @@
 import type { AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
 import { DEFAULT_HUB_PORT } from '@agentteams/shared';
+import { githubVerifier, type GithubVerifier } from './github.js';
 import { createContext } from './context.js';
 import { migrateToLatest } from './db/migrations.js';
-import { createSqliteDb } from './db/sqlite.js';
+import { createDb } from './db/index.js';
 import { createApp } from './http/app.js';
+import type { IpSource } from './http/limits.js';
 
 export interface HubOptions {
-  dbPath: string;
+  dbPath?: string;
+  databaseUrl?: string;
   port?: number;
   host?: string;
+  mode?: 'local' | 'hosted';
+  allowedHosts?: string[];
+  ipSource?: IpSource;
+  rateLimits?: { agentPerMin: number; ipPerMin: number };
+  /** Hosted mode only; defaults to the real GitHub verifier. Tests inject a fake. */
+  verifyGithub?: GithubVerifier;
 }
 
 export interface RunningHub {
@@ -18,7 +27,7 @@ export interface RunningHub {
 }
 
 export async function startHub(opts: HubOptions): Promise<RunningHub> {
-  const db = createSqliteDb(opts.dbPath);
+  const { db, dialect } = await createDb({ sqlitePath: opts.dbPath, databaseUrl: opts.databaseUrl });
   try {
     await migrateToLatest(db);
   } catch (err) {
@@ -26,7 +35,10 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     throw err;
   }
   const hostname = opts.host ?? '127.0.0.1';
-  const app = createApp(createContext(db), hostname === '127.0.0.1' ? { allowedHosts: ['127.0.0.1', 'localhost'] } : {});
+  const allowedHosts = opts.allowedHosts ?? (hostname === '127.0.0.1' ? ['127.0.0.1', 'localhost'] : undefined);
+  const mode = opts.mode ?? 'local';
+  const ctx = createContext(db, { dialect, mode, ...(mode === 'hosted' ? { verifyGithub: opts.verifyGithub ?? githubVerifier() } : {}) });
+  const app = createApp(ctx, { mode: opts.mode, ...(opts.rateLimits ? { rateLimits: opts.rateLimits } : {}), ...(opts.ipSource ? { ipSource: opts.ipSource } : {}), ...(allowedHosts ? { allowedHosts } : {}) });
 
   return new Promise((resolve, reject) => {
     // Only guards startup (e.g. EADDRINUSE); detached once listening so a later error cannot destroy the db.

@@ -2,7 +2,8 @@
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parsePort, resolveHome } from './config.js';
+import { loadHubConfig, type HubConfig } from './config.js';
+import { redact } from './redact.js';
 import { startHub } from './server.js';
 
 const fail = (message: string): never => {
@@ -10,25 +11,30 @@ const fail = (message: string): never => {
   process.exit(1);
 };
 
-let home: string;
+let config: HubConfig;
 try {
-  home = resolveHome(process.env.AGENTTEAMS_HOME, homedir());
+  config = loadHubConfig(process.env, homedir());
 } catch (err) {
-  home = fail((err as Error).message);
+  config = fail((err as Error).message);
 }
-mkdirSync(home, { recursive: true, mode: 0o700 });
+if (!config.databaseUrl) mkdirSync(config.home, { recursive: true, mode: 0o700 });
 
-let port: number;
-try {
-  port = parsePort(process.env.AGENTTEAMS_PORT);
-} catch (err) {
-  port = fail((err as Error).message);
-}
-
-const hub = await startHub({ dbPath: join(home, 'hub.db'), port }).catch((err: Error) =>
-  fail(`failed to start: ${err.message}`),
+const hub = await startHub({
+  dbPath: join(config.home, 'hub.db'),
+  databaseUrl: config.databaseUrl,
+  port: config.port,
+  host: config.host,
+  mode: config.mode,
+  allowedHosts: config.allowedHosts,
+  ipSource: config.ipSource,
+  ...(config.mode === 'hosted' ? { rateLimits: config.rateLimits } : {}), // local mode is unlimited
+}).catch((err: Error) => fail(`failed to start: ${redact(err.message)}`));
+// Never log DATABASE_URL or other secrets.
+console.log(
+  config.mode === 'hosted'
+    ? `agentteams hub (hosted) listening on ${hub.url}`
+    : `agentteams hub listening on ${hub.url} (data: ${config.home})`,
 );
-console.log(`agentteams hub listening on ${hub.url} (data: ${home})`);
 
 const shutdown = () => {
   hub.close().finally(() => process.exit(0));

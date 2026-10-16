@@ -33,7 +33,7 @@ const git = async (cwd: string, ...args: string[]) => {
 const mkDeps = (env: NodeJS.ProcessEnv = {}): CliDeps => ({
   env: { AGENTTEAMS_HOME: join(tmp, 'ahome'), ...env }, cwd: repo, exec: realExec, fetch: globalThis.fetch,
   out: () => {}, write: () => {}, err: (l) => err.push(l), readStdin: async () => '',
-  homedir: join(tmp, 'home'), username: 'T',
+  homedir: join(tmp, 'home'), username: 'T', isTTY: false, prompt: async () => '',
 });
 const mcp = async (key: string, name: string, args: Record<string, unknown>) => {
   const client = new Client({ name: 'test', version: '0' });

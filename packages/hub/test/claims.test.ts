@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTestContext, seedTeam, type TestEnv } from './helpers.js';
-import { checkFiles, claimFiles, globsOverlap, recordClaimOverride, releaseFiles, whoOwns } from '../src/services/claims.js';
+import { checkFiles, claimFiles, listActiveClaims, globsOverlap, recordClaimOverride, releaseFiles, whoOwns } from '../src/services/claims.js';
 import { readInbox } from '../src/services/messages.js';
 import { getActivity } from '../src/services/activity.js';
 import { createTeam } from '../src/services/teams.js';
@@ -25,6 +25,16 @@ describe('globsOverlap', () => {
 });
 
 describe('claimFiles', () => {
+  it('grants exactly one of two concurrent overlapping exclusive claims', async () => {
+    const { ash, dylan } = await seedTeam(env);
+    const [a, b] = await Promise.all([
+      claimFiles(env.ctx, ash, { globs: ['src/auth/**'] }),
+      claimFiles(env.ctx, dylan, { globs: ['src/auth/login.ts'] }),
+    ]);
+    expect([a.granted, b.granted].filter(Boolean)).toHaveLength(1);
+    expect(await listActiveClaims(env.ctx, ash.teamId)).toHaveLength(1);
+  });
+
   it('grants a free claim and shows it in team status', async () => {
     const { ash, ronit } = await seedTeam(env);
     const res = await claimFiles(env.ctx, ash, { globs: ['src/auth/**'] });

@@ -1,12 +1,13 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { RepoLink, ToolKind } from '@agentteams/shared';
+import { defaultMemberName, type RepoLink, type ToolKind } from '@agentteams/shared';
 import { saveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
 import { HubClient } from '../hubClient.js';
+import { githubTokenFor } from './hostedAuth.js';
 import { hubUrlFrom } from '../paths.js';
-import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
@@ -102,11 +103,11 @@ async function commitInstructions(deps: CliDeps, dir: string): Promise<void> {
 }
 
 async function registerTeam(
-  deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink,
+  deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink, githubToken: string | undefined,
 ): Promise<Credential> {
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
-  const member = opts.as ?? defaultMemberName(deps.username);
-  const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, member, tool: opts.agent, repo });
+  const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
+  const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, tool: opts.agent, repo, ...identity });
   const cred = {
     repoPath, tool: opts.agent, hubUrl, teamName: res.teamName, agentName: res.agentName,
     apiKey: res.apiKey, createdAt: new Date().toISOString(),
@@ -121,10 +122,12 @@ async function registerTeam(
 export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<void> {
   // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
   await checkTeamDir(opts.newRepo ? { ...deps, err: () => {} } : deps, deps.cwd);
+  // Before any side effect (repo creation); hosted hubs need the gh identity once.
+  const githubToken = await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env));
   if (!opts.newRepo) {
     const repoPath = await repoRoot(deps, deps.cwd);
     const repo = await resolveRepoLink(deps, opts, repoPath);
-    const cred = await registerTeam(deps, name, opts, repoPath, repo);
+    const cred = await registerTeam(deps, name, opts, repoPath, repo, githubToken);
     if (opts.install) printReport(deps, await runInstallers(deps, cred));
     return;
   }
@@ -135,7 +138,7 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
     const repo = await newRepoLink(deps, dir);
     created = repo.slug ?? created;
     stage = 'registering the team';
-    const cred = await registerTeam(deps, name, opts, dir, repo);
+    const cred = await registerTeam(deps, name, opts, dir, repo, githubToken);
     if (opts.install) {
       printReport(deps, await runInstallers(deps, cred));
       await commitInstructions(deps, dir);

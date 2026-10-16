@@ -53,7 +53,8 @@ export function formatStatus(status: TeamStatus, me: string): string {
   ];
   for (const a of status.agents) {
     if (a.name === me) continue;
-    let line = `- ${oneLine(a.name)} (${oneLine(a.member)}, ${oneLine(a.tool)}) — ${a.presence}`;
+    const login = a.githubLogin ? ` (@${oneLine(a.githubLogin)})` : '';
+    let line = `- ${oneLine(a.name)}${login} (${oneLine(a.member)}, ${oneLine(a.tool)}) — ${a.presence}`;
     if (a.currentTask) line += `, working on #${a.currentTask.number} ${oneLine(a.currentTask.title)}`;
     if (a.claims.length > 0) line += `; claims: ${a.claims.map(oneLine).join(', ')}`;
     lines.push(line);

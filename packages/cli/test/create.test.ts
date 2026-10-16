@@ -156,13 +156,26 @@ describe('create --new-repo', () => {
 
   it('gives recovery guidance when the hub fails after the GitHub repo was created', async () => {
     const t = mk(scriptedExec(okGh, []));
-    t.deps.fetch = (async () => { throw new Error('hub down'); }) as typeof fetch;
+    // The hub answers the up-front /health check, then dies before team creation.
+    t.deps.fetch = (async (input, init) => {
+      if (String(input).endsWith('/health')) return fetch(input, init);
+      throw new Error('hub down');
+    }) as typeof fetch;
     expect(await run(t, 'create', 'app', '--hub', hub.url, '--new-repo', '--owner', 'me', '--no-install')).toBe(1);
     const dir = join(t.deps.cwd, 'app');
     const msg = t.err.join('\n');
     expect(msg).toContain('GitHub repo me/app was created and the local folder');
     expect(msg).toContain(`To finish, run: cd ${dir} && agentteams create app`);
     expect(existsSync(join(dir, '.git'))).toBe(true);
+  });
+
+  it('does not create a GitHub repo when the hub is unreachable', async () => {
+    const ghCalls: GhCall[] = [];
+    const t = mk(scriptedExec(okGh, ghCalls));
+    t.deps.fetch = (async () => { throw new Error('hub down'); }) as typeof fetch;
+    expect(await run(t, 'create', 'app', '--hub', hub.url, '--new-repo', '--owner', 'me', '--no-install')).toBe(1);
+    expect(ghCalls).toEqual([]);
+    expect(existsSync(join(t.deps.cwd, 'app'))).toBe(false);
   });
 
   it('conflicts with --repo and --local', async () => {

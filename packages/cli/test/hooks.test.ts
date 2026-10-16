@@ -77,6 +77,19 @@ describe('runHook', () => {
     expect((await runHook('stop', JSON.stringify({ cwd: repo }), 'codex', t.deps)).stdout).toBe('');
   });
 
+  it('two consecutive stop hooks with no new messages block only once', async () => {
+    await ronitSend('ash-codex', 'first command', 'command');
+    await ronitSend('ash-codex', 'second command', 'command');
+    await ronitSend('ash-codex', 'context fyi', 'fyi');
+    const first = JSON.parse((await runHook('stop', JSON.stringify({ cwd: repo }), 'codex', t.deps)).stdout) as { decision: string; reason: string };
+    expect(first.decision).toBe('block');
+    expect(first.reason).toContain('first command');
+    expect(first.reason).toContain('second command');
+    expect((await runHook('stop', JSON.stringify({ cwd: repo }), 'codex', t.deps)).stdout).toBe('');
+    expect((await runHook('stop', JSON.stringify({ cwd: repo }), 'codex', t.deps)).stdout).toBe('');
+    expect((await new HubClient(hub.url, { apiKey: (await loadCredentials(t.deps))[0]!.apiKey }).ping(false)).messages).toEqual([]);
+  });
+
   it('caps injected messages and leaves the rest unread', async () => {
     for (let i = 1; i <= 25; i++) await ronitSend('ash-codex', `msg-${String(i).padStart(2, '0')}`, 'fyi');
     const res = await runHook('post-tool-use', JSON.stringify({ cwd: repo }), 'codex', t.deps);

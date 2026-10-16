@@ -1,9 +1,11 @@
 import { Hono, type Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { createMiddleware } from 'hono/factory';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Actor, HubContext } from '../context.js';
 import { DomainError, type ErrorCode } from '../errors.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { clientIp, createTokenBucket, type IpSource } from './limits.js';
 import { buildMcpServer } from '../mcp/server.js';
 import { getActivity } from '../services/activity.js';
 import { checkFiles, recordClaimOverride, whoOwns } from '../services/claims.js';
@@ -17,7 +19,7 @@ import {
 export type AppEnv = { Variables: { actor: Actor } };
 
 const STATUS: Record<ErrorCode, ContentfulStatusCode> = {
-  unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, invalid: 400,
+  unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, invalid: 400, rate_limited: 429,
 };
 
 function taskNumber(c: Context): number {
@@ -49,7 +51,21 @@ export function requireAgent(ctx: HubContext) {
 export interface AppOptions {
   /** When set, requests whose Host hostname is not listed are refused (DNS-rebinding/CSRF guard for the local hub). */
   allowedHosts?: string[];
+  /** 'hosted' trusts proxy client-IP headers and is reported on /health. Default 'local'. */
+  mode?: 'local' | 'hosted';
+  /** Trusted client-IP source in hosted mode. Default 'socket'. */
+  ipSource?: IpSource;
+  /** Per-minute budgets: per authenticated agent, and per client IP on the unauthenticated routes. */
+  rateLimits?: { agentPerMin: number; ipPerMin: number };
+  /** Clock for the rate limiters (ms); injectable so tests need not sleep. */
+  now?: () => number;
 }
+
+const MAX_BODY_BYTES = 64 * 1024;
+const DEFAULT_RATE_LIMITS = { agentPerMin: 300, ipPerMin: 10 };
+const WWW_AUTHENTICATE = 'Bearer realm="agentteams"';
+
+class AuthPassed extends Error {}
 
 function hostnameOf(host: string): string {
   if (host.startsWith('[')) return host.slice(0, host.indexOf(']') + 1).toLowerCase();
@@ -58,14 +74,35 @@ function hostnameOf(host: string): string {
 
 export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const mode = opts.mode ?? 'local';
+  const ipSource = opts.ipSource ?? 'socket';
+  const now = opts.now ?? Date.now;
+  // Local mode is one user on loopback: every client shares the socket IP and test/CLI traffic is bursty,
+  // so limits are on by default only when hosted (or when explicitly configured).
+  const limits = opts.rateLimits ?? (mode === 'hosted' ? DEFAULT_RATE_LIMITS : undefined);
+  const ipBucket = limits ? createTokenBucket(limits.ipPerMin, now) : undefined;
+  const agentBucket = limits ? createTokenBucket(limits.agentPerMin, now) : undefined;
+  // Hook pings are frequent and automatic; a separate bucket keeps them from starving MCP/tool calls.
+  const pingBucket = limits ? createTokenBucket(limits.agentPerMin, now) : undefined;
+
+  const limited = (c: Context, retryAfterSec: number) => {
+    c.header('Retry-After', String(retryAfterSec));
+    return c.json({ error: { code: 'rate_limited', message: `too many requests; retry in ${retryAfterSec}s` } }, 429);
+  };
 
   app.onError((err, c) => {
-    if (err instanceof DomainError) return c.json({ error: { code: err.code, message: err.message } }, STATUS[err.code]);
+    if (err instanceof DomainError) {
+      if (err.code === 'unauthorized') c.header('WWW-Authenticate', WWW_AUTHENTICATE);
+      return c.json({ error: { code: err.code, message: err.message } }, STATUS[err.code]);
+    }
     console.error('[agentteams-hub] unhandled error', err);
     return c.json({ error: { code: 'internal', message: 'internal error' } }, 500);
   });
 
   app.notFound((c) => c.json({ error: { code: 'not_found', message: 'route not found' } }, 404));
+
+  // Registered before the Host allowlist: platform health checks hit the machine with an internal Host.
+  app.get('/health', (c) => c.json({ ok: true, mode }));
 
   if (opts.allowedHosts) {
     const allowed = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));
@@ -75,6 +112,13 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
       await next();
     });
   }
+
+  const tooLarge = bodyLimit({
+    maxSize: MAX_BODY_BYTES,
+    onError: (c) => c.json({ error: { code: 'invalid', message: 'request body too large' } }, 413),
+  });
+  app.use('/api/*', tooLarge);
+  app.use('/mcp', tooLarge);
 
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'POST') {
@@ -88,13 +132,44 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
     await next();
   });
 
-  app.get('/health', (c) => c.json({ ok: true }));
+  const ipLimit = createMiddleware<AppEnv>(async (c, next) => {
+    const r = ipBucket?.take(clientIp(c, mode, ipSource));
+    if (r && !r.ok) return limited(c, r.retryAfterSec);
+    await next();
+  });
+  app.use('/api/teams', ipLimit);
+  app.use('/api/join', ipLimit);
+  app.use('/api/join/preview', ipLimit);
+
   app.post('/api/teams', async (c) => c.json(await createTeam(ctx, (await body(c)) as never), 201));
   app.post('/api/join', async (c) => c.json(await joinTeam(ctx, (await body(c)) as never), 201));
 
   app.post('/api/join/preview', async (c) => c.json(await previewInvite(ctx, (await body(c)) as never)));
 
-  app.use('/api/team/*', requireAgent(ctx));
+  const agentLimit = createMiddleware<AppEnv>(async (c, next) => {
+    const bucket = c.req.method === 'POST' && c.req.path === '/api/team/ping' ? pingBucket : agentBucket;
+    const r = bucket?.take(c.get('actor').id);
+    if (r && !r.ok) return limited(c, r.retryAfterSec);
+    await next();
+  });
+
+  // Failed auth spends an IP token so API-key guessing is throttled like the other unauthenticated routes.
+  const authenticated = createMiddleware<AppEnv>(async (c, next) => {
+    try {
+      await requireAgent(ctx)(c, async () => {
+        throw new AuthPassed();
+      });
+    } catch (err) {
+      if (!(err instanceof AuthPassed)) {
+        const r = err instanceof DomainError && err.code === 'unauthorized' ? ipBucket?.take(clientIp(c, mode, ipSource)) : undefined;
+        if (r && !r.ok) return limited(c, r.retryAfterSec);
+        throw err;
+      }
+    }
+    await next();
+  });
+
+  app.use('/api/team/*', authenticated, agentLimit);
   app.post('/api/team/ping', async (c) => {
     const actor = c.get('actor');
     return c.json({ agent: actor.name, messages: await readInbox(ctx, actor, (await body(c)) as never) });
@@ -121,7 +196,7 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   app.post('/api/team/invite/rotate', async (c) => c.json(await rotateInvite(ctx, c.get('actor'))));
   app.post('/api/team/invite/revoke', async (c) => c.json(await revokeInvite(ctx, c.get('actor'))));
 
-  app.use('/mcp', requireAgent(ctx));
+  app.use('/mcp', authenticated, agentLimit);
   app.get('/mcp', (c) => c.body(null, 405)); // stateless: no server-initiated SSE stream
   app.all('/mcp', async (c) => {
     const server = buildMcpServer(ctx, c.get('actor'));

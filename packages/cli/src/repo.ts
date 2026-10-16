@@ -3,7 +3,6 @@ import { parse } from 'node:path';
 import type { CliDeps } from './deps.js';
 
 type ExecDeps = Pick<CliDeps, 'exec'>;
-const MEMBER_MAX = 24;
 
 export async function repoRoot(deps: ExecDeps, cwd: string): Promise<string> {
   const res = await deps.exec('git', ['rev-parse', '--show-toplevel'], { cwd });
@@ -33,9 +32,4 @@ export async function detectGithubSlug(deps: ExecDeps, cwd: string): Promise<str
   if (res.code !== 0) return null;
   const m = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(res.stdout.trim());
   return m ? `${m[1]}/${m[2]}` : null;
-}
-
-export function defaultMemberName(username: string): string {
-  const cleaned = username.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, MEMBER_MAX);
-  return cleaned || 'user';
 }

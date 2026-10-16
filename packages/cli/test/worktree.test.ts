@@ -153,4 +153,55 @@ describe('agentteams worktree', () => {
     expect(await run(repo, 'worktree', 'abc')).toBe(1);
     expect(cli.err.join('\n')).toMatch(/positive integer/);
   });
+
+  describe('--remove', () => {
+    const wtPath = () => join(tmp, 'proj.at', 'dylan-claude-1');
+
+    it('removes a clean task worktree, keeps the branch and prints what it removed', async () => {
+      expect(await run(repo, 'worktree', '1')).toBe(0);
+      cli.out.length = 0;
+      expect(await run(repo, 'worktree', '1', '--remove')).toBe(0);
+      expect(existsSync(wtPath())).toBe(false);
+      expect(await git(repo, 'branch', '--list', 'at/dylan-claude/1')).toContain('at/dylan-claude/1');
+      expect(cli.out.join('\n')).toContain(`Removed worktree ${wtPath()} (branch at/dylan-claude/1 kept)`);
+      expect(await git(repo, 'worktree', 'list')).not.toContain('dylan-claude-1');
+    });
+
+    it('refuses uncommitted changes without --force and leaves the worktree', async () => {
+      expect(await run(repo, 'worktree', '1')).toBe(0);
+      writeFileSync(join(wtPath(), 'a.txt'), 'changed\n');
+      expect(await run(repo, 'worktree', '1', '--remove')).toBe(1);
+      expect(cli.err.join('\n')).toContain('uncommitted changes');
+      expect(cli.err.join('\n')).toContain('--force');
+      expect(readFileSync(join(wtPath(), 'a.txt'), 'utf8')).toBe('changed\n');
+    });
+
+    it('refuses untracked files without --force', async () => {
+      expect(await run(repo, 'worktree', '1')).toBe(0);
+      writeFileSync(join(wtPath(), 'new.txt'), 'x\n');
+      expect(await run(repo, 'worktree', '1', '--remove')).toBe(1);
+      expect(existsSync(join(wtPath(), 'new.txt'))).toBe(true);
+    });
+
+    it('--force removes a dirty worktree', async () => {
+      expect(await run(repo, 'worktree', '1')).toBe(0);
+      writeFileSync(join(wtPath(), 'a.txt'), 'changed\n');
+      expect(await run(repo, 'worktree', '1', '--remove', '--force')).toBe(0);
+      expect(existsSync(wtPath())).toBe(false);
+      expect(cli.out.join('\n')).toContain(`Removed worktree ${wtPath()}`);
+    });
+
+    it('does not claim the task, and errors when there is no worktree', async () => {
+      expect(await run(repo, 'worktree', '1', '--remove')).toBe(1);
+      expect(cli.err.join('\n')).toContain(`no worktree for task #1 at ${wtPath()}`);
+      expect((await client.getTask(1)).status).not.toBe('in_progress');
+    });
+
+    it('refuses an unrelated directory at the path', async () => {
+      mkdirSync(wtPath(), { recursive: true });
+      writeFileSync(join(wtPath(), 'keep.txt'), 'mine');
+      expect(await run(repo, 'worktree', '1', '--remove', '--force')).toBe(1);
+      expect(readFileSync(join(wtPath(), 'keep.txt'), 'utf8')).toBe('mine');
+    });
+  });
 });

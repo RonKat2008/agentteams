@@ -32,6 +32,14 @@ export const MemberName = z
   .regex(/^[a-z0-9_]{1,24}$/, 'member name must be 1-24 characters of a-z, 0-9 or _');
 export type MemberName = z.infer<typeof MemberName>;
 
+export const MEMBER_NAME_MAX = 24;
+
+/** The one rule for turning a username (e.g. a GitHub login) into a valid member name. */
+export function defaultMemberName(username: string): string {
+  const cleaned = username.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, MEMBER_NAME_MAX);
+  return cleaned || 'user';
+}
+
 export const AgentName = z
   .string().trim().toLowerCase()
   .regex(/^[a-z0-9_]{1,24}-[a-z0-9-]{1,30}$/, 'agent names look like <member>-<tool>, e.g. ronit-claude');
@@ -56,13 +64,17 @@ export const RepoLink = z
   });
 export type RepoLink = z.output<typeof RepoLink>;
 
+/** Validated by the hub only in hosted mode; local mode must ignore whatever a client sends. */
+const GithubToken = z.unknown();
+
 export const CreateTeamInput = z.object({
   name: z.string().trim().min(1).max(64)
     .refine(singleLine, `team name ${SINGLE_LINE_MESSAGE}`)
     .refine(noMarkup, 'team name must not contain < or >'),
-  member: MemberName,
+  member: MemberName.optional(), // required in local mode; ignored in hosted mode (derived from GitHub)
   tool: ToolKind,
   repo: RepoLink,
+  githubToken: GithubToken.optional(),
 });
 export type CreateTeamInput = z.input<typeof CreateTeamInput>;
 
@@ -70,8 +82,9 @@ const InviteCode = z.string().trim().min(1).max(64);
 
 export const JoinTeamInput = z.object({
   inviteCode: InviteCode,
-  member: MemberName,
+  member: MemberName.optional(), // required in local mode; ignored in hosted mode (derived from GitHub)
   tool: ToolKind,
+  githubToken: GithubToken.optional(),
 });
 export type JoinTeamInput = z.input<typeof JoinTeamInput>;
 

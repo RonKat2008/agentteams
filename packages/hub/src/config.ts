@@ -1,5 +1,6 @@
 import { isAbsolute, join } from 'node:path';
 import { DEFAULT_HUB_PORT } from '@agentteams/shared';
+import type { IpSource } from './http/limits.js';
 
 
 const MAX_PORT = 65535;
@@ -18,4 +19,79 @@ export function parsePort(value: string | undefined): number {
     throw new Error(`AGENTTEAMS_PORT must be an integer between 1 and 65535 (got "${value}")`);
   }
   return port;
+}
+
+export interface HubConfig {
+  mode: 'local' | 'hosted';
+  host: string;
+  port: number;
+  home: string;
+  databaseUrl?: string;
+  /** Host allowlist; undefined means none is applied (Vercel routes by Host, so it is unnecessary there). */
+  allowedHosts?: string[];
+  /** Which header, if any, carries the trusted client IP (hosted mode only). */
+  ipSource: IpSource;
+  rateLimits: { agentPerMin: number; ipPerMin: number };
+}
+
+const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
+
+function parseMode(value: string | undefined): 'local' | 'hosted' {
+  if (value === undefined || value === '' || value === 'local') return 'local';
+  if (value === 'hosted') return 'hosted';
+  throw new Error(`AGENTTEAMS_MODE must be "local" or "hosted" (got "${value}")`);
+}
+
+export const DEFAULT_AGENT_RATE_PER_MIN = 300;
+export const DEFAULT_IP_RATE_PER_MIN = 10;
+
+function parseRate(name: string, value: string | undefined, fallback: number): number {
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+    throw new Error(`${name} must be a positive integer (got "${value}")`);
+  }
+  return Number(value);
+}
+
+const HEADER_NAME = /^[a-z0-9-]+$/;
+
+function parseIpSource(env: NodeJS.ProcessEnv, mode: 'local' | 'hosted'): IpSource {
+  if (mode !== 'hosted') return 'socket';
+  if (env.VERCEL === '1') return 'vercel';
+  if ((env.FLY_APP_NAME ?? '') !== '') return 'fly';
+  const header = (env.AGENTTEAMS_TRUSTED_IP_HEADER ?? '').trim();
+  if (header === '') return 'socket';
+  if (!HEADER_NAME.test(header)) {
+    throw new Error(`AGENTTEAMS_TRUSTED_IP_HEADER must be a lowercase header name (got "${header}")`);
+  }
+  if (header === 'x-forwarded-for' && env.AGENTTEAMS_TRUSTED_PROXY_APPENDS !== '1') {
+    throw new Error(
+      'AGENTTEAMS_TRUSTED_IP_HEADER=x-forwarded-for needs AGENTTEAMS_TRUSTED_PROXY_APPENDS=1 (the hub uses the last entry); prefer a header your proxy overwrites, such as x-real-ip',
+    );
+  }
+  return { header };
+}
+
+/** Reads the hub's environment into a validated config; throws with a clear message on bad input. */
+export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfig {
+  const mode = parseMode(env.AGENTTEAMS_MODE);
+  const explicit = (env.AGENTTEAMS_ALLOWED_HOSTS ?? '').split(',').map((h) => h.trim()).filter((h) => h !== '');
+  const onVercel = mode === 'hosted' && env.VERCEL === '1';
+  if (mode === 'hosted' && explicit.length === 0 && !onVercel) {
+    throw new Error('AGENTTEAMS_ALLOWED_HOSTS is required in hosted mode');
+  }
+  const allowedHosts = explicit.length > 0 ? explicit : onVercel ? undefined : LOCAL_HOSTS;
+  return {
+    mode,
+    host: env.AGENTTEAMS_HOST || '127.0.0.1',
+    port: parsePort(env.AGENTTEAMS_PORT),
+    home: resolveHome(env.AGENTTEAMS_HOME, homeDir),
+    databaseUrl: env.DATABASE_URL || undefined,
+    ...(allowedHosts ? { allowedHosts } : {}),
+    ipSource: parseIpSource(env, mode),
+    rateLimits: {
+      agentPerMin: parseRate('AGENTTEAMS_AGENT_RATE_PER_MIN', env.AGENTTEAMS_AGENT_RATE_PER_MIN, DEFAULT_AGENT_RATE_PER_MIN),
+      ipPerMin: parseRate('AGENTTEAMS_IP_RATE_PER_MIN', env.AGENTTEAMS_IP_RATE_PER_MIN, DEFAULT_IP_RATE_PER_MIN),
+    },
+  };
 }
