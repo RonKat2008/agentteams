@@ -125,4 +125,48 @@ describe('MCP proxy', () => {
     expect(textOf(res)).toBe("agentteams hub rejected this agent's API key (re-run agentteams join or install)");
     await downstream.close();
   });
+
+  it('never retries a call that timed out, since the hub may have processed it', async () => {
+    const { McpError, ErrorCode } = await import('@modelcontextprotocol/sdk/types.js');
+    let connects = 0;
+    let calls = 0;
+    const flaky = {
+      callTool: async () => {
+        calls++;
+        throw new McpError(ErrorCode.RequestTimeout, 'Request timed out');
+      },
+      close: async () => undefined,
+    } as unknown as Client;
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await (await createProxyServer({ connect: async () => { connects++; return flaky; }, hubUrl: hub.url })).connect(a);
+    const downstream = new Client({ name: 'codex', version: '0' });
+    await downstream.connect(b);
+
+    const res = await downstream.callTool({ name: 'send_message', arguments: {} });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe('agentteams hub did not respond in time; the call may or may not have completed');
+    expect(calls).toBe(1);
+    expect(connects).toBe(1);
+    await downstream.close();
+  });
+
+  it('treats ConnectionClosed on a sent call like a timeout (no retry)', async () => {
+    const { McpError, ErrorCode } = await import('@modelcontextprotocol/sdk/types.js');
+    let calls = 0;
+    const closed = {
+      callTool: async () => {
+        calls++;
+        throw new McpError(ErrorCode.ConnectionClosed, 'Connection closed');
+      },
+      close: async () => undefined,
+    } as unknown as Client;
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await (await createProxyServer({ connect: async () => closed, hubUrl: hub.url })).connect(a);
+    const downstream = new Client({ name: 'codex', version: '0' });
+    await downstream.connect(b);
+    const res = await downstream.callTool({ name: 'send_message', arguments: {} });
+    expect(textOf(res)).toContain('may or may not have completed');
+    expect(calls).toBe(1);
+    await downstream.close();
+  });
 });

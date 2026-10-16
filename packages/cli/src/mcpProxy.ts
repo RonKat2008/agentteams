@@ -28,6 +28,8 @@ function staticTools(): Promise<Tool[]> {
 
 const AUTH_REJECTED = "agentteams hub rejected this agent's API key (re-run agentteams join or install)";
 
+const AMBIGUOUS = 'agentteams hub did not respond in time; the call may or may not have completed';
+
 function isAuthRejection(e: unknown): boolean {
   if (typeof e !== 'object' || e === null) return false;
   const err = e as { code?: unknown; name?: string; message?: string };
@@ -75,15 +77,29 @@ export async function createProxyServer(opts: ProxyOptions) {
   });
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (!opts.connect) return errorResult('agentteams: no team credentials for this directory');
-    // Transport-level McpErrors mean the client is dead; anything else is a genuine protocol/tool error.
-    const isDeadClient = (e: unknown) =>
-      !(e instanceof McpError) || e.code === ErrorCode.ConnectionClosed || e.code === ErrorCode.RequestTimeout;
+    // Retry once only for failures that happen before the hub could have processed the call: a failed
+    // connect, or a non-McpError transport failure (stale session 404, fetch/network error) from callTool.
+    // McpError ConnectionClosed/RequestTimeout from callTool are ambiguous (the request may have been
+    // sent), so they are never retried. Other McpErrors are genuine protocol/tool errors.
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
+      let client: Client;
       try {
-        return await (await getUpstream()).callTool(req.params);
+        client = await getUpstream();
       } catch (e) {
-        if (!isDeadClient(e)) return errorResult((e as Error).message);
+        lastError = e;
+        continue;
+      }
+      try {
+        return await client.callTool(req.params);
+      } catch (e) {
+        if (e instanceof McpError) {
+          if (e.code !== ErrorCode.ConnectionClosed && e.code !== ErrorCode.RequestTimeout) {
+            return errorResult(e.message);
+          }
+          drop();
+          return errorResult(AMBIGUOUS);
+        }
         drop();
         lastError = e;
       }
