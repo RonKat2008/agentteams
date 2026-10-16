@@ -56,6 +56,13 @@ describe('createVercelHandler', { timeout: 30_000 }, () => {
     expect((await hit('5.5.5.5')).status).toBe(429);
     expect((await hit('6.6.6.6')).status).not.toBe(429);
   });
+
+  it('off Vercel, a spoofed x-vercel-forwarded-for does not create a new rate-limit bucket', async () => {
+    const handler = createVercelHandler({ env: { DATABASE_URL: 'postgres://x', AGENTTEAMS_ALLOWED_HOSTS: HOST }, connect: pgliteHandle });
+    const hit = (ip: string) => handler(req('/api/join/preview', { 'x-vercel-forwarded-for': ip, 'content-type': 'application/json' }, { method: 'POST', body: JSON.stringify({ inviteCode: 'aaaa-bbbb-cccc-dddd' }) }));
+    for (let i = 0; i < 10; i++) expect((await hit(`7.7.7.${i}`)).status).not.toBe(429);
+    expect((await hit('8.8.8.8')).status).toBe(429);
+  });
 });
 
 describe('loadHubConfig on Vercel', () => {

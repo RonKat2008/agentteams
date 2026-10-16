@@ -217,7 +217,7 @@ describe('hardening', () => {
 
   it('rate limits unauthenticated routes per IP (10/min)', async () => {
     let t = 0;
-    const limited = createApp(env.ctx, { mode: 'hosted', now: () => t });
+    const limited = createApp(env.ctx, { mode: 'hosted', ipSource: 'fly', now: () => t });
     const hit = () => limited.request('/api/join/preview', {
       ...json({ inviteCode: 'aaaa-bbbb-cccc-dddd' }), headers: { 'content-type': 'application/json', 'fly-client-ip': '9.9.9.9' },
     });
@@ -273,7 +273,7 @@ describe('hardening', () => {
   });
 
   it('throttles failed auth against the IP limit', async () => {
-    const hosted = createApp(env.ctx, { mode: 'hosted', now: () => 0 });
+    const hosted = createApp(env.ctx, { mode: 'hosted', ipSource: 'fly', now: () => 0 });
     const guess = (path: string) => hosted.request(path, { headers: { authorization: 'Bearer nope', 'fly-client-ip': '7.7.7.7' } });
     for (let i = 0; i < 10; i++) expect((await guess(i % 2 ? '/api/team/status' : '/mcp')).status).toBe(401);
     const res = await guess('/api/team/status');

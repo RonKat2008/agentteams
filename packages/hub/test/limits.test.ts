@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { describe, expect, it, vi } from 'vitest';
-import { clientIp, createTokenBucket, normalizeIp } from '../src/http/limits.js';
+import { describe, expect, it } from 'vitest';
+import { clientIp, createTokenBucket, normalizeIp, type IpSource } from '../src/http/limits.js';
 
 describe('createTokenBucket', () => {
   it('allows 60 per minute then refuses with a retry hint, and refills over time', () => {
@@ -20,19 +20,32 @@ describe('createTokenBucket', () => {
   });
 });
 
-async function ipFor(mode: 'local' | 'hosted', headers: Record<string, string>): Promise<string> {
+async function ipFor(mode: 'local' | 'hosted', headers: Record<string, string>, source?: IpSource): Promise<string> {
   const app = new Hono();
-  app.get('/', (c) => c.text(clientIp(c, mode)));
+  app.get('/', (c) => c.text(clientIp(c, mode, source)));
   return (await app.request('/', { headers })).text();
 }
 
 describe('clientIp', () => {
-  it('hosted prefers Fly-Client-IP, then the first X-Forwarded-For entry', async () => {
-    expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' })).toBe('1.1.1.1');
-    expect(await ipFor('hosted', { 'x-forwarded-for': '2.2.2.2, 3.3.3.3' })).toBe('2.2.2.2');
+  it('vercel source uses the first x-vercel-forwarded-for entry, then x-real-ip, never Fly/XFF', async () => {
+    expect(await ipFor('hosted', { 'x-vercel-forwarded-for': '4.4.4.4, 5.5.5.5', 'x-real-ip': '6.6.6.6' }, 'vercel')).toBe('4.4.4.4');
+    expect(await ipFor('hosted', { 'x-real-ip': '6.6.6.6', 'x-forwarded-for': '2.2.2.2' }, 'vercel')).toBe('6.6.6.6');
+    expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' }, 'vercel')).toBe('unknown');
   });
-  it('local ignores both headers', async () => {
-    expect(await ipFor('local', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' })).toBe('unknown');
+  it('fly source uses fly-client-ip only', async () => {
+    expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' }, 'fly')).toBe('1.1.1.1');
+    expect(await ipFor('hosted', { 'x-forwarded-for': '2.2.2.2', 'x-vercel-forwarded-for': '4.4.4.4' }, 'fly')).toBe('unknown');
+  });
+  it('a configured header source uses that header first comma entry', async () => {
+    expect(await ipFor('hosted', { 'x-client': '3.3.3.3, 9.9.9.9', 'x-forwarded-for': '2.2.2.2' }, { header: 'x-client' })).toBe('3.3.3.3');
+  });
+  it('socket source (the hosted default) ignores every forwarding header, so spoofing makes no new bucket', async () => {
+    const spoof = { 'x-vercel-forwarded-for': '4.4.4.4', 'x-real-ip': '6.6.6.6', 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' };
+    expect(await ipFor('hosted', spoof)).toBe('unknown');
+    expect(await ipFor('hosted', { ...spoof, 'x-vercel-forwarded-for': '8.8.8.8' })).toBe(await ipFor('hosted', spoof));
+  });
+  it('local ignores all headers even with a source', async () => {
+    expect(await ipFor('local', { 'fly-client-ip': '1.1.1.1', 'x-vercel-forwarded-for': '4.4.4.4' }, 'fly')).toBe('unknown');
   });
 });
 
@@ -61,28 +74,5 @@ describe('normalizeIp', () => {
     expect(normalizeIp('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe(normalizeIp('2001:db8:1:2::1'));
     expect(normalizeIp('2001:db8:1:3::1')).not.toBe(normalizeIp('2001:db8:1:2::1'));
     expect(normalizeIp('1.2.3.4')).toBe('1.2.3.4');
-  });
-});
-
-describe('clientIp on Vercel', () => {
-  it('hosted prefers x-vercel-forwarded-for (first entry), then x-real-ip, then Fly/XFF', async () => {
-    expect(await ipFor('hosted', { 'x-vercel-forwarded-for': '4.4.4.4, 5.5.5.5', 'x-real-ip': '6.6.6.6', 'fly-client-ip': '1.1.1.1' })).toBe('4.4.4.4');
-    expect(await ipFor('hosted', { 'x-real-ip': '6.6.6.6', 'fly-client-ip': '1.1.1.1' })).toBe('6.6.6.6');
-    expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1' })).toBe('1.1.1.1');
-  });
-  it('local ignores the Vercel headers', async () => {
-    expect(await ipFor('local', { 'x-vercel-forwarded-for': '4.4.4.4', 'x-real-ip': '6.6.6.6' })).toBe('unknown');
-  });
-});
-
-describe('clientIp with VERCEL=1', () => {
-  it('ignores Fly and X-Forwarded-For fallbacks', async () => {
-    vi.stubEnv('VERCEL', '1');
-    try {
-      expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' })).toBe('unknown');
-      expect(await ipFor('hosted', { 'x-real-ip': '6.6.6.6', 'x-forwarded-for': '2.2.2.2' })).toBe('6.6.6.6');
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 });

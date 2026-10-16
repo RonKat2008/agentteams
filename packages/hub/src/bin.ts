@@ -27,6 +27,7 @@ const hub = await startHub({
   host: config.host,
   mode: config.mode,
   allowedHosts: config.allowedHosts,
+  ipSource: config.ipSource,
 }).catch((err: Error) => fail(`failed to start: ${redact(err.message)}`));
 // Never log DATABASE_URL or other secrets.
 console.log(

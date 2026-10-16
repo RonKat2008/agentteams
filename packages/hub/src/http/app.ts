@@ -5,7 +5,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Actor, HubContext } from '../context.js';
 import { DomainError, type ErrorCode } from '../errors.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { clientIp, createTokenBucket } from './limits.js';
+import { clientIp, createTokenBucket, type IpSource } from './limits.js';
 import { buildMcpServer } from '../mcp/server.js';
 import { getActivity } from '../services/activity.js';
 import { checkFiles, recordClaimOverride, whoOwns } from '../services/claims.js';
@@ -53,6 +53,8 @@ export interface AppOptions {
   allowedHosts?: string[];
   /** 'hosted' trusts proxy client-IP headers and is reported on /health. Default 'local'. */
   mode?: 'local' | 'hosted';
+  /** Trusted client-IP source in hosted mode. Default 'socket'. */
+  ipSource?: IpSource;
   /** Per-minute budgets: per authenticated agent, and per client IP on the unauthenticated routes. */
   rateLimits?: { agentPerMin: number; ipPerMin: number };
   /** Clock for the rate limiters (ms); injectable so tests need not sleep. */
@@ -73,6 +75,7 @@ function hostnameOf(host: string): string {
 export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const mode = opts.mode ?? 'local';
+  const ipSource = opts.ipSource ?? 'socket';
   const now = opts.now ?? Date.now;
   // Local mode is one user on loopback: every client shares the socket IP and test/CLI traffic is bursty,
   // so limits are on by default only when hosted (or when explicitly configured).
@@ -128,7 +131,7 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   });
 
   const ipLimit = createMiddleware<AppEnv>(async (c, next) => {
-    const r = ipBucket?.take(clientIp(c, mode));
+    const r = ipBucket?.take(clientIp(c, mode, ipSource));
     if (r && !r.ok) return limited(c, r.retryAfterSec);
     await next();
   });
@@ -155,7 +158,7 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
       });
     } catch (err) {
       if (!(err instanceof AuthPassed)) {
-        const r = err instanceof DomainError && err.code === 'unauthorized' ? ipBucket?.take(clientIp(c, mode)) : undefined;
+        const r = err instanceof DomainError && err.code === 'unauthorized' ? ipBucket?.take(clientIp(c, mode, ipSource)) : undefined;
         if (r && !r.ok) return limited(c, r.retryAfterSec);
         throw err;
       }

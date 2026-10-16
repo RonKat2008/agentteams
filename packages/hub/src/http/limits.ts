@@ -59,25 +59,28 @@ export function normalizeIp(ip: string): string {
 }
 
 /**
- * Client address for rate limiting. Forwarding headers are trusted only in hosted mode (behind the
- * platform proxy); locally they are attacker-controlled, so the socket address is used.
- *
- * SECURITY: hosted mode trusts x-vercel-forwarded-for / x-real-ip / Fly-Client-IP / X-Forwarded-For exactly as
- * a fronting proxy sets them. The hub must sit behind Vercel or Fly (or a proxy that overwrites those headers); if it is reachable directly,
- * a client can spoof them and evade the per-IP limits. IPv6 addresses are reduced to their /64 prefix.
+ * Where the trusted client address comes from in hosted mode. Chosen once from the platform config
+ * (see loadHubConfig); 'socket' is the safe default.
  */
-export function clientIp(c: Context, mode: 'local' | 'hosted'): string {
-  if (mode === 'hosted') {
-    const vercel = c.req.header('x-vercel-forwarded-for')?.split(',')[0]?.trim();
-    if (vercel) return normalizeIp(vercel);
-    const real = c.req.header('x-real-ip')?.trim();
-    if (real) return normalizeIp(real);
-    // On Vercel only Vercel's own headers are trustworthy; Fly/XFF could be client-supplied.
-    if (process.env.VERCEL === '1') return fallbackIp(c);
-    const fly = c.req.header('fly-client-ip')?.trim();
-    if (fly) return normalizeIp(fly);
-    const first = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
-    if (first) return normalizeIp(first);
+export type IpSource = 'socket' | 'vercel' | 'fly' | { header: string };
+
+const firstEntry = (value: string | undefined): string | undefined => value?.split(',')[0]?.trim() || undefined;
+
+/**
+ * Client address for rate limiting. Forwarding headers are trusted only in hosted mode and only the
+ * ones the configured platform overwrites; every other header is attacker-controlled and ignored.
+ *
+ * SECURITY: the hub must sit behind the platform named by `source` (Vercel, Fly, or a proxy that
+ * overwrites the configured header). IPv6 addresses are reduced to their /64 prefix.
+ */
+export function clientIp(c: Context, mode: 'local' | 'hosted', source: IpSource = 'socket'): string {
+  if (mode === 'hosted' && source !== 'socket') {
+    const header = (name: string) => firstEntry(c.req.header(name));
+    const forwarded =
+      source === 'vercel' ? header('x-vercel-forwarded-for') ?? header('x-real-ip')
+      : source === 'fly' ? header('fly-client-ip')
+      : header(source.header);
+    if (forwarded) return normalizeIp(forwarded);
   }
   return fallbackIp(c);
 }

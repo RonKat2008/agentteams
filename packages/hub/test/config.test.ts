@@ -30,7 +30,7 @@ describe('loadHubConfig', () => {
   it('has local defaults', () => {
     expect(loadHubConfig({}, '/h')).toEqual({
       mode: 'local', host: '127.0.0.1', port: 4747, home: '/h/.agentteams', databaseUrl: undefined,
-      allowedHosts: ['127.0.0.1', 'localhost'],
+      allowedHosts: ['127.0.0.1', 'localhost'], ipSource: 'socket',
     });
   });
   it('requires allowed hosts in hosted mode', () => {
@@ -48,5 +48,28 @@ describe('loadHubConfig', () => {
       mode: 'hosted', host: '0.0.0.0', port: 8080, databaseUrl: 'postgres://x',
       allowedHosts: ['a.example.com', 'b.example.com'],
     });
+  });
+});
+
+describe('trusted client-IP source', () => {
+  const hosted = { AGENTTEAMS_MODE: 'hosted', AGENTTEAMS_ALLOWED_HOSTS: 'h.example.com' };
+  it('is the socket by default, in hosted and local mode', () => {
+    expect(loadHubConfig(hosted, '/h').ipSource).toBe('socket');
+    expect(loadHubConfig({}, '/h').ipSource).toBe('socket');
+  });
+  it('VERCEL=1 selects vercel, taking precedence over Fly and a custom header', () => {
+    expect(loadHubConfig({ ...hosted, VERCEL: '1', FLY_APP_NAME: 'a', AGENTTEAMS_TRUSTED_IP_HEADER: 'x-ip' }, '/h').ipSource).toBe('vercel');
+  });
+  it('FLY_APP_NAME selects fly, taking precedence over a custom header', () => {
+    expect(loadHubConfig({ ...hosted, FLY_APP_NAME: 'a', AGENTTEAMS_TRUSTED_IP_HEADER: 'x-ip' }, '/h').ipSource).toBe('fly');
+  });
+  it('AGENTTEAMS_TRUSTED_IP_HEADER selects that header', () => {
+    expect(loadHubConfig({ ...hosted, AGENTTEAMS_TRUSTED_IP_HEADER: 'cf-connecting-ip' }, '/h').ipSource).toEqual({ header: 'cf-connecting-ip' });
+  });
+  it('rejects a malformed header name', () => {
+    expect(() => loadHubConfig({ ...hosted, AGENTTEAMS_TRUSTED_IP_HEADER: 'X IP' }, '/h')).toThrow(/AGENTTEAMS_TRUSTED_IP_HEADER/);
+  });
+  it('local mode ignores platform env', () => {
+    expect(loadHubConfig({ VERCEL: '1', FLY_APP_NAME: 'a' }, '/h').ipSource).toBe('socket');
   });
 });

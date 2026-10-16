@@ -1,5 +1,6 @@
 import { isAbsolute, join } from 'node:path';
 import { DEFAULT_HUB_PORT } from '@agentteams/shared';
+import type { IpSource } from './http/limits.js';
 
 
 const MAX_PORT = 65535;
@@ -27,6 +28,8 @@ export interface HubConfig {
   home: string;
   databaseUrl?: string;
   allowedHosts: string[];
+  /** Which header, if any, carries the trusted client IP (hosted mode only). */
+  ipSource: IpSource;
 }
 
 /** Host names (no scheme) Vercel gives this deployment: the production alias and the unique deployment URL. */
@@ -44,6 +47,20 @@ function parseMode(value: string | undefined): 'local' | 'hosted' {
   throw new Error(`AGENTTEAMS_MODE must be "local" or "hosted" (got "${value}")`);
 }
 
+const HEADER_NAME = /^[a-z0-9-]+$/;
+
+function parseIpSource(env: NodeJS.ProcessEnv, mode: 'local' | 'hosted'): IpSource {
+  if (mode !== 'hosted') return 'socket';
+  if (env.VERCEL === '1') return 'vercel';
+  if ((env.FLY_APP_NAME ?? '') !== '') return 'fly';
+  const header = (env.AGENTTEAMS_TRUSTED_IP_HEADER ?? '').trim();
+  if (header === '') return 'socket';
+  if (!HEADER_NAME.test(header)) {
+    throw new Error(`AGENTTEAMS_TRUSTED_IP_HEADER must be a lowercase header name (got "${header}")`);
+  }
+  return { header };
+}
+
 /** Reads the hub's environment into a validated config; throws with a clear message on bad input. */
 export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfig {
   const mode = parseMode(env.AGENTTEAMS_MODE);
@@ -57,5 +74,6 @@ export function loadHubConfig(env: NodeJS.ProcessEnv, homeDir: string): HubConfi
     home: resolveHome(env.AGENTTEAMS_HOME, homeDir),
     databaseUrl: env.DATABASE_URL || undefined,
     allowedHosts: listed.length > 0 ? listed : LOCAL_HOSTS,
+    ipSource: parseIpSource(env, mode),
   };
 }
