@@ -1,5 +1,5 @@
 {
-  "name": "agentteams",
+  "name": "agentteams-monorepo",
   "private": true,
   "packageManager": "pnpm@12.8.1",
   "type": "module",
@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "pnpm -r build",
+    "pack:cli": "pnpm build && cd packages/agentteams && npm pack",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",

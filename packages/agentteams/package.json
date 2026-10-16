@@ -1,0 +1,40 @@
+{
+  "name": "agentteams",
+  "version": "0.2.0",
+  "description": "Coordinate multiple AI coding agents working in the same repo.",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "bin": {
+    "agentteams": "dist/bin.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup && node scripts/copy-docs.mjs && chmod +x dist/bin.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "commander": "^15.0.0",
+    "hono": "^4.13.13",
+    "kysely": "^0.29.6",
+    "pg": "^8.23.1",
+    "picomatch": "^4.0.7",
+    "ulid": "^3.0.2",
+    "zod": "^4.6.7"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cloudflared": "^0.7.1"
+  },
+  "devDependencies": {
+    "@agentteams/cli": "workspace:*",
+    "@agentteams/hub": "workspace:*",
+    "@agentteams/shared": "workspace:*",
+    "@types/node": "^22.20.5",
+    "tsup": "^8.5.0"
+  }
+}
