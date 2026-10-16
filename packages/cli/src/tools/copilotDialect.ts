@@ -1,4 +1,4 @@
-import { HOOK_EVENT_NAMES } from '../hookEvents.js';
+import { HOOK_EVENT_NAMES, type HookEvent } from '../hookEvents.js';
 import { isCommonStopLoop, readStringCwd } from './dialects.js';
 import type { HookDialect } from './types.js';
 
@@ -7,9 +7,16 @@ import type { HookDialect } from './types.js';
  * Copilot CLI reads top-level `additionalContext` / `decision` + `reason`; VS Code reads `hookSpecificOutput`.
  * Each side ignores the other's fields, so both are emitted.
  */
+/**
+ * Copilot CLI drops command-hook output for userPromptSubmitted and VS Code documents no additionalContext there,
+ * so user-prompt-submit is not a context event (consuming there would lose messages).
+ */
+export const COPILOT_CONTEXT_EVENTS: ReadonlySet<HookEvent> = new Set<HookEvent>(['session-start', 'post-tool-use']);
+
 export const copilotDialect: HookDialect = {
+  contextEvents: COPILOT_CONTEXT_EVENTS,
   render(outcome) {
-    if (outcome.type === 'context') {
+    if (outcome.type === 'context' && COPILOT_CONTEXT_EVENTS.has(outcome.event)) {
       const hookEventName = HOOK_EVENT_NAMES[outcome.event];
       return {
         stdout: JSON.stringify({

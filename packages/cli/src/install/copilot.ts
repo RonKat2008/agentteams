@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { HOOK_EVENTS, HOOK_EVENT_NAMES } from '../hookEvents.js';
+import { HOOK_EVENT_NAMES, type HookEvent } from '../hookEvents.js';
 import { writeInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand } from '../paths.js';
 import { addToGitExclude } from '../tools/gitExclude.js';
@@ -21,15 +21,27 @@ type Json = Record<string, unknown>;
 type Argv = { command: string; args: string[] };
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Events we hook. No user-prompt-submit: Copilot discards its output, so it could only lose messages. */
+export const COPILOT_EVENTS: readonly HookEvent[] = ['session-start', 'post-tool-use', 'stop'];
+
+const isManagedEntry = (e: unknown): boolean => isObject(e) && isManagedHookCommand(e.command);
+
 /** Pure: exactly one managed `command` entry per event (PascalCase names: accepted by both products). */
 export function mergeCopilotHooks(config: Json, cli: string): Json | null {
   if (config.hooks !== undefined && !isObject(config.hooks)) return null;
   const hooks: Json = { ...(config.hooks as Json | undefined) };
-  for (const event of HOOK_EVENTS) {
+  // Drop managed UserPromptSubmit entries from older installs; keep the user's.
+  const ups = hooks[HOOK_EVENT_NAMES['user-prompt-submit']];
+  if (Array.isArray(ups)) {
+    const kept = ups.filter((e) => !isManagedEntry(e));
+    if (kept.length > 0) hooks[HOOK_EVENT_NAMES['user-prompt-submit']] = kept;
+    else delete hooks[HOOK_EVENT_NAMES['user-prompt-submit']];
+  }
+  for (const event of COPILOT_EVENTS) {
     const name = HOOK_EVENT_NAMES[event];
     const current = hooks[name];
     if (current !== undefined && !Array.isArray(current)) return null;
-    const kept = ((current ?? []) as unknown[]).filter((e) => !(isObject(e) && isManagedHookCommand(e.command)));
+    const kept = ((current ?? []) as unknown[]).filter((e) => !isManagedEntry(e));
     kept.push({ type: 'command', command: hookCommand(cli, event, 'copilot'), timeout: HOOK_TIMEOUT_SECONDS });
     hooks[name] = kept;
   }

@@ -37,7 +37,8 @@ describe('installCopilot fresh install', () => {
 
     const hooks = json('.github/hooks/agentteams.json');
     expect(hooks.version).toBe(1);
-    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+    // No UserPromptSubmit: Copilot drops its output, so it would mark messages read without delivering them.
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['PostToolUse', 'SessionStart', 'Stop']);
     const stop = hooks.hooks.Stop;
     expect(stop).toHaveLength(1);
     expect(stop[0].type).toBe('command');
@@ -117,6 +118,18 @@ describe('user entries preserved', () => {
     expect(json('.vscode/mcp.json').servers.agentteams).toBeDefined();
   });
 
+  it('removes a managed UserPromptSubmit entry left by an older install but keeps user ones', async () => {
+    mkdirSync(join(repo, '.github/hooks'), { recursive: true });
+    const managed = { type: 'command', command: `${CLI} hook user-prompt-submit --tool copilot --agentteams-managed` };
+    writeFileSync(join(repo, '.github/hooks/agentteams.json'), JSON.stringify({ version: 1, hooks: { UserPromptSubmit: [managed] } }));
+    await installCopilot(t.deps, cred, OPTS);
+    expect(json('.github/hooks/agentteams.json').hooks.UserPromptSubmit).toBeUndefined();
+
+    writeFileSync(join(repo, '.github/hooks/agentteams.json'), JSON.stringify({ version: 1, hooks: { UserPromptSubmit: [managed, { type: 'command', command: 'mine' }] } }));
+    await installCopilot(t.deps, cred, OPTS);
+    expect(json('.github/hooks/agentteams.json').hooks.UserPromptSubmit).toEqual([{ type: 'command', command: 'mine' }]);
+  });
+
   it('keeps user text around the managed instruction block', async () => {
     mkdirSync(join(repo, '.github'), { recursive: true });
     writeFileSync(join(repo, '.github/copilot-instructions.md'), '# Mine\nuse tabs\n');
@@ -191,6 +204,11 @@ describe('copilot dialect', () => {
       decision: 'block', reason: 'do it',
       hookSpecificOutput: { hookEventName: 'Stop', decision: 'block', reason: 'do it' },
     });
+  });
+  it('user-prompt-submit context renders nothing and is not a context event', () => {
+    expect(copilotDialect.render({ type: 'context', event: 'user-prompt-submit', text: 'x' }, {})).toEqual({ stdout: '', exitCode: 0 });
+    expect(copilotDialect.contextEvents?.has('user-prompt-submit')).toBe(false);
+    expect(copilotDialect.contextEvents?.has('post-tool-use')).toBe(true);
   });
   it('none: empty stdout, exit 0', () => {
     expect(copilotDialect.render({ type: 'none' }, {})).toEqual({ stdout: '', exitCode: 0 });

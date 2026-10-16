@@ -3,7 +3,8 @@ import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { writeInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand } from '../paths.js';
-import { InvalidConfigShape, mergeCursorHooks, mergeMcpServer } from './cursorHooks.js';
+import type { HookEvent } from '../hookEvents.js';
+import { CURSOR_EVENTS, InvalidConfigShape, mergeCursorHooks, mergeMcpServer } from './cursorHooks.js';
 import { isCommonStopLoop, readStringCwd } from './dialects.js';
 import { addToGitExclude } from './gitExclude.js';
 import { upsertJsonConfig, type JsonConfig } from './jsonConfig.js';
@@ -11,6 +12,7 @@ import { writeOwnedRulesFile } from './rulesFile.js';
 import type { HookDialect, InstallReport, ToolAdapter } from './types.js';
 
 export const cursorDialect: HookDialect = {
+  contextEvents: new Set<HookEvent>(CURSOR_EVENTS.map(([, e]) => e).filter((e) => e !== 'stop')),
   render(outcome) {
     // Cursor ignores context from beforeSubmitPrompt (user-prompt-submit); emit nothing there.
     if (outcome.type === 'context' && outcome.event !== 'user-prompt-submit') {

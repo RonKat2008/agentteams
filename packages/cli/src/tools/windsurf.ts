@@ -16,7 +16,7 @@ const RULES_EXTRA = [
 ].join('\n');
 
 /** Windsurf/Devin hooks cannot inject context or gate stop; this dialect exists only so a stray hook prints nothing. */
-export const windsurfDialect: HookDialect = { ...claudeDialect, render: () => ({ stdout: '', exitCode: 0 }) };
+export const windsurfDialect: HookDialect = { ...claudeDialect, contextEvents: new Set(), render: () => ({ stdout: '', exitCode: 0 }) };
 
 /** `$XDG_CONFIG_HOME/devin` (default ~/.config/devin) plus the legacy ~/.codeium/windsurf when that install exists. */
 export function windsurfMcpPaths(deps: Pick<CliDeps, 'env' | 'homedir'>): string[] {

@@ -20,6 +20,11 @@ export interface HookDialect {
   readCwd(input: Record<string, unknown>): string | undefined;
   /** True when this stop hook is itself the result of a previous stop-block (never block twice). */
   isStopLoop(input: Record<string, unknown>): boolean;
+  /**
+   * Context events whose output the agent actually delivers to the model (undefined: all of them). For any other
+   * context event the hook only sends a heartbeat and never marks messages read, so nothing is lost.
+   */
+  contextEvents?: ReadonlySet<HookEvent>;
 }
 
 export interface ToolAdapter {

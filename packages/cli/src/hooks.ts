@@ -47,6 +47,12 @@ async function computeOutcome(
   const cred = await resolveCredentialForCwd(deps, cwd, tool);
   if (!cred) return NONE;
   const client = new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
+  const delivers = getAdapter(tool).dialect.contextEvents;
+  if (event !== 'stop' && delivers && !delivers.has(event)) {
+    // The agent would discard our output: heartbeat only, never consume.
+    await client.ping(false);
+    return NONE;
+  }
 
   if (event === 'session-start') {
     const status = await client.status();
