@@ -36,9 +36,9 @@ describe('choices', () => {
 
   it('marks detected agents and drops excluded ones', () => {
     expect(agentChoices(tools)).toEqual([
-      { value: 'codex', label: 'codex', hint: 'detected (codex on PATH)' },
-      { value: 'claude', label: 'claude', hint: undefined },
-      { value: 'gemini', label: 'gemini', hint: undefined },
+      { value: 'codex', label: 'Codex', hint: 'detected · codex on PATH' },
+      { value: 'claude', label: 'Claude Code', hint: undefined },
+      { value: 'gemini', label: 'Gemini CLI', hint: undefined },
     ]);
     expect(agentChoices(tools, ['codex', 'gemini']).map((c) => c.value)).toEqual(['claude']);
   });

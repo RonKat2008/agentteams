@@ -2,6 +2,7 @@ import { CreateTeamInput, MemberName, type ToolKind } from '@agentteams/shared';
 import { validateNewRepoArgs, type CreateOpts } from '../commands/create.js';
 import type { JoinOpts } from '../commands/join.js';
 import { DEFAULT_HUB_URL, LOCAL_HUB_URL } from '../paths.js';
+import { getAdapter } from '../tools/registry.js';
 import type { ToolChoice } from './detect.js';
 import type { Choice } from './prompter.js';
 
@@ -34,7 +35,7 @@ export function validateHubUrl(v: string): string | undefined {
 export function agentChoices(tools: ToolChoice[], exclude: readonly ToolKind[] = []): Choice<ToolKind>[] {
   return tools
     .filter((t) => !exclude.includes(t.tool))
-    .map((t) => ({ value: t.tool, label: t.tool, hint: t.detected ? `detected (${t.why})` : undefined }));
+    .map((t) => ({ value: t.tool, label: getAdapter(t.tool).label, hint: t.detected ? `detected · ${t.why}` : undefined }));
 }
 
 export const hubChoices = (): Choice<HubChoice>[] => [

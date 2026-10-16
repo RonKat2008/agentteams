@@ -64,7 +64,7 @@ export function realDeps(): CliDeps {
     err: (line) => process.stderr.write(`${line}\n`),
     readStdin: readAllStdin,
     homedir: homedir(),
-    username: userInfo().username,
+    username: process.env.USER || userInfo().username,
     isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     color: colorEnabled(process.env, Boolean(process.stdout.isTTY)),
     prompt: readlinePrompt,
