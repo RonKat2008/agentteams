@@ -1,6 +1,7 @@
 import type { Kysely } from 'kysely';
 import { monotonicFactory } from 'ulid';
 import type { ToolKind } from '@agentteams/shared';
+import type { GithubVerifier } from './github.js';
 import type { Dialect } from './db/index.js';
 import type { Database } from './db/schema.js';
 
@@ -9,6 +10,9 @@ export interface HubContext {
   dialect: Dialect;
   now: () => Date;
   newId: () => string;
+  mode: 'local' | 'hosted';
+  /** Hosted mode only; performs network I/O, so call it outside withTx. */
+  verifyGithub?: GithubVerifier;
 }
 
 /** The authenticated agent making a request. */
@@ -20,10 +24,16 @@ export interface Actor {
   tool: ToolKind;
 }
 
-export function createContext(db: Kysely<Database>, opts: { now?: () => Date; dialect?: Dialect } = {}): HubContext {
+export function createContext(
+  db: Kysely<Database>,
+  opts: { now?: () => Date; dialect?: Dialect; mode?: 'local' | 'hosted'; verifyGithub?: GithubVerifier } = {},
+): HubContext {
   const now = opts.now ?? (() => new Date());
   const ulid = monotonicFactory();
-  return { db, dialect: opts.dialect ?? 'sqlite', now, newId: () => ulid(now().getTime()) };
+  return {
+    db, dialect: opts.dialect ?? 'sqlite', now, newId: () => ulid(now().getTime()),
+    mode: opts.mode ?? 'local', verifyGithub: opts.verifyGithub,
+  };
 }
 
 const MAX_TX_ATTEMPTS = 3;

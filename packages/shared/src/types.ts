@@ -9,6 +9,7 @@ export interface AgentView {
   isOrchestrator: boolean;
   currentTask: { number: number; title: string; status: TaskStatus } | null;
   claims: string[];
+  githubLogin: string | null;
 }
 
 export interface TeamStatus {

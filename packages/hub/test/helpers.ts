@@ -6,6 +6,7 @@ import type { Dialect } from '../src/db/index.js';
 import type { Database } from '../src/db/schema.js';
 import { migrateToLatest } from '../src/db/migrations.js';
 import { createContext, type Actor, type HubContext } from '../src/context.js';
+import type { GithubVerifier } from '../src/github.js';
 import { authenticate, createTeam, joinTeam } from '../src/services/teams.js';
 
 export interface TestEnv {
@@ -31,11 +32,14 @@ export function makeTestDb(): TestDb {
   return { db, dialect: 'sqlite', close: () => db.destroy() };
 }
 
-export async function makeTestContext(start = '2026-01-01T00:00:00.000Z'): Promise<TestEnv> {
+export async function makeTestContext(
+  start = '2026-01-01T00:00:00.000Z',
+  opts: { mode?: 'local' | 'hosted'; verifyGithub?: GithubVerifier } = {},
+): Promise<TestEnv> {
   let t = new Date(start).getTime();
   const { db, dialect, close } = makeTestDb();
   await migrateToLatest(db);
-  const ctx = createContext(db, { now: () => new Date(t), dialect });
+  const ctx = createContext(db, { now: () => new Date(t), dialect, ...opts });
   return { ctx, advance: (ms) => { t += ms; }, close };
 }
 

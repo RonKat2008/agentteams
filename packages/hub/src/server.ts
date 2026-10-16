@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
 import { DEFAULT_HUB_PORT } from '@agentteams/shared';
+import { githubVerifier, type GithubVerifier } from './github.js';
 import { createContext } from './context.js';
 import { migrateToLatest } from './db/migrations.js';
 import { createDb } from './db/index.js';
@@ -13,6 +14,8 @@ export interface HubOptions {
   host?: string;
   mode?: 'local' | 'hosted';
   allowedHosts?: string[];
+  /** Hosted mode only; defaults to the real GitHub verifier. Tests inject a fake. */
+  verifyGithub?: GithubVerifier;
 }
 
 export interface RunningHub {
@@ -30,7 +33,9 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
   }
   const hostname = opts.host ?? '127.0.0.1';
   const allowedHosts = opts.allowedHosts ?? (hostname === '127.0.0.1' ? ['127.0.0.1', 'localhost'] : undefined);
-  const app = createApp(createContext(db, { dialect }), { mode: opts.mode, ...(allowedHosts ? { allowedHosts } : {}) });
+  const mode = opts.mode ?? 'local';
+  const ctx = createContext(db, { dialect, mode, ...(mode === 'hosted' ? { verifyGithub: opts.verifyGithub ?? githubVerifier() } : {}) });
+  const app = createApp(ctx, { mode: opts.mode, ...(allowedHosts ? { allowedHosts } : {}) });
 
   return new Promise((resolve, reject) => {
     // Only guards startup (e.g. EADDRINUSE); detached once listening so a later error cannot destroy the db.

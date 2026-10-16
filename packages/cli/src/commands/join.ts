@@ -1,11 +1,11 @@
 import { stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import type { InvitePreview, ToolKind } from '@agentteams/shared';
+import { defaultMemberName, type InvitePreview, type ToolKind } from '@agentteams/shared';
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
 import { hubUrlFrom } from '../paths.js';
-import { checkTeamDir, defaultMemberName, detectGithubSlug, real, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, real, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 
 export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean; clone: boolean; dir?: string }

@@ -113,6 +113,11 @@ const migrations: Record<string, Migration> = {
       await db.schema.alterTable('tasks').addColumn('merged_at', 'text').execute();
     },
   },
+  '003_github_identity': {
+    async up(db: Kysely<any>) {
+      await db.schema.alterTable('agents').addColumn('github_login', 'text').execute();
+    },
+  },
 };
 
 class InCodeMigrationProvider implements MigrationProvider {

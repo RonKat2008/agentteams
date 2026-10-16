@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../src/repo.js';
+import { checkTeamDir, detectGithubSlug, repoRoot } from '../src/repo.js';
+import { defaultMemberName } from '@agentteams/shared';
 import { fakeExec } from './helpers.js';
 
 describe('repo helpers', () => {

@@ -1,12 +1,12 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { RepoLink, ToolKind } from '@agentteams/shared';
+import { defaultMemberName, type RepoLink, type ToolKind } from '@agentteams/shared';
 import { saveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
 import { HubClient } from '../hubClient.js';
 import { hubUrlFrom } from '../paths.js';
-import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
