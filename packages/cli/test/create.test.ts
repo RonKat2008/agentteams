@@ -10,8 +10,13 @@ import { makeTestCli, type TestCli } from './helpers.js';
 
 const ENV_KEYS = {
   GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@example.com',
-  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_NOSYSTEM: '1',
 };
+const gitConfigDir = mkdtempSync(join(tmpdir(), 'agentteams-gitcfg-'));
+const identityConfig = join(gitConfigDir, 'with-identity');
+const emptyConfig = join(gitConfigDir, 'empty');
+writeFileSync(identityConfig, '[user]\n\tname = T\n\temail = t@example.com\n');
+writeFileSync(emptyConfig, '');
 const saved: Record<string, string | undefined> = {};
 const run = (t: TestCli, ...args: string[]) => main(['node', 'agentteams', ...args], t.deps);
 const git = async (cwd: string, ...args: string[]) => {
@@ -58,11 +63,13 @@ beforeAll(async () => {
 afterAll(async () => {
   await hub.close();
   rmSync(dbDir, { recursive: true, force: true });
+  rmSync(gitConfigDir, { recursive: true, force: true });
   clis.forEach((c) => c.cleanup());
 });
-beforeEach(() => { for (const [k, v] of Object.entries(ENV_KEYS)) { saved[k] = process.env[k]; process.env[k] = v; } });
+beforeEach(() => { for (const [k, v] of Object.entries(ENV_KEYS)) { saved[k] = process.env[k]; process.env[k] = v; }
+  saved.GIT_CONFIG_GLOBAL = process.env.GIT_CONFIG_GLOBAL; process.env.GIT_CONFIG_GLOBAL = identityConfig; });
 afterEach(() => {
-  for (const k of Object.keys(ENV_KEYS)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  for (const k of [...Object.keys(ENV_KEYS), 'GIT_CONFIG_GLOBAL']) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
 });
 
 describe('create --new-repo', () => {
@@ -120,6 +127,42 @@ describe('create --new-repo', () => {
     expect(msg).toContain('name taken');
     expect(msg).toMatch(/kept/);
     expect(existsSync(join(t.deps.cwd, 'dup', '.git'))).toBe(true);
+  });
+
+  it.each(['../x', 'a/b', 'has space', '-x', '.hidden', '..'])('refuses the repo name %j before any side effect', async (bad) => {
+    const ghCalls: GhCall[] = [];
+    const t = mk(scriptedExec(okGh, ghCalls));
+    expect(await run(t, 'create', '--hub', hub.url, '--new-repo', '--', bad)).toBe(1);
+    expect(t.err.join('\n')).toContain(`invalid repo name "${bad}"`);
+    expect(ghCalls).toEqual([]);
+    expect(existsSync(join(t.deps.cwd, 'x'))).toBe(false);
+    expect(existsSync(join(t.deps.cwd, '..', 'x'))).toBe(false);
+  });
+
+  it('refuses an unsafe --owner before any gh call', async () => {
+    const ghCalls: GhCall[] = [];
+    const t = mk(scriptedExec(okGh, ghCalls));
+    expect(await run(t, 'create', 'app', '--hub', hub.url, '--new-repo', '--owner', '-evil')).toBe(1);
+    expect(ghCalls).toEqual([]);
+  });
+
+  it('errors with no folder when the git identity is not configured', async () => {
+    process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+    const t = mk(scriptedExec(okGh, []));
+    expect(await run(t, 'create', 'noid', '--hub', hub.url, '--new-repo')).toBe(1);
+    expect(t.err.join('\n')).toContain('git identity not set; run: git config --global user.name');
+    expect(existsSync(join(t.deps.cwd, 'noid'))).toBe(false);
+  });
+
+  it('gives recovery guidance when the hub fails after the GitHub repo was created', async () => {
+    const t = mk(scriptedExec(okGh, []));
+    t.deps.fetch = (async () => { throw new Error('hub down'); }) as typeof fetch;
+    expect(await run(t, 'create', 'app', '--hub', hub.url, '--new-repo', '--owner', 'me', '--no-install')).toBe(1);
+    const dir = join(t.deps.cwd, 'app');
+    const msg = t.err.join('\n');
+    expect(msg).toContain('GitHub repo me/app was created and the local folder');
+    expect(msg).toContain(`To finish, run: cd ${dir} && agentteams create app`);
+    expect(existsSync(join(dir, '.git'))).toBe(true);
   });
 
   it('conflicts with --repo and --local', async () => {

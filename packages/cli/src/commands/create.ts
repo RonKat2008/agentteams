@@ -1,7 +1,7 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RepoLink, ToolKind } from '@agentteams/shared';
-import { saveCredential } from '../credentials.js';
+import { saveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
 import { HubClient } from '../hubClient.js';
@@ -41,10 +41,30 @@ async function gitOrThrow(deps: CliDeps, cwd: string, args: string[]): Promise<s
 }
 
 /** Spec §3A steps 1-3: verify gh, create the local repo with a first commit, create and push the GitHub repo. */
+function validateNewRepoArgs(name: string, owner?: string): void {
+  if (!/^[A-Za-z0-9._-]+$/.test(name) || /^[-.]/.test(name)) {
+    throw new Error(`invalid repo name "${name}": use letters, digits, '.', '_' or '-'`);
+  }
+  if (owner !== undefined && (!/^[A-Za-z0-9-]+$/.test(owner) || owner.startsWith('-'))) {
+    throw new Error(`invalid owner "${owner}": use letters, digits or '-'`);
+  }
+}
+
+async function requireGitIdentity(deps: CliDeps): Promise<void> {
+  for (const key of ['user.name', 'user.email']) {
+    const r = await deps.exec('git', ['config', key], { cwd: deps.cwd });
+    if (r.code !== 0 || !r.stdout.trim()) {
+      throw new Error('git identity not set; run: git config --global user.name "Your Name" && git config --global user.email you@example.com');
+    }
+  }
+}
+
 async function scaffoldNewRepo(deps: CliDeps, name: string, opts: CreateOpts): Promise<string> {
+  validateNewRepoArgs(name, opts.owner);
   const auth = await deps.exec('gh', ['auth', 'status']);
   if (auth.code === 127) throw new Error('gh (GitHub CLI) is required for --new-repo');
   if (auth.code !== 0) throw new Error('gh is not authenticated; run: gh auth login');
+  await requireGitIdentity(deps);
   const dir = join(deps.cwd, name);
   const existing = await readdir(dir).catch(() => null);
   if (existing && existing.length > 0) throw new Error(`${dir} already exists and is not empty`);
@@ -81,18 +101,9 @@ async function commitInstructions(deps: CliDeps, dir: string): Promise<void> {
   if (push.code !== 0) deps.err(`warning: could not push the instructions commit (${msgOf(push)})`);
 }
 
-export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<void> {
-  // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
-  await checkTeamDir(opts.newRepo ? { ...deps, err: () => {} } : deps, deps.cwd);
-  let repoPath: string;
-  let repo: RepoLink;
-  if (opts.newRepo) {
-    repoPath = await scaffoldNewRepo(deps, name, opts);
-    repo = await newRepoLink(deps, repoPath);
-  } else {
-    repoPath = await repoRoot(deps, deps.cwd);
-    repo = await resolveRepoLink(deps, opts, repoPath);
-  }
+async function registerTeam(
+  deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink,
+): Promise<Credential> {
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const member = opts.as ?? defaultMemberName(deps.username);
   const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, member, tool: opts.agent, repo });
@@ -104,9 +115,36 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
   deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
   deps.out(`Teammates join with: agentteams join ${res.inviteCode} --hub ${hubUrl}`);
   await saveCredential(deps, cred);
-  if (opts.install) {
-    printReport(deps, await runInstallers(deps, cred));
-    if (opts.newRepo) await commitInstructions(deps, repoPath);
+  return cred;
+}
+
+export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<void> {
+  // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
+  await checkTeamDir(opts.newRepo ? { ...deps, err: () => {} } : deps, deps.cwd);
+  if (!opts.newRepo) {
+    const repoPath = await repoRoot(deps, deps.cwd);
+    const repo = await resolveRepoLink(deps, opts, repoPath);
+    const cred = await registerTeam(deps, name, opts, repoPath, repo);
+    if (opts.install) printReport(deps, await runInstallers(deps, cred));
+    return;
   }
-  if (opts.newRepo) deps.out(`Next: cd ${name}`);
+  const dir = await scaffoldNewRepo(deps, name, opts);
+  let created = opts.owner ? `${opts.owner}/${name}` : name;
+  let stage = 'looking up the new repo';
+  try {
+    const repo = await newRepoLink(deps, dir);
+    created = repo.slug ?? created;
+    stage = 'registering the team';
+    const cred = await registerTeam(deps, name, opts, dir, repo);
+    if (opts.install) {
+      printReport(deps, await runInstallers(deps, cred));
+      await commitInstructions(deps, dir);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `GitHub repo ${created} was created and the local folder ${dir} was kept, but ${stage} failed: ${msg}. ` +
+      `To finish, run: cd ${dir} && agentteams create ${name}`);
+  }
+  deps.out(`Next: cd ${name}`);
 }

@@ -21,6 +21,12 @@ describe('createTeam', () => {
     expect(status.team).toEqual({ name: 'dev-squad', repo: githubRepo, orchestrator: 'ronit-claude' });
   });
 
+  it.each(['-x/app', 'me/..', 'me/.', 'a/b/c'])('rejects the unsafe repo slug %s', async (slug) => {
+    await expect(
+      createTeam(env.ctx, { name: 'x', member: 'ronit', tool: 'claude', repo: { provider: 'github', slug } }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+
   it('rejects a github repo without a slug', async () => {
     await expect(
       createTeam(env.ctx, { name: 'x', member: 'ronit', tool: 'claude', repo: { provider: 'github' } }),

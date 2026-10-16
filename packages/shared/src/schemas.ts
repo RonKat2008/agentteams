@@ -43,7 +43,11 @@ export type Recipient = z.infer<typeof Recipient>;
 export const RepoLink = z
   .object({
     provider: z.enum(['github', 'local']),
-    slug: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'slug must look like owner/name').optional(),
+    slug: z
+      .string()
+      .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'slug must look like owner/name')
+      .refine((v) => !v.startsWith('-') && !v.endsWith('/.') && !v.endsWith('/..'), 'slug must look like owner/name')
+      .optional(),
     defaultBranch: z.string().min(1).max(255).refine(singleLine, `default branch ${SINGLE_LINE_MESSAGE}`).default('main'),
   })
   .refine((r) => r.provider === 'local' || r.slug !== undefined, {
