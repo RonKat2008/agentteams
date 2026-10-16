@@ -1,5 +1,6 @@
 import type { ToolKind } from '@agentteams/shared';
-import { resolveCredentialForCwd } from './credentials.js';
+import { resolveCredentialForCwd, type Credential } from './credentials.js';
+import { takeSyncWarning } from './git/syncState.js';
 import type { CliDeps } from './deps.js';
 import type { InboxMessage } from '@agentteams/shared';
 import { fitMessages, formatMessages, formatStatus } from './format.js';
@@ -43,9 +44,36 @@ async function computeOutcome(
   cwd: string,
   deps: Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec'>,
 ): Promise<HookOutcome> {
-  const stopLoop = getAdapter(tool).dialect.isStopLoop(input);
   const cred = await resolveCredentialForCwd(deps, cwd, tool);
   if (!cred) return NONE;
+  const outcome = await teamOutcome(event, tool, input, cred, deps);
+  return cred.transport === 'git' ? withSyncWarning(outcome, event, tool, cred, deps) : outcome;
+}
+
+/**
+ * Git teams: the last failed background sync is reported once, as one line in the next hook output that the
+ * agent will actually see. Never blocks or throws.
+ */
+async function withSyncWarning(
+  outcome: HookOutcome, event: HookEvent, tool: ToolKind, cred: Credential, deps: Pick<CliDeps, 'exec'>,
+): Promise<HookOutcome> {
+  const delivers = getAdapter(tool).dialect.contextEvents;
+  const visible = outcome.type !== 'none' || (event !== 'stop' && (!delivers || delivers.has(event)));
+  if (!visible) return outcome;
+  const warning = await takeSyncWarning(deps, cred.repoPath).catch(() => null);
+  if (!warning) return outcome;
+  if (outcome.type === 'none') return { type: 'context', event, text: warning };
+  return { ...outcome, text: `${warning}\n\n${outcome.text}` } as HookOutcome;
+}
+
+async function teamOutcome(
+  event: HookEvent,
+  tool: ToolKind,
+  input: Record<string, unknown>,
+  cred: Credential,
+  deps: Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec'>,
+): Promise<HookOutcome> {
+  const stopLoop = getAdapter(tool).dialect.isStopLoop(input);
   const client = teamClientFor(deps, cred, { timeoutMs: HOOK_TIMEOUT_MS });
   const delivers = getAdapter(tool).dialect.contextEvents;
   if (event !== 'stop' && delivers && !delivers.has(event)) {

@@ -8,6 +8,7 @@ import { joinCommand } from './commands/join.js';
 import { logCommand } from './commands/log.js';
 import { orchestratorCommand } from './commands/orchestrator.js';
 import { statusCommand } from './commands/status.js';
+import { syncCommand } from './commands/sync.js';
 import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
 import { realDeps, type CliDeps } from './deps.js';
@@ -80,6 +81,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((o) => installCommand(deps, o));
   sub('status').description('Show team status').addOption(agentOpt())
     .action((o) => statusCommand(deps, o));
+  sub('sync').description('Exchange team state with the git remote now (git teams; normally runs in the background)')
+    .option('--repo <path>', 'the repo to sync (default: the current directory)')
+    .addOption(new Option('--tool <tool>', TOOLS.join(' | ')).choices(TOOLS))
+    .option('--quiet', 'print nothing (used by the background sync)')
+    .action(async (o: { repo?: string; tool?: ToolKind; quiet?: boolean }) => { exit.code = await syncCommand(deps, o); });
   sub('log').description('Show team activity').option('-f, --follow').addOption(agentOpt())
     .option('--limit <n>', 'number of events', parseLimit, DEFAULT_LOG_LIMIT)
     .action(async (o: { follow?: boolean; limit: number; agent?: ToolKind }) => {

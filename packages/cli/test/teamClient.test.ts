@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Credential } from '../src/credentials.js';
+import { GitTeamClient } from '../src/git/client.js';
 import { HubClient } from '../src/hubClient.js';
 import { realExec } from '../src/deps.js';
 import { teamClientFor } from '../src/teamClient.js';
@@ -27,8 +28,8 @@ describe('teamClientFor', () => {
     expect(seen?.signal).toBeDefined();
   });
 
-  it('rejects the git transport until it is implemented', () => {
+  it('returns a GitTeamClient for the git transport', () => {
     const deps = { fetch: globalThis.fetch, exec: realExec };
-    expect(() => teamClientFor(deps, cred({ transport: 'git' }))).toThrow('transport not supported yet');
+    expect(teamClientFor(deps, cred({ transport: 'git' }))).toBeInstanceOf(GitTeamClient);
   });
 });

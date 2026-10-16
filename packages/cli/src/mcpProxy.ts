@@ -177,6 +177,23 @@ async function localServer(deps: CliDeps, cred: Credential): Promise<StdioServer
   }
 }
 
+/** For a git credential: the team's tools in-process over the local view; writes become ops and sync in the background. */
+async function gitServer(deps: CliDeps, cred: Credential): Promise<StdioServer> {
+  try {
+    return await (await import('./git/mcp.js')).createGitMcpServer(deps, cred);
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    deps.err(`agentteams: cannot open the git team for ${cred.repoPath}: ${why}`);
+    return createProxyServer({
+      connect: () => Promise.reject(new Error(why)),
+      messages: {
+        authRejected: "this agent's git team credential was rejected (re-run agentteams join)",
+        unavailable: `the team for ${cred.repoPath} is unavailable: ${why}`,
+      },
+    });
+  }
+}
+
 async function serverFor(deps: CliDeps, cwd: string, cred: Credential | null): Promise<StdioServer> {
   if (!cred) {
     deps.err(`agentteams: no team credentials for ${cwd}`);
@@ -184,6 +201,7 @@ async function serverFor(deps: CliDeps, cwd: string, cred: Credential | null): P
   }
   const transport = cred.transport ?? 'http';
   if (transport === 'local') return localServer(deps, cred);
+  if (transport === 'git') return gitServer(deps, cred);
   if (transport !== 'http') {
     deps.err(`agentteams: the ${transport} transport is not supported by this version`);
     return createProxyServer({ connect: null });

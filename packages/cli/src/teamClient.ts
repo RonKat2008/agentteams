@@ -5,6 +5,7 @@ import type { Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
 import { HubClient } from './hubClient.js';
 import { LocalTeamClient } from './local/localClient.js';
+import { GitTeamClient } from './git/client.js';
 
 /** The authenticated, per-agent operations every transport (http, local, git) must provide. */
 export interface TeamClient {
@@ -23,12 +24,17 @@ export interface TeamClient {
   recordCommit(input: CommitInput): Promise<{ notified: string[]; duplicate: boolean }>;
 }
 
-export interface TeamClientOptions { timeoutMs?: number }
+export interface TeamClientOptions {
+  timeoutMs?: number;
+  /** git transport: replaces the detached `agentteams sync` spawn (tests). */
+  syncTrigger?: () => void;
+}
 
 /** Build the client for a credential's transport (http when unset). */
 export function teamClientFor(deps: Pick<CliDeps, 'fetch' | 'exec'>, cred: Credential, opts: TeamClientOptions = {}): TeamClient {
   const transport = cred.transport ?? 'http';
   if (transport === 'local') return new LocalTeamClient(deps, cred);
+  if (transport === 'git') return new GitTeamClient(deps, cred, opts.syncTrigger ? { trigger: opts.syncTrigger } : {});
   if (transport !== 'http') throw new Error('transport not supported yet');
   return new HubClient(cred.hubUrl, { apiKey: cred.apiKey, fetch: deps.fetch, ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }) });
 }
