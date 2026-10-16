@@ -17,6 +17,8 @@ const unverifiable = () => new DomainError('unauthorized', 'could not verify Git
 export function githubVerifier(fetchFn: typeof fetch = fetch): GithubVerifier {
   return async (token) => {
     let res: Response;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
     try {
       res = await fetchFn(GITHUB_USER_URL, {
         method: 'GET',
@@ -26,10 +28,12 @@ export function githubVerifier(fetchFn: typeof fetch = fetch): GithubVerifier {
           'X-GitHub-Api-Version': '2022-11-28',
           Authorization: `Bearer ${token}`,
         },
-        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+        signal: controller.signal,
       });
     } catch {
       throw unverifiable();
+    } finally {
+      clearTimeout(timer);
     }
     if (res.status === 401 || res.status === 403) throw rejected();
     if (res.status !== 200) throw unverifiable();

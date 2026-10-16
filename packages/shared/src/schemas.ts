@@ -64,7 +64,8 @@ export const RepoLink = z
   });
 export type RepoLink = z.output<typeof RepoLink>;
 
-const GithubToken = z.string().min(1).max(512);
+/** Validated by the hub only in hosted mode; local mode must ignore whatever a client sends. */
+const GithubToken = z.unknown();
 
 export const CreateTeamInput = z.object({
   name: z.string().trim().min(1).max(64)

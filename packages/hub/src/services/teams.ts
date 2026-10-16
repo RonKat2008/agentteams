@@ -26,6 +26,8 @@ async function uniqueAgentName(ctx: HubContext, teamId: string, base: string): P
   }
 }
 
+const MESSAGE_PREVIEW_LENGTH = 80; // matches sendMessage
+const MAX_GITHUB_TOKEN_LENGTH = 512;
 const GITHUB_REQUIRED = 'this hub requires GitHub identity; install gh and run: gh auth login';
 
 interface ResolvedIdentity { member: string; githubLogin: string | null }
@@ -35,14 +37,18 @@ interface ResolvedIdentity { member: string; githubLogin: string | null }
  * from the GitHub login; any client-supplied member is ignored. Local: the token is ignored entirely.
  */
 async function resolveIdentity(
-  ctx: HubContext, input: { member?: string; githubToken?: string },
+  ctx: HubContext, input: { member?: string; githubToken?: unknown },
 ): Promise<ResolvedIdentity> {
   if (ctx.mode !== 'hosted') {
     return { member: parseInput(MemberName, input.member), githubLogin: null };
   }
-  if (!input.githubToken) throw new DomainError('unauthorized', GITHUB_REQUIRED);
+  if (input.githubToken === undefined || input.githubToken === null) throw new DomainError('unauthorized', GITHUB_REQUIRED);
+  const token = input.githubToken;
+  if (typeof token !== 'string' || token.length < 1 || token.length > MAX_GITHUB_TOKEN_LENGTH) {
+    throw new DomainError('invalid', `githubToken must be a string of 1-${MAX_GITHUB_TOKEN_LENGTH} characters`);
+  }
   if (!ctx.verifyGithub) throw new DomainError('unauthorized', 'could not verify GitHub identity');
-  const user = await ctx.verifyGithub(input.githubToken);
+  const user = await ctx.verifyGithub(token);
   return { member: defaultMemberName(user.login), githubLogin: user.login };
 }
 
@@ -100,12 +106,15 @@ async function notifyAccessRequest(
 ): Promise<void> {
   if (tx.mode !== 'hosted' || joiner.githubLogin === null) return;
   if (team.repo_provider !== 'github' || !team.repo_slug || !team.orchestrator_agent_id) return;
-  const orchestrator = await tx.db.selectFrom('agents').select('member')
+  const orchestrator = await tx.db.selectFrom('agents').select(['github_login', 'name'])
     .where('id', '=', team.orchestrator_agent_id).executeTakeFirst();
-  if (!orchestrator || orchestrator.member === joiner.member) return;
-  await insertMessage(tx, {
-    teamId: team.id, fromId: joiner.agentId, toId: team.orchestrator_agent_id, kind: 'fyi',
-    body: `${joiner.name} (GitHub @${joiner.githubLogin}) joined. If they need push access to ${team.repo_slug}, run: agentteams access grant ${joiner.name}`,
+  // Keyed on the GitHub login (case-insensitive), not the member name: distinct logins can sanitise to one member.
+  if (!orchestrator) return;
+  if (orchestrator.github_login !== null && orchestrator.github_login.toLowerCase() === joiner.githubLogin.toLowerCase()) return;
+  const body = `${joiner.name} (GitHub @${joiner.githubLogin}) joined. If they need push access to ${team.repo_slug}, run: agentteams access grant ${joiner.name}`;
+  await insertMessage(tx, { teamId: team.id, fromId: joiner.agentId, toId: team.orchestrator_agent_id, kind: 'fyi', body });
+  await logEvent(tx, team.id, joiner.agentId, 'message_sent', {
+    to: orchestrator.name, kind: 'fyi', preview: body.slice(0, MESSAGE_PREVIEW_LENGTH),
   });
 }
 

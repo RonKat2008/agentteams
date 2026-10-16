@@ -174,6 +174,9 @@ describe('hosted GitHub identity', () => {
     tok_ronit: { login: 'Ronit-K', id: 1 },
     tok_dylan: { login: 'dylan.d', id: 2 },
     tok_ronit2: { login: 'Ronit-K', id: 1 },
+    tok_ab: { login: 'a-b', id: 3 },
+    tok_ab_upper: { login: 'A-B', id: 3 },
+    tok_a_dot_b: { login: 'a.b', id: 4 },
   };
   const SECRET = 'tok_ronit';
   let calls: string[];
@@ -263,6 +266,26 @@ describe('hosted GitHub identity', () => {
     expect(await readInbox(hosted.ctx, orch)).toHaveLength(0);
   });
 
+  it('suppresses the notice by GitHub login (case-insensitive) and logs message_sent; distinct logins sharing a member still notify', async () => {
+    const created = await create({ githubToken: 'tok_ab' });
+    const orch = await authenticate(hosted.ctx, created.apiKey);
+    await joinTeam(hosted.ctx, { inviteCode: created.inviteCode, tool: 'codex', githubToken: 'tok_ab_upper' });
+    expect(await readInbox(hosted.ctx, orch)).toHaveLength(0);
+    await joinTeam(hosted.ctx, { inviteCode: created.inviteCode, tool: 'other', githubToken: 'tok_a_dot_b' });
+    const msgs = await readInbox(hosted.ctx, orch);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.body).toContain('(GitHub @a.b)');
+    const sent = (await getActivity(hosted.ctx, orch)).filter((e) => e.type === 'message_sent');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.data).toMatchObject({ kind: 'fyi' });
+  });
+
+  it('rejects a malformed token in hosted mode as invalid', async () => {
+    for (const bad of ['', 'x'.repeat(513), 42]) {
+      await expect(create({ githubToken: bad })).rejects.toMatchObject({ code: 'invalid' });
+    }
+  });
+
   it('never leaks the token into responses, rows or errors', async () => {
     const created = await create();
     const joined = await joinTeam(hosted.ctx, { inviteCode: created.inviteCode, tool: 'codex', githubToken: 'tok_dylan' });
@@ -291,6 +314,11 @@ describe('local mode ignores GitHub tokens', () => {
       expect(rows.every((r) => r.github_login === null)).toBe(true);
       const status = await getTeamStatus(local.ctx, await authenticate(local.ctx, res.apiKey));
       expect(status.agents.every((a) => a.githubLogin === null)).toBe(true);
+      for (const bad of ['', 'x'.repeat(600), 42]) {
+        const r = await createTeam(local.ctx, { name: 'z', member: 'ronit', tool: 'claude', repo: githubRepo, githubToken: bad });
+        await joinTeam(local.ctx, { inviteCode: r.inviteCode, member: 'dylan', tool: 'claude', githubToken: bad });
+      }
+      expect(verified).toBe(0);
       await expect(createTeam(local.ctx, { name: 'y', tool: 'claude', repo: githubRepo })).rejects.toMatchObject({ code: 'invalid' });
       await expect(joinTeam(local.ctx, { inviteCode: res.inviteCode, tool: 'claude' })).rejects.toMatchObject({ code: 'invalid' });
     } finally { await local.close(); }

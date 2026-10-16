@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { githubVerifier } from '../src/github.js';
 
 const TOKEN = 'gho_secretTokenValue123';
@@ -12,6 +12,8 @@ function fakeFetch(res: { status: number; body?: unknown } | Error) {
   }) as typeof fetch;
   return { fn, calls };
 }
+
+afterEach(() => { vi.useRealTimers(); });
 
 describe('githubVerifier', () => {
   it('returns the user and sends exactly the four headers to GET /user', async () => {
@@ -39,6 +41,23 @@ describe('githubVerifier', () => {
     await expect(githubVerifier(f.fn)(TOKEN)).rejects.toMatchObject({
       code: 'unauthorized', message: 'could not verify GitHub identity',
     });
+  });
+
+  it('times out after 5000ms when fetch hangs until its signal aborts', async () => {
+    vi.useFakeTimers();
+    try {
+      const hang = ((_url: string, init?: RequestInit) => new Promise((_res, rej) => {
+        init?.signal?.addEventListener('abort', () => rej(init.signal!.reason));
+      })) as unknown as typeof fetch;
+      const result = githubVerifier(hang)(TOKEN).catch((e: Error) => e);
+      await vi.advanceTimersByTimeAsync(4999);
+      let settled = false;
+      void result.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toMatchObject({ code: 'unauthorized', message: 'could not verify GitHub identity' });
+    } finally { vi.useRealTimers(); }
   });
 
   it.each([500, 404])('maps status %i to "could not verify"', async (status) => {
