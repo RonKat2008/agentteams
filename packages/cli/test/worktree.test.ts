@@ -130,6 +130,25 @@ describe('agentteams worktree', () => {
     expect(existsSync(join(tmp, 'proj.at', 'dylan-claude-1', '.git'))).toBe(true);
   });
 
+  it('installs the managed git hooks (idempotently) in the shared hooks dir', async () => {
+    expect(await run(repo, 'worktree', '1')).toBe(0);
+    const pre = join(repo, '.git', 'hooks', 'pre-commit');
+    expect(readFileSync(pre, 'utf8')).toContain('# agentteams-managed');
+    expect(existsSync(join(repo, '.git', 'hooks', 'post-commit'))).toBe(true);
+    expect(existsSync(`${pre}.agentteams-prev`)).toBe(false);
+    expect(await run(repo, 'worktree', '1')).toBe(0);
+    expect(existsSync(`${pre}.agentteams-prev`)).toBe(false);
+  });
+
+  it('install works from inside a linked worktree', async () => {
+    expect(await run(repo, 'worktree', '1')).toBe(0);
+    const wt = join(tmp, 'proj.at', 'dylan-claude-1');
+    cli.err.length = 0;
+    expect(await run(wt, 'install')).toBe(0);
+    expect(cli.err.join('\n')).not.toContain('no agentteams credentials');
+    expect(cli.out.join('\n')).toContain('Installing agentteams for claude (dylan-claude)');
+  });
+
   it('rejects a non-integer task number', async () => {
     expect(await run(repo, 'worktree', 'abc')).toBe(1);
     expect(cli.err.join('\n')).toMatch(/positive integer/);

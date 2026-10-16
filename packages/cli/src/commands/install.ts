@@ -5,6 +5,7 @@ import type { CliDeps } from '../deps.js';
 import { installClaude, type InstallReport } from '../install/claude.js';
 import { installCodex } from '../install/codex.js';
 import { installGitHooks } from '../install/gitHooks.js';
+import { mainRepoRoot } from '../git.js';
 import { repoRoot } from '../repo.js';
 import { noCredentialsMessage } from './shared.js';
 
@@ -27,7 +28,8 @@ export function printReport(deps: CliDeps, report: InstallReport): void {
 }
 
 export async function installCommand(deps: CliDeps, opts: { agent?: ToolKind | 'all' }): Promise<void> {
-  const raw = await repoRoot(deps, deps.cwd);
+  // From a linked worktree, credentials live under the main repo's root.
+  const raw = (await mainRepoRoot(deps, deps.cwd)) ?? (await repoRoot(deps, deps.cwd));
   const repo = await realpath(raw).catch(() => raw);
   const wanted = opts.agent && opts.agent !== 'all' ? opts.agent : undefined;
   const creds = (await loadCredentials(deps)).filter((c) => c.repoPath === repo && (!wanted || c.tool === wanted));

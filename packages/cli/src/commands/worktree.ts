@@ -5,6 +5,7 @@ import type { CliDeps } from '../deps.js';
 import type { HubClient } from '../hubClient.js';
 import { gitTopLevel, mainRepoRoot } from '../git.js';
 import { installClaudeForWorktree } from '../install/claude.js';
+import { installGitHooks } from '../install/gitHooks.js';
 import { clientFor, refExists, requireCredential, teamDefaultBranch } from './shared.js';
 
 export interface WorktreeOpts { agent?: ToolKind; base?: string }
@@ -58,6 +59,11 @@ export async function worktreeCommand(deps: CliDeps, task: number, opts: Worktre
     const report = await installClaudeForWorktree(deps, cred, path);
     for (const w of report.warnings) deps.err(`agentteams: warning: ${w}`);
   }
+
+  const hooks = await installGitHooks(deps, root).catch((e: unknown) => ({
+    status: 'skipped' as const, detail: e instanceof Error ? e.message : String(e),
+  }));
+  if (hooks.status === 'skipped') deps.err(`agentteams: warning: ${hooks.detail.startsWith('git hooks') ? hooks.detail : `git hooks not installed: ${hooks.detail}`}`);
 
   deps.out(`Task #${task} claimed. Worktree: ${path} (branch ${branch})`);
   deps.out(`Next: cd ${path} && ${cred.tool === 'codex' ? 'codex' : 'claude'}`);

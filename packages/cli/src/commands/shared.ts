@@ -30,6 +30,14 @@ export async function refExists(deps: CliDeps, cwd: string, ref: string): Promis
   return (await deps.exec('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd })).code === 0;
 }
 
+/** Reject branch names that git would not accept or that could be read as an option (they come from the hub). */
+export async function assertSafeBranch(deps: CliDeps, cwd: string, name: string, what = 'branch'): Promise<string> {
+  const ok = name !== '' && !name.startsWith('-') && !name.includes('@{')
+    && (await deps.exec('git', ['check-ref-format', '--branch', name], { cwd })).code === 0;
+  if (!ok) throw new Error(`invalid ${what} name: ${JSON.stringify(name.slice(0, 80))}`);
+  return name;
+}
+
 /** The team's default branch: the hub's recorded one when it exists in this clone, otherwise detected from git. */
 export async function teamDefaultBranch(
   deps: CliDeps, client: HubClient, cwd: string,
@@ -37,5 +45,5 @@ export async function teamDefaultBranch(
   const { team } = await client.status();
   const recorded = team.repo.defaultBranch;
   const branch = recorded && (await refExists(deps, cwd, recorded)) ? recorded : await defaultBranch(deps, cwd, team.repo.slug);
-  return { branch, provider: team.repo.provider };
+  return { branch: await assertSafeBranch(deps, cwd, branch, 'default branch'), provider: team.repo.provider };
 }

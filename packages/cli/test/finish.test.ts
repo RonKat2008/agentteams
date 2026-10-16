@@ -138,6 +138,13 @@ describe('agentteams done', () => {
     expect((await agentClient.getTask(1)).status).not.toBe('done');
   });
 
+  it('refuses a branch that belongs to a different task', async () => {
+    await git(repo, 'checkout', '-q', '-b', `at/${agentName}/2`);
+    expect(await run(repo, 'done', '1', '-m', 's')).toBe(1);
+    expect(cli.err.join('\n')).toContain('this branch belongs to task #2');
+    expect((await agentClient.getTask(1)).status).not.toBe('done');
+  });
+
   it('requires -m', async () => {
     await onTaskBranch();
     expect(await run(repo, 'done', '1')).toBe(1);
@@ -177,6 +184,20 @@ describe('agentteams pr', () => {
     ghReply = () => ({ code: 1, stderr: 'boom' });
     expect(await run(repo, 'pr', '1')).toBe(1);
     expect(cli.err.join('\n')).toContain('boom');
+  });
+
+  it('rejects a hub-supplied branch that looks like an option, without calling gh', async () => {
+    await agentClient.completeTask(1, 's', '--delete-branch');
+    expect(await run(repo, 'pr', '1')).toBe(1);
+    expect(cli.err.join('\n')).toContain('invalid branch name');
+    expect(ghCalls).toEqual([]);
+  });
+
+  it('rejects a hub-supplied branch that is not a valid ref name', async () => {
+    await agentClient.completeTask(1, 's', 'bad..name');
+    expect(await run(repo, 'pr', '1')).toBe(1);
+    expect(cli.err.join('\n')).toContain('invalid branch name');
+    expect(ghCalls).toEqual([]);
   });
 
   it('errors when the task has no branch yet', async () => {

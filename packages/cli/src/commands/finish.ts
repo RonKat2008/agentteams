@@ -1,7 +1,9 @@
 import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import { currentBranch } from '../git.js';
-import { clientFor, requireCredential, teamDefaultBranch } from './shared.js';
+import { assertSafeBranch, clientFor, requireCredential, teamDefaultBranch } from './shared.js';
+
+const TASK_BRANCH = /^at\/.+\/(\d+)$/;
 
 export interface DoneOpts { summary: string; agent?: ToolKind }
 export interface AgentOpts { agent?: ToolKind }
@@ -16,6 +18,8 @@ export async function doneCommand(deps: CliDeps, task: number, opts: DoneOpts): 
   const branch = await currentBranch(deps, deps.cwd);
   const { branch: base, provider } = await teamDefaultBranch(deps, client, deps.cwd);
   if (branch === 'HEAD' || branch === base) throw new Error("run this on the task's branch (expected at/<agent>/<task>)");
+  const owner = TASK_BRANCH.exec(branch)?.[1];
+  if (owner !== undefined && Number(owner) !== task) throw new Error(`this branch belongs to task #${owner}`);
 
   const status = await deps.exec('git', ['status', '--porcelain'], { cwd: deps.cwd });
   if (status.code === 0 && status.stdout.trim()) {
@@ -40,16 +44,17 @@ export async function prCommand(deps: CliDeps, task: number, opts: AgentOpts): P
   const view = await client.getTask(task);
   if (!view.branch) throw new Error(`task #${task} has no branch yet; the assignee runs agentteams done first`);
 
+  const head = await assertSafeBranch(deps, deps.cwd, view.branch);
   const body = `${view.summary ?? ''}\n\nagentteams task #${task}`;
   const created = await deps.exec('gh', [
-    'pr', 'create', '--base', base, '--head', view.branch, '--title', `#${task}: ${view.title}`, '--body', body,
+    'pr', 'create', '--base', base, '--head', head, '--title', `#${task}: ${view.title}`, '--body', body,
   ], { cwd: deps.cwd });
   if (created.code === 0) {
     deps.out(created.stdout.trim());
     return;
   }
   if (/already exists/i.test(created.stderr)) {
-    const existing = await deps.exec('gh', ['pr', 'view', view.branch, '--json', 'url', '-q', '.url'], { cwd: deps.cwd });
+    const existing = await deps.exec('gh', ['pr', 'view', head, '--json', 'url', '-q', '.url'], { cwd: deps.cwd });
     if (existing.code === 0 && existing.stdout.trim()) {
       deps.out(existing.stdout.trim());
       return;
