@@ -7,6 +7,7 @@ import { joinCommand } from './commands/join.js';
 import { logCommand } from './commands/log.js';
 import { orchestratorCommand } from './commands/orchestrator.js';
 import { statusCommand } from './commands/status.js';
+import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
 import { upCommand } from './commands/up.js';
 import { realDeps, type CliDeps } from './deps.js';
@@ -83,6 +84,17 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .addArgument(new Argument('<task>', 'task number').argParser(parsePositive('task')))
     .addOption(agentOpt()).option('--base <ref>', 'branch point (default: the repo default branch)')
     .action((task: number, o: { agent?: ToolKind; base?: string }) => worktreeCommand(deps, task, o));
+  const taskArg = () => new Argument('<task>', 'task number').argParser(parsePositive('task'));
+  sub('done').description('Push this task branch and mark the task done')
+    .addArgument(taskArg()).addOption(agentOpt())
+    .addOption(new Option('-m, --message <summary>', 'what you did').makeOptionMandatory())
+    .action((task: number, o: { agent?: ToolKind; message: string }) => doneCommand(deps, task, { summary: o.message, agent: o.agent }));
+  sub('pr').description('Open a GitHub pull request for a finished task')
+    .addArgument(taskArg()).addOption(agentOpt())
+    .action((task: number, o: { agent?: ToolKind }) => prCommand(deps, task, o));
+  sub('merged').description('Record that a task branch was merged (orchestrator only)')
+    .addArgument(taskArg()).addOption(agentOpt()).option('--pr <url>', 'pull request URL')
+    .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
   sub('hook').description('(internal) agent hook entry point')
     .addArgument(new Argument('<event>').choices([...HOOK_EVENTS]))
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())

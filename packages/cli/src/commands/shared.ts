@@ -2,6 +2,7 @@ import type { ToolKind } from '@agentteams/shared';
 import { loadCredentials, resolveCredentialForCwd, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
+import { defaultBranch } from '../git.js';
 import { repoRoot } from '../repo.js';
 
 export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promise<Credential> {
@@ -24,3 +25,17 @@ export const clientFor = (deps: CliDeps, cred: Credential): HubClient =>
   new HubClient(cred.hubUrl, { apiKey: cred.apiKey, fetch: deps.fetch });
 
 export const dateOnly = (iso: string): string => iso.slice(0, 10);
+
+export async function refExists(deps: CliDeps, cwd: string, ref: string): Promise<boolean> {
+  return (await deps.exec('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd })).code === 0;
+}
+
+/** The team's default branch: the hub's recorded one when it exists in this clone, otherwise detected from git. */
+export async function teamDefaultBranch(
+  deps: CliDeps, client: HubClient, cwd: string,
+): Promise<{ branch: string; provider: string }> {
+  const { team } = await client.status();
+  const recorded = team.repo.defaultBranch;
+  const branch = recorded && (await refExists(deps, cwd, recorded)) ? recorded : await defaultBranch(deps, cwd, team.repo.slug);
+  return { branch, provider: team.repo.provider };
+}

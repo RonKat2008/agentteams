@@ -3,19 +3,15 @@ import { basename, dirname, join } from 'node:path';
 import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import type { HubClient } from '../hubClient.js';
-import { defaultBranch, gitTopLevel, mainRepoRoot } from '../git.js';
+import { gitTopLevel, mainRepoRoot } from '../git.js';
 import { installClaudeForWorktree } from '../install/claude.js';
-import { clientFor, requireCredential } from './shared.js';
+import { clientFor, refExists, requireCredential, teamDefaultBranch } from './shared.js';
 
 export interface WorktreeOpts { agent?: ToolKind; base?: string }
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
 
 const git = (deps: CliDeps, cwd: string, args: string[]) => deps.exec('git', args, { cwd });
-
-async function refExists(deps: CliDeps, cwd: string, ref: string): Promise<boolean> {
-  return (await git(deps, cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).code === 0;
-}
 
 /** True when `path` is a git worktree whose checked-out branch is `branch`. */
 async function isWorktreeOn(deps: CliDeps, path: string, branch: string): Promise<boolean> {
@@ -27,11 +23,8 @@ async function isWorktreeOn(deps: CliDeps, path: string, branch: string): Promis
 
 async function pickBase(deps: CliDeps, client: HubClient, root: string, base: string | undefined): Promise<string> {
   if (base) return base;
-  const { team } = await client.status();
-  // Prefer the hub's recorded default branch when it exists in this clone; otherwise detect from git.
-  const hubDefault = team.repo.defaultBranch;
-  const d = hubDefault && (await refExists(deps, root, hubDefault)) ? hubDefault : await defaultBranch(deps, root, team.repo.slug);
-  if (team.repo.provider !== 'github') return d;
+  const { branch: d, provider } = await teamDefaultBranch(deps, client, root);
+  if (provider !== 'github') return d;
   const fetched = await git(deps, root, ['fetch', 'origin', d]);
   if (fetched.code === 0) return `origin/${d}`;
   deps.err(`agentteams: warning: git fetch origin ${d} failed; using local ${d}`);

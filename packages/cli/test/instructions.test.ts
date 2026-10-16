@@ -8,6 +8,11 @@ describe('managed instruction block', () => {
     expect(block.trimEnd().endsWith(BLOCK_END)).toBe(true);
     expect(block).toContain('team "dev-squad"');
   });
+  it('documents the git workflow', () => {
+    expect(block).toContain('Start a task: `agentteams worktree <task>` creates your branch `at/<agent>/<task>` in a separate worktree. Work and commit there.');
+    expect(block).toContain('Finish: commit, then `agentteams done <task> -m "<summary>"` (pushes the branch, completes the task).');
+    expect(block).toContain('Commits touching files another agent claimed are blocked by a pre-commit check; message the owner rather than overriding.');
+  });
   it('appends to existing content with one blank line', () => {
     expect(upsertManagedBlock('# My project\n', block)).toBe(`# My project\n\n${block}`);
   });
