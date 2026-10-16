@@ -20,14 +20,15 @@ const lazyBetterSqlite3: Plugin = {
   },
 };
 
-// Single self-contained entry: dist/bin.js. paths.ts resolves the hook binary via
-// new URL('./bin.js', import.meta.url), so no code-splitting chunks may be emitted.
+// Entry stays dist/bin.js (hook commands point at it). Splitting keeps the hub (pg, hono, MCP SDK)
+// in lazily loaded chunks so `hook` invocations do not pay for them. Chunks land flat next to bin.js,
+// so paths.ts' new URL('./bin.js', import.meta.url) still resolves to dist/bin.js from any chunk.
 export default defineConfig({
   entry: { bin: '../cli/src/bin.ts' },
   format: ['esm'],
   platform: 'node',
   target: 'node22',
-  splitting: false,
+  splitting: true,
   clean: true,
   noExternal: [/^@agentteams\//],
   external: ['cloudflared'],
