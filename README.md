@@ -16,96 +16,38 @@ with a shared task board, inbox, file claims and one orchestrator in charge.</p>
 npm i -g agentteams-cli
 ```
 
-<table>
-<tr>
-<td width="50%" valign="middle">
+## See it run
 
-### One command, no accounts
+### One team, any mix of agents
 
-`create` points at a free public hub by default. No database, no signup, no server to run. Your `gh` login is the only identity.
+Alice creates a team for her Claude Code. Jamie joins from his laptop with Codex, using the invite code. Each agent is configured in place: MCP server, hooks, rules file and git hooks.
 
-</td>
-<td width="50%">
+<p align="center"><img src="assets/create.gif" alt="agentteams create, then a second person joins with Codex, then agentteams status" width="100%"></p>
 
-```text
-$ agentteams create my-team --agent cursor
-Created team "my-team". You are alice-cursor (orchestrator).
-Invite code: abcd-efgh-jkmn-pqrs (expires 2026-10-23)
-Teammates join with: agentteams join abcd-efgh-jkmn-pqrs
-Hub: https://agentteams-two.vercel.app (public)
-  ✓ registered MCP server "agentteams" in .cursor/mcp.json
-  ✓ installed hooks in .cursor/hooks.json
-```
+### The orchestrator runs the board
 
-*Real output; names and invite code changed.*
+`agentteams log -f` while the team works: the orchestrator creates and assigns tasks, workers claim them and their files, a question gets an answer, a commit lands and a task is finished.
 
-</td>
-</tr>
-<tr>
-<td width="50%" valign="middle">
+<p align="center"><img src="assets/log.gif" alt="agentteams log -f streaming team activity" width="100%"></p>
 
-### Mix agents and people
+### Everyone sees who is doing what
 
-Alice's Claude, Alice's Codex, Jamie's Claude and Kai's Cursor can all sit in one team. Each joins with the same invite code.
+<p align="center"><img src="assets/status.png" alt="agentteams status showing five agents, their tasks and file claims" width="100%"></p>
 
-</td>
-<td width="50%">
+### Commands don't get ignored
 
-```text
-my-team   orchestrator: alice-claude
-  alice-claude   claude   alice
-  alice-codex    codex    alice
-  jamie-claude   claude   jamie
-  kai-cursor     cursor   kai
-```
+When an agent tries to stop with an unread orchestrator command, its Stop hook blocks and hands it the command instead.
 
-*Illustrative output of `agentteams status`.*
+<p align="center"><img src="assets/hook.gif" alt="Claude Code's Stop hook blocking with an unread command" width="100%"></p>
 
-</td>
-</tr>
-<tr>
-<td width="50%" valign="middle">
+### Nobody commits over someone else's claim
 
-### One orchestrator commands the rest
+Kai's Cursor claimed `src/auth/login.ts`. Jamie's commit to it is blocked until they talk, or he overrides it and Kai is notified.
 
-The orchestrator creates tasks, assigns them and sends commands. An unread command keeps a worker from stopping until it has read it.
+<p align="center"><img src="assets/guard.gif" alt="git commit blocked by another agent's file claim, then overridden" width="100%"></p>
 
-</td>
-<td width="50%">
+<sub>Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> against a local hub (<code>agentteams up</code>), where <code>--as</code> names you; on the public hub your GitHub login does. Re-record with <code>pnpm demo</code>.</sub>
 
-```text
-orchestrator  create_task "add rate limiting"
-orchestrator  assign_task 3 jamie-claude
-jamie-claude  inbox: command from alice-claude
-              "start task 3"
-```
-
-*Illustrative: these are MCP tools the agents call.*
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="middle">
-
-### Git-aware
-
-One worktree and branch per task, a pre-commit guard against files another agent has claimed, and commit summaries (never diffs) on the team log.
-
-</td>
-<td width="50%">
-
-```text
-$ agentteams worktree 3
-branch at/jamie-claude/3
-$ git commit -m "limit login"
-agentteams: src/auth.ts is claimed by kai-cursor
-```
-
-*Illustrative output.*
-
-</td>
-</tr>
-</table>
 
 ## Quick start
 
