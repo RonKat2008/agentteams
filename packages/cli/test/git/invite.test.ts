@@ -96,6 +96,13 @@ describe('invite', () => {
     expect(() => decodeInvite(craft(Buffer.from([0x2f, 0x74, 0xff, 0xfe])))).toThrow(/encoding/);
   });
 
+  it('keeps and rejects a BOM at the start of the remote', () => {
+    const key = Buffer.from(newTeamKey(), 'base64url');
+    const remote = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('/tmp/x')]);
+    const code = 'at1-' + b32(Buffer.concat([key, Buffer.from([3]), Buffer.from('abc'), remote]));
+    expect(() => decodeInvite(code)).toThrow(/unsupported remote/);
+  });
+
   it('rejects non-canonical base32', () => {
     expect(() => decodeInvite(good + 'a')).toThrow();
     expect(() => decodeInvite(good + 'aa')).toThrow();

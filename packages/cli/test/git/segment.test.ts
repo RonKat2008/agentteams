@@ -148,7 +148,7 @@ describe('segment codec', () => {
     it('a garbage registered key is a bad signature', () => {
       const buf = enc(KAI, 1, []);
       expect(decodeSegment(buf, teamKey, at(KAI, 1), () => 'garbage')).toEqual({ ok: false, reason: 'bad-signature' });
-      expect(decodeSegment(buf, teamKey, at(KAI, 1), (() => 42) as never)).toEqual({ ok: false, reason: 'bad-signature' });
+      expect(decodeSegment(buf, teamKey, at(KAI, 1), (() => 42) as never)).toEqual({ ok: false, reason: 'unknown-agent' });
     });
     it('non-buffer input is malformed', () => {
       expect(decodeSegment('x' as never, teamKey, at(KAI, 1), lookup)).toEqual({ ok: false, reason: 'malformed' });
@@ -188,16 +188,39 @@ describe('segment codec', () => {
 
     it('verifies against the embedded key and returns it', () => {
       for (const name of ['join', 'createTeam']) {
-        const res = decodeSegment(enc(NEW, 0, [joinOp(name), op(NEW, 1)], fresh.privateKey), teamKey, at(NEW, 0), none);
+        const res = decodeSegment(enc(NEW, 0, [joinOp(name)], fresh.privateKey), teamKey, at(NEW, 0), none);
         expect(res.ok && res.bootstrapKey).toBe(fresh.publicKey);
       }
     });
-    it('does not report a bootstrap key when the agent is already registered', () => {
+    it('a join segment from an already-registered agent is rejected as bootstrap', () => {
       keys.set(NEW, fresh.publicKey);
       const res = decodeSegment(enc(NEW, 0, [joinOp()], fresh.privateKey), teamKey, at(NEW, 0), lookup);
       keys.delete(NEW);
-      expect(res.ok).toBe(true);
-      expect(res.ok && res.bootstrapKey).toBeUndefined();
+      expect(res).toEqual({ ok: false, reason: 'bootstrap' });
+    });
+    it('a throwing or null lookup never allows bootstrap', () => {
+      const seg = enc(NEW, 0, [joinOp()], fresh.privateKey);
+      const thrower = () => {
+        throw new Error('db down');
+      };
+      expect(decodeSegment(seg, teamKey, at(NEW, 0), thrower)).toEqual({ ok: false, reason: 'unknown-agent' });
+      expect(decodeSegment(seg, teamKey, at(NEW, 0), (() => null) as never)).toEqual({ ok: false, reason: 'unknown-agent' });
+      expect(decodeSegment(seg, teamKey, at(NEW, 0), (() => 7) as never)).toEqual({ ok: false, reason: 'unknown-agent' });
+    });
+    it('a bootstrap segment must be exactly one op with a matching agentId', () => {
+      const bad = { ok: false, reason: 'bootstrap' };
+      expect(decodeSegment(enc(NEW, 0, [joinOp(), op(NEW, 1)], fresh.privateKey), teamKey, at(NEW, 0), none)).toEqual(bad);
+      expect(decodeSegment(enc(NEW, 0, [joinOp(), joinOp()], fresh.privateKey), teamKey, at(NEW, 0), none)).toEqual(bad);
+      const other: Op = { ...joinOp(), input: { publicKey: fresh.publicKey, agentId: MIA } };
+      expect(decodeSegment(enc(NEW, 0, [other], fresh.privateKey), teamKey, at(NEW, 0), none)).toEqual(bad);
+      const same: Op = { ...joinOp(), input: { publicKey: fresh.publicKey, agentId: NEW } };
+      expect(decodeSegment(enc(NEW, 0, [same], fresh.privateKey), teamKey, at(NEW, 0), none).ok).toBe(true);
+    });
+    it('normal segments may not contain join or createTeam ops', () => {
+      for (const name of ['join', 'createTeam']) {
+        const sneaky: Op = { ...op(KAI, 2), op: name, input: { publicKey: mia.publicKey } };
+        expect(decodeSegment(enc(KAI, 4, [op(KAI, 1), sneaky]), teamKey, at(KAI, 4), lookup)).toEqual({ ok: false, reason: 'bootstrap' });
+      }
     });
     it('rejects when signed by a key other than the embedded one', () => {
       const res = decodeSegment(enc(NEW, 0, [joinOp()], mia.privateKey), teamKey, at(NEW, 0), none);

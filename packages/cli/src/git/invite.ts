@@ -109,7 +109,7 @@ export function decodeInvite(code: string): Invite {
   if (!TEAM_ID_RE.test(teamId)) throw new InviteError('invite code has an invalid team id');
   let remote: string;
   try {
-    remote = new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(idEnd));
+    remote = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(payload.subarray(idEnd));
   } catch {
     throw new InviteError('invite code has an invalid remote encoding');
   }
