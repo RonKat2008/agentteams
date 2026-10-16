@@ -81,8 +81,17 @@ const TOOLS: ToolChoice[] = [
 let t: TestCli;
 afterEach(() => t?.cleanup());
 
-function setup(answers: Answer[], over: { table?: Record<string, { code?: number; stdout?: string }>; commands?: Partial<TuiCommands>; hasGh?: boolean } = {}) {
+type HubMode = 'local' | 'hosted' | 'down';
+
+/** Stub for the hub /health probe; tests never reach the network. */
+const healthFetch = (mode: HubMode) => (async () => {
+  if (mode === 'down') throw new Error('connect ECONNREFUSED');
+  return new Response(JSON.stringify({ ok: true, mode }));
+}) as unknown as typeof fetch;
+
+function setup(answers: Answer[], over: { table?: Record<string, { code?: number; stdout?: string }>; commands?: Partial<TuiCommands>; hasGh?: boolean; hub?: HubMode } = {}) {
   t = makeTestCli({ isTTY: true }, over.table ?? {});
+  t.deps.fetch = healthFetch(over.hub ?? 'down');
   const p = scripted(answers);
   const { commands, calls } = fakeCommands(over.commands);
   const run = () => runTui(t.deps, { prompter: p, commands, detect: async () => TOOLS, hasGh: async () => over.hasGh ?? false });
@@ -132,6 +141,20 @@ describe('guided menu', () => {
     expect(calls.join).toEqual([['ABCD-efgh-jkmn-pqrs', { agent: 'gemini', hub: 'local', install: true, clone: false }]]);
   });
 
+  it('asks for your name on a local-mode hub and passes it as --as', async () => {
+    const { p, calls, run } = setup(['create', 'squad', 'claude', 'local', 'local', 'Alice'], { hub: 'local' });
+    expect(await run()).toBe(0);
+    expect(p.asked.some((a) => a.message === 'Your name on this team')).toBe(true);
+    expect(calls.create[0]![1]).toEqual({ agent: 'claude', hub: 'local', install: true, local: true, as: 'alice' });
+  });
+
+  it('does not ask for a name on a hosted hub', async () => {
+    const { p, calls, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'gemini', 'custom', 'https://hub.example.com', 'here'], { hub: 'hosted' });
+    expect(await run()).toBe(0);
+    expect(p.asked.some((a) => a.message === 'Your name on this team')).toBe(false);
+    expect(calls.join[0]![1]).not.toHaveProperty('as');
+  });
+
   it('turns the hosted-hub token question into a menu confirm (H3 still asked, no stdin read)', async () => {
     const answers: string[] = [];
     const join: TuiCommands['join'] = async (deps) => {
@@ -158,7 +181,7 @@ describe('guided menu', () => {
     expect(await run()).toBe(0);
     const agentPrompt = p.asked.find((a) => a.message.startsWith('Which agent'))!;
     expect(agentPrompt.choices!.map((c) => c.value)).toEqual(['claude', 'gemini']);
-    expect(calls.join).toEqual([['abcd-efgh-jkmn-pqrs', { agent: 'gemini', hub: 'http://127.0.0.1:4747', install: true, clone: false }]]);
+    expect(calls.join).toEqual([['abcd-efgh-jkmn-pqrs', { agent: 'gemini', hub: 'http://127.0.0.1:4747', install: true, clone: false, as: 'ada' }]]);
     expect(p.log.join('\n')).not.toContain('at_secret');
   });
 

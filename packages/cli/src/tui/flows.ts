@@ -1,4 +1,4 @@
-import type { ToolKind } from '@agentteams/shared';
+import { defaultMemberName, type ToolKind } from '@agentteams/shared';
 import { createCommand, teammateJoinCommand, type CreateOpts, type CreateResult } from '../commands/create.js';
 import { joinCommand, type JoinOpts } from '../commands/join.js';
 import { logCommand, type LogOpts } from '../commands/log.js';
@@ -7,10 +7,11 @@ import { statusCommand } from '../commands/status.js';
 import type { UpOptions } from '../commands/up.js';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
+import { hubUrlFrom } from '../paths.js';
 import { detectGithubSlug, isGitRepo } from '../repo.js';
 import {
   agentChoices, createOptions, hubChoices, hubFlag, joinOptions, repoChoices,
-  validateHubUrl, validateInviteCode, validateTeamName, type HubChoice,
+  validateHubUrl, validateInviteCode, validateMemberName, validateTeamName, type HubChoice,
 } from './choices.js';
 import type { ToolChoice } from './detect.js';
 import type { Prompter } from './prompter.js';
@@ -52,10 +53,26 @@ async function pickAgent(ctx: TuiContext, message: string, exclude: readonly Too
   return ctx.p.select(message, choices, firstDetected ?? choices[0]!.value);
 }
 
-async function pickHub(p: Prompter): Promise<string> {
+const HEALTH_TIMEOUT_MS = 2000;
+
+/** Local-mode hubs have no GitHub sign-in, so members name themselves; hosted hubs use the gh login. */
+async function isLocalModeHub(deps: CliDeps, hub: string): Promise<boolean> {
+  try {
+    const res = await deps.fetch(`${hubUrlFrom(hub, deps.env)}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
+    return ((await res.json()) as { mode?: unknown }).mode === 'local';
+  } catch {
+    return false;
+  }
+}
+
+async function pickHub(ctx: TuiContext): Promise<{ hub: string; as?: string }> {
+  const { deps, p } = ctx;
   const choice = await p.select<HubChoice>('Which hub should the team use?', hubChoices(), 'public');
   const url = choice === 'custom' ? await p.text('Hub URL', { placeholder: 'https://hub.example.com', validate: validateHubUrl }) : undefined;
-  return hubFlag(choice, url);
+  const hub = hubFlag(choice, url);
+  if (choice === 'public' || !(await isLocalModeHub(deps, hub))) return { hub };
+  const as = await p.text('Your name on this team', { initial: defaultMemberName(deps.username), validate: validateMemberName });
+  return { hub, as: as.toLowerCase() };
 }
 
 export async function createFlow(ctx: TuiContext): Promise<void> {
@@ -68,8 +85,8 @@ export async function createFlow(ctx: TuiContext): Promise<void> {
     ? await p.select<'private' | 'public'>('New repo visibility', [
       { value: 'private', label: 'Private' }, { value: 'public', label: 'Public' }], 'private')
     : undefined;
-  const hub = await pickHub(p);
-  const res = await ctx.commands.create(deps, name, createOptions({ name, agent, repo, visibility, hub }));
+  const { hub, as } = await pickHub(ctx);
+  const res = await ctx.commands.create(deps, name, createOptions({ name, agent, repo, visibility, hub, as }));
   p.box([
     `Invite code: ${res.inviteCode}   (expires ${dateOnly(res.inviteExpiresAt)})`,
     '',
@@ -82,12 +99,12 @@ export async function joinFlow(ctx: TuiContext): Promise<void> {
   const { deps, p } = ctx;
   const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
   const agent = (await pickAgent(ctx, 'Which agent do you want to link?'))!;
-  const hub = await pickHub(p);
+  const { hub, as } = await pickHub(ctx);
   const where = await p.select<'clone' | 'here'>('Where should the team repo live?', [
     { value: 'clone', label: 'Clone it here', hint: 'skipped when this directory already is the team repo' },
     { value: 'here', label: 'Use the current directory' },
   ], 'clone');
-  const args = joinOptions({ code, agent, hub, clone: where === 'clone' });
+  const args = joinOptions({ code, agent, hub, as, clone: where === 'clone' });
   await ctx.commands.join(deps, args.code, args.opts);
   p.success('Joined. Open your agent in the repo to start working with the team.');
 }
@@ -103,7 +120,9 @@ export async function linkFlow(ctx: TuiContext): Promise<void> {
   if (!agent) { p.info('Every agent is already linked to this team.'); return; }
   p.info(`Paste the invite code for "${cred.teamName}" (printed by create; "agentteams invite rotate" issues a new one).`);
   const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
-  const args = joinOptions({ code, agent, hub: cred.hubUrl, clone: false });
+  // Same person, another tool: agent names are <member>-<tool>. Hosted hubs ignore this and use the gh login.
+  const member = cred.agentName.endsWith(`-${cred.tool}`) ? cred.agentName.slice(0, -cred.tool.length - 1) : undefined;
+  const args = joinOptions({ code, agent, hub: cred.hubUrl, as: member, clone: false });
   await ctx.commands.join(deps, args.code, args.opts);
   p.success(`${agent} is linked to "${cred.teamName}".`);
 }

@@ -1,4 +1,4 @@
-import { CreateTeamInput, type ToolKind } from '@agentteams/shared';
+import { CreateTeamInput, MemberName, type ToolKind } from '@agentteams/shared';
 import { validateNewRepoArgs, type CreateOpts } from '../commands/create.js';
 import type { JoinOpts } from '../commands/join.js';
 import { DEFAULT_HUB_URL, LOCAL_HUB_URL } from '../paths.js';
@@ -65,20 +65,25 @@ export function repoChoices(ctx: RepoContext, teamName: string): Choice<RepoChoi
   return choices;
 }
 
-export interface CreateAnswers { name: string; agent: ToolKind; repo: RepoChoice; visibility?: 'private' | 'public'; hub: string }
+export interface CreateAnswers { name: string; agent: ToolKind; repo: RepoChoice; visibility?: 'private' | 'public'; hub: string; as?: string }
 
 /** Menu answers → the options object `agentteams create` builds from its flags. */
 export function createOptions(a: CreateAnswers): CreateOpts {
   return {
     agent: a.agent, hub: a.hub, install: true,
+    ...(a.as ? { as: a.as } : {}),
     ...(a.repo === 'local' ? { local: true } : {}),
     ...(a.repo === 'new' ? { newRepo: true, visibility: a.visibility ?? 'private' } : {}),
   };
 }
 
-export interface JoinAnswers { code: string; agent: ToolKind; hub: string; clone: boolean }
+export interface JoinAnswers { code: string; agent: ToolKind; hub: string; clone: boolean; as?: string }
 
 /** Menu answers → the options object `agentteams join` builds from its flags. */
 export function joinOptions(a: JoinAnswers): { code: string; opts: JoinOpts } {
-  return { code: a.code.trim(), opts: { agent: a.agent, hub: a.hub, install: true, clone: a.clone } };
+  return { code: a.code.trim(), opts: { agent: a.agent, hub: a.hub, install: true, clone: a.clone, ...(a.as ? { as: a.as } : {}) } };
+}
+
+export function validateMemberName(v: string): string | undefined {
+  return MemberName.safeParse(v).success ? undefined : 'use 1-24 characters: a-z, 0-9 or _';
 }

@@ -13,7 +13,7 @@ export interface Prompter {
   outro: (message: string) => void;
   cancelled: () => void;
   select: <T extends string>(message: string, choices: Choice<T>[], initial?: T) => Promise<T>;
-  text: (message: string, opts?: { placeholder?: string; validate?: (v: string) => string | undefined }) => Promise<string>;
+  text: (message: string, opts?: { placeholder?: string; initial?: string; validate?: (v: string) => string | undefined }) => Promise<string>;
   confirm: (message: string, initial?: boolean) => Promise<boolean>;
   box: (body: string, title: string) => void;
   info: (message: string) => void;
@@ -40,7 +40,7 @@ export function clackPrompter({ color }: { color: boolean }): Prompter {
       options: choices.map((c) => ({ value: c.value, label: c.label, hint: c.hint, disabled: c.disabled })) as never,
     })),
     text: async (message, opts = {}) => unwrap(await clack.text({
-      message, placeholder: opts.placeholder,
+      message, placeholder: opts.placeholder, initialValue: opts.initial,
       validate: opts.validate && ((v) => opts.validate!(v ?? '')),
     })).trim(),
     confirm: async (message, initial = false) => unwrap(await clack.confirm({ message, initialValue: initial })),
