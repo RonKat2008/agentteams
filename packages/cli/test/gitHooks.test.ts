@@ -124,6 +124,17 @@ describe('runPreCommit', () => {
     expect(events.filter((e) => e.type === 'claim_overridden')).toHaveLength(0);
   });
 
+  it('blocks a rename away from a claimed path', async () => {
+    await saveCredential(mkDeps(), cred(ronitKey));
+    await stage('src/old.ts');
+    await git(repo, 'commit', '-q', '-m', 'add old');
+    await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
+    mkdirSync(join(repo, 'lib'));
+    await git(repo, 'mv', 'src/old.ts', 'lib/new.ts');
+    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(err.join('\n')).toContain('src/old.ts');
+  });
+
   it('allows a non-exclusive claim', async () => {
     await saveCredential(mkDeps(), cred(ronitKey));
     await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: false });
