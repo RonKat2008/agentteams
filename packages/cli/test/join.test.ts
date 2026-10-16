@@ -6,6 +6,7 @@ import type { RepoLink } from '@agentteams/shared';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { realExec, type Exec } from '../src/deps.js';
 import { HubClient } from '../src/hubClient.js';
+import { validSlug } from '../src/commands/join.js';
 import { main } from '../src/main.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
@@ -187,20 +188,59 @@ describe('join with preview and clone', () => {
     expect(existsSync(join(t.deps.cwd, 'app'))).toBe(false);
   });
 
-  it.each(['../evil/app', 'me/..', 'a b/app', 'me/app/extra', '-x/app'])('rejects the untrusted slug %s', async (slug) => {
-    const calls: Call[] = [];
-    const t = mk(cloneExec('gh-ok', calls));
-    const { code } = await team({ provider: 'github', slug, defaultBranch: 'main' }).catch(() => ({ code: '' }));
-    if (!code) return; // the hub already refuses this slug
-    expect(await run(t, 'join', code, '--hub', hub.url, '--no-install')).toBe(1);
-    expect(calls).toEqual([]);
-    expect(t.err.join('\n')).toMatch(/repo slug is invalid/);
-  });
-
   it('refuses to clone into the home directory', async () => {
     const t = mk(cloneExec('gh-ok', []));
     const { code } = await team(github);
     expect(await run(t, 'join', code, '--hub', hub.url, '--no-install', '--dir', t.deps.homedir)).toBe(1);
     expect(t.err.join('\n')).toContain('refusing to set up a team');
+  });
+
+  it('announces the clone before running it', async () => {
+    const t = mk(cloneExec('gh-ok', []));
+    const { code } = await team(github);
+    expect(await run(t, 'join', code, '--hub', hub.url, '--no-install')).toBe(0);
+    expect(t.out).toContain(`Cloning me/app into ${join(t.deps.cwd, 'app')} (use --no-clone to use this directory instead)`);
+  });
+
+  it('redacts userinfo from clone errors', async () => {
+    const exec: Exec = async (cmd, args, o) => cmd === 'gh'
+      ? { code: 1, stdout: '', stderr: "fatal: unable to access 'https://user:tok3n@github.com/me/app.git/': denied" }
+      : realExec(cmd, args, o);
+    const t = mk(exec);
+    const { code } = await team(github);
+    expect(await run(t, 'join', code, '--hub', hub.url, '--no-install')).toBe(1);
+    const msg = t.err.join('\n');
+    expect(msg).not.toContain('tok3n');
+    expect(msg).toContain('https://github.com/me/app.git');
+  });
+
+  it('clones into ~/app when joining a GitHub team from the home directory', async () => {
+    const calls: Call[] = [];
+    const t = mk(cloneExec('gh-ok', calls));
+    t.deps.cwd = t.deps.homedir;
+    const { code } = await team(github);
+    expect(await run(t, 'join', code, '--hub', hub.url, '--no-install')).toBe(0);
+    expect(calls).toEqual([{ cmd: 'gh', args: ['repo', 'clone', 'me/app', join(t.deps.homedir, 'app')] }]);
+  });
+
+  it('refuses a local team from the home directory and creates no agent', async () => {
+    const t = mk(cloneExec('gh-ok', []));
+    t.deps.cwd = t.deps.homedir;
+    const { code } = await team({ provider: 'local', defaultBranch: 'main' });
+    expect(await run(t, 'join', code, '--hub', hub.url, '--no-install', '--as', 'ghost')).toBe(1);
+    expect(t.err.join('\n')).toContain('refusing to set up a team');
+    const t2 = mk(cloneExec('gh-ok', []));
+    expect(await run(t2, 'join', code, '--hub', hub.url, '--no-install', '--as', 'ghost')).toBe(0);
+    expect(t2.out.join('\n')).toContain('as ghost-claude');
+  });
+});
+
+describe('validSlug', () => {
+  it.each(['../evil/app', 'me/..', './app', 'a b/app', 'me/app/extra', '-x/app', 'me', '', 'me/a;b'])('rejects %j', (slug) => {
+    expect(() => validSlug(slug)).toThrow(/repo slug is invalid/);
+  });
+  it('rejects undefined and accepts normal slugs', () => {
+    expect(() => validSlug(undefined)).toThrow(/repo slug is invalid/);
+    expect(validSlug('Me-1/app_x.y')).toBe('Me-1/app_x.y');
   });
 });

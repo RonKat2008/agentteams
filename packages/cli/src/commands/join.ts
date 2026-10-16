@@ -1,21 +1,20 @@
-import { realpath, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { InvitePreview, ToolKind } from '@agentteams/shared';
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
 import { hubUrlFrom } from '../paths.js';
-import { checkTeamDir, defaultMemberName, detectGithubSlug, repoRoot } from '../repo.js';
+import { checkTeamDir, defaultMemberName, detectGithubSlug, real, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 
 export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean; clone: boolean; dir?: string }
 
 const SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
-const real = (p: string): Promise<string> => realpath(p).catch(() => p);
 
 /** The slug comes from the hub team creator, so it is untrusted: validate before it reaches a path or URL. */
-function validSlug(slug: string | undefined): string {
+export function validSlug(slug: string | undefined): string {
   const parts = (slug ?? '').split('/');
   if (!slug || !SLUG_RE.test(slug) || parts.some((p) => p === '.' || p === '..') || slug.startsWith('-')) {
     throw new Error(`the team's repo slug is invalid ("${(slug ?? '').slice(0, 80)}"); ask the team creator to fix it`);
@@ -34,7 +33,7 @@ async function cloneRepo(deps: CliDeps, slug: string, target: string): Promise<v
   let res = await deps.exec('gh', ['repo', 'clone', slug, target]);
   if (res.code === 127) res = await deps.exec('git', ['clone', `https://github.com/${slug}.git`, target]);
   if (res.code !== 0) {
-    const why = firstLine(res.stderr) || firstLine(res.stdout) || 'unknown error';
+    const why = (firstLine(res.stderr) || firstLine(res.stdout) || 'unknown error').replace(/\/\/[^@/\s]+@/g, '//');
     throw new Error(`could not clone ${slug} (${why}). Ask the team creator to give you access to the GitHub repo, then re-run this command.`);
   }
 }
@@ -55,6 +54,7 @@ async function resolveRepoPath(deps: CliDeps, preview: InvitePreview, opts: Join
     if (await isCloneOf(deps, target, slug)) return target;
     throw new Error(`${target} already exists and is not a clone of ${slug}; pass --dir <path>`);
   }
+  deps.out(`Cloning ${slug} into ${target} (use --no-clone to use this directory instead)`);
   await cloneRepo(deps, slug, target);
   return target;
 }
