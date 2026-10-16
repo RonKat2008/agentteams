@@ -199,6 +199,45 @@ describe('agent selection when claude and codex share a repo', () => {
   });
 });
 
+describe('odd and numerous staged paths', () => {
+  it('still blocks a claimed file staged next to a 400-char path', async () => {
+    await saveCredential(mkDeps(), cred(ronitKey));
+    await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
+    const long = `${['a', 'b', 'c', 'd'].map((c) => c.repeat(95)).join('/')}/f.md`; // ~390 chars, each segment under the 255 limit
+    await stage('src/a.ts', long);
+    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(err.join('\n')).toContain('src/a.ts');
+    expect(err.join('\n')).not.toContain('could not check');
+  });
+
+  it('skips a path the hub would reject (over 1024 chars) instead of dropping the whole check', async () => {
+    await saveCredential(mkDeps(), cred(ronitKey));
+    await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
+    await stage('src/a.ts');
+    // Not creatable on disk; feed the oversized path through a fake exec instead.
+    const huge = `d/${'y'.repeat(1100)}`;
+    const exec: CliDeps['exec'] = async (cmd, args, o) => {
+      const r = await realExec(cmd, args, o);
+      return cmd === 'git' && args.includes('--cached') ? { ...r, stdout: `${r.stdout}${huge}\0` } : r;
+    };
+    expect(await runPreCommit({ ...mkDeps(), exec })).toBe(1);
+    expect(err.join('\n')).not.toContain('could not check');
+  });
+
+  it('checks a 1500-file commit in batches and blocks on the one claimed file', async () => {
+    await saveCredential(mkDeps(), cred(ronitKey));
+    await mcp(ashKey, 'claim_files', { globs: ['claimed/**'], exclusive: true });
+    const files = Array.from({ length: 1499 }, (_, i) => `bulk/f${i}.txt`);
+    mkdirSync(join(repo, 'bulk'));
+    for (const f of files) writeFileSync(join(repo, f), 'x\n');
+    await stage('claimed/one.ts');
+    await git(repo, 'add', 'bulk');
+    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(err.join('\n')).toContain('claimed/one.ts');
+    expect(err.join('\n')).not.toContain('could not check');
+  });
+});
+
 describe('sanitiser path', () => {
   it('collapses line breaks in peer-supplied fields', () => {
     expect(oneLine('evil\n  forged: line\r\nx')).not.toMatch(/[\n\r]/);

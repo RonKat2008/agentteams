@@ -132,6 +132,13 @@ const RepoGlob = z
   .refine(singleLine, `paths and globs ${SINGLE_LINE_MESSAGE}`)
   .refine((g) => !g.startsWith('/') && !g.split('/').includes('..'), 'paths and globs must be relative to the repo root');
 
+/** A literal repo-relative file path (as opposed to a claim glob); allowed to be longer than a glob. */
+export const REPO_PATH_MAX = 1024;
+export const RepoPath = z
+  .string().min(1).max(REPO_PATH_MAX)
+  .refine(singleLine, `paths ${SINGLE_LINE_MESSAGE}`)
+  .refine((g) => !g.startsWith('/') && !g.split('/').includes('..'), 'paths must be relative to the repo root');
+
 export const ClaimFilesInput = z.object({
   globs: z.array(RepoGlob).min(1).max(50),
   exclusive: z.boolean().default(true),
@@ -145,11 +152,11 @@ export type ReleaseFilesInput = z.input<typeof ReleaseFilesInput>;
 export const WhoOwnsInput = z.object({ path: RepoGlob });
 export type WhoOwnsInput = z.input<typeof WhoOwnsInput>;
 
-export const CheckFilesInput = z.object({ paths: z.array(RepoGlob).min(1).max(1000) });
+export const CheckFilesInput = z.object({ paths: z.array(RepoPath).min(1).max(1000) });
 export type CheckFilesInput = z.input<typeof CheckFilesInput>;
 
 export const ClaimOverrideInput = z.object({
-  paths: z.array(RepoGlob).min(1).max(1000),
+  paths: z.array(RepoPath).min(1).max(1000),
   sha: z.string().regex(/^[0-9a-f]{7,40}$/, 'sha must be 7-40 lowercase hex characters').optional(),
 });
 export type ClaimOverrideInput = z.input<typeof ClaimOverrideInput>;

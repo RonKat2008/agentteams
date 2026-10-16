@@ -1,3 +1,4 @@
+import { RepoPath, type CheckFilesResult } from '@agentteams/shared';
 import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
 import { oneLine } from './format.js';
@@ -7,6 +8,7 @@ import { HubClient } from './hubClient.js';
 export type { GitHookName } from './install/gitHooks.js';
 
 const HOOK_TIMEOUT_MS = 2000;
+const CHECK_BATCH_SIZE = 1000;
 const TOOL_ORDER = ['claude', 'codex', 'other'] as const;
 
 type Deps = Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec' | 'err'>;
@@ -32,6 +34,17 @@ async function pickCredential(deps: Deps): Promise<Credential | null> {
 const clientFor = (deps: Deps, cred: Credential): HubClient =>
   new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
 
+/** Paths the hub would reject (too long, control chars, absolute, `..`) must not sink the whole check. */
+const checkable = (paths: string[]): string[] => paths.filter((p) => RepoPath.safeParse(p).success);
+
+async function checkInBatches(client: HubClient, paths: string[]): Promise<CheckFilesResult['conflicts']> {
+  const conflicts: CheckFilesResult['conflicts'] = [];
+  for (let i = 0; i < paths.length; i += CHECK_BATCH_SIZE) {
+    conflicts.push(...(await client.checkFiles(paths.slice(i, i + CHECK_BATCH_SIZE))).conflicts);
+  }
+  return conflicts;
+}
+
 const message = (e: unknown): string => oneLine(e instanceof Error ? e.message : String(e));
 
 const hhmm = (iso: string): string => {
@@ -43,12 +56,12 @@ export async function runPreCommit(deps: Deps): Promise<number> {
   try {
     const cred = await pickCredential(deps);
     if (!cred) return 0;
-    const paths = await stagedFiles(deps, deps.cwd);
+    const paths = checkable(await stagedFiles(deps, deps.cwd));
     if (paths.length === 0) return 0;
     const client = clientFor(deps, cred);
     let conflicts;
     try {
-      ({ conflicts } = await client.checkFiles(paths));
+      conflicts = await checkInBatches(client, paths);
     } catch (e) {
       deps.err(`agentteams: warning: could not check file claims (${message(e)}); committing anyway`);
       return 0;
@@ -56,7 +69,7 @@ export async function runPreCommit(deps: Deps): Promise<number> {
     if (conflicts.length === 0) return 0;
     const owners = [...new Set(conflicts.map((c) => oneLine(c.agent)))].join(', ');
     if (deps.env.AGENTTEAMS_ALLOW === '1') {
-      await client.claimOverride(paths).catch(() => undefined);
+      await client.claimOverride([...new Set(conflicts.map((c) => c.path))].slice(0, CHECK_BATCH_SIZE)).catch(() => undefined);
       deps.err(`agentteams: committing over claims held by ${owners} (AGENTTEAMS_ALLOW=1); they have been notified`);
       return 0;
     }
