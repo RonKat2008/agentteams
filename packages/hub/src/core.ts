@@ -5,13 +5,18 @@
 export { createContext, withTx, type Actor, type HubContext } from './context.js';
 export { createSqliteDb } from './db/sqlite.js';
 export { migrateToLatest } from './db/migrations.js';
+export type { Database } from './db/schema.js';
+export type { ControlledTransaction, Kysely } from 'kysely';
 export { DomainError, type ErrorCode } from './errors.js';
 export { buildMcpServer } from './mcp/server.js';
 export { getActivity } from './services/activity.js';
-export { checkFiles, recordClaimOverride, whoOwns } from './services/claims.js';
+export { checkFiles, claimFiles, recordClaimOverride, releaseFiles, whoOwns } from './services/claims.js';
 export { getChanges, recordCommit } from './services/commits.js';
-export { readInbox } from './services/messages.js';
-export { claimTask, completeTask, getTaskView, listTasks, markMerged } from './services/tasks.js';
+export { markRead, readInbox, sendMessage } from './services/messages.js';
+export { createReplicatedTeam, registerReplicatedAgent } from './services/replication.js';
+export {
+  assignTask, claimTask, completeTask, createTask, getTaskView, listTasks, markMerged, updateTask,
+} from './services/tasks.js';
 export {
   authenticate, createTeam, getTeamStatus, joinTeam, previewInvite, revokeInvite, rotateInvite, setOrchestrator,
 } from './services/teams.js';

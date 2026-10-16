@@ -132,6 +132,42 @@ const migrations: Record<string, Migration> = {
       }
     },
   },
+  '006_replication': {
+    // Bookkeeping for the git transport's op-log replay. Created on both dialects (portable types) but only
+    // the CLI's SQLite replicas write to them.
+    async up(db: Kysely<any>) {
+      await db.schema.createTable('agent_keys')
+        .addColumn('agent_id', 'text', (c) => c.primaryKey())
+        .addColumn('team_id', 'text', (c) => c.notNull())
+        .addColumn('public_key', 'text', (c) => c.notNull())
+        .addColumn('registered_op_id', 'text', (c) => c.notNull())
+        .execute();
+
+      await db.schema.createTable('applied_ops')
+        .addColumn('op_id', 'text', (c) => c.primaryKey())
+        .addColumn('ts', 'text')
+        .addColumn('agent', 'text')
+        .addColumn('status', 'text', (c) => c.notNull())
+        .addColumn('error', 'text')
+        .addColumn('hash', 'text', (c) => c.notNull())
+        .execute();
+      await db.schema.createIndex('applied_ops_order_idx').on('applied_ops').columns(['ts', 'agent', 'op_id']).execute();
+
+      await db.schema.createTable('replica_state')
+        .addColumn('key', 'text', (c) => c.primaryKey())
+        .addColumn('value', 'text', (c) => c.notNull())
+        .execute();
+
+      await db.schema.createTable('replica_notices')
+        .addColumn('op_id', 'text', (c) => c.primaryKey())
+        .addColumn('agent_id', 'text', (c) => c.notNull())
+        .addColumn('body', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'text', (c) => c.notNull())
+        .addColumn('delivered_at', 'text')
+        .execute();
+      await db.schema.createIndex('replica_notices_agent_idx').on('replica_notices').columns(['agent_id', 'op_id']).execute();
+    },
+  },
 };
 
 class InCodeMigrationProvider implements MigrationProvider {

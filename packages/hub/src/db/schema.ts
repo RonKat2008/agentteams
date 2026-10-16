@@ -94,6 +94,43 @@ export interface ActivityTable {
   created_at: string;
 }
 
+// ---- Replication bookkeeping (git transport). Unused by the HTTP hub. ----
+
+/** Registered agent signing keys; first registration wins. Part of the replicated view. */
+export interface AgentKeysTable {
+  agent_id: string;
+  team_id: string;
+  public_key: string;
+  registered_op_id: string;
+}
+
+/** Every op this replica has evaluated. Part of the replicated view (identical on every replica). */
+export interface AppliedOpsTable {
+  op_id: string;
+  /** HLC time; null when the op's envelope was malformed (such ops take no part in the total order). */
+  ts: string | null;
+  agent: string | null;
+  status: 'applied' | 'rejected';
+  error: string | null;
+  /** sha256 of the canonical op JSON; a different op reusing an id forces a rebuild. */
+  hash: string;
+}
+
+/** Local key/value state of this replica; never wiped by a rebuild, never replicated. */
+export interface ReplicaStateTable {
+  key: string;
+  value: string;
+}
+
+/** Local-only notices for this replica's own agent (e.g. "your op was rejected"); survive rebuilds. */
+export interface ReplicaNoticesTable {
+  op_id: string;
+  agent_id: string;
+  body: string;
+  created_at: string;
+  delivered_at: string | null;
+}
+
 export interface Database {
   teams: TeamsTable;
   agents: AgentsTable;
@@ -103,6 +140,10 @@ export interface Database {
   claims: ClaimsTable;
   commits: CommitsTable;
   activity: ActivityTable;
+  agent_keys: AgentKeysTable;
+  applied_ops: AppliedOpsTable;
+  replica_state: ReplicaStateTable;
+  replica_notices: ReplicaNoticesTable;
 }
 
 export type TeamRow = Selectable<TeamsTable>;

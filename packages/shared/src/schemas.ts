@@ -199,3 +199,42 @@ export const ChangesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),
 });
 export type ChangesQuery = z.input<typeof ChangesQuery>;
+
+// ---- Replicated (git transport) ops -------------------------------------------------------------
+
+/** A ULID: 26 Crockford base32 characters (upper case, no I L O U), first character 0-7. */
+export const Ulid = z.string().regex(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/, 'must be a ULID');
+
+/** An Ed25519 public key: 32 raw bytes as unpadded base64url. */
+export const PublicKey = z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'public key must be 43 base64url characters');
+
+/** Team ids in the git transport appear in ref names, so a conservative charset. */
+export const ReplicatedTeamId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, 'invalid team id');
+
+/** Marks the given messages read for the author; ids not visible to the author are ignored. */
+export const MarkReadInput = z.object({ messageIds: z.array(Ulid).min(1).max(100) });
+export type MarkReadInput = z.input<typeof MarkReadInput>;
+
+/** Git transport `createTeam`: the creator's first op. The agent id must equal the op id. */
+export const ReplicatedCreateTeamInput = z.object({
+  teamId: ReplicatedTeamId,
+  name: CreateTeamInput.shape.name,
+  repo: RepoLink,
+  member: MemberName,
+  tool: ToolKind,
+  agentId: Ulid,
+  agentName: AgentName,
+  publicKey: PublicKey,
+});
+export type ReplicatedCreateTeamInput = z.input<typeof ReplicatedCreateTeamInput>;
+
+/** Git transport `join`: an agent's first op. The agent id must equal the op id. */
+export const ReplicatedJoinInput = z.object({
+  teamId: ReplicatedTeamId,
+  member: MemberName,
+  tool: ToolKind,
+  agentId: Ulid,
+  agentName: AgentName,
+  publicKey: PublicKey,
+});
+export type ReplicatedJoinInput = z.input<typeof ReplicatedJoinInput>;
