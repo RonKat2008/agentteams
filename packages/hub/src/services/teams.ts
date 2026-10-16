@@ -111,7 +111,7 @@ async function notifyAccessRequest(
   // Keyed on the GitHub login (case-insensitive), not the member name: distinct logins can sanitise to one member.
   if (!orchestrator) return;
   if (orchestrator.github_login !== null && orchestrator.github_login.toLowerCase() === joiner.githubLogin.toLowerCase()) return;
-  const body = `${joiner.name} (GitHub @${joiner.githubLogin}) joined. If they need push access to ${team.repo_slug}, run: agentteams access grant ${joiner.name}`;
+  const body = `${joiner.name} (GitHub @${joiner.githubLogin}) joined the team. Repo access to ${team.repo_slug} must be granted by a human: ask your user to run "agentteams access grant ${joiner.name}" in their own terminal.`;
   await insertMessage(tx, { teamId: team.id, fromId: joiner.agentId, toId: team.orchestrator_agent_id, kind: 'fyi', body });
   await logEvent(tx, team.id, joiner.agentId, 'message_sent', {
     to: orchestrator.name, kind: 'fyi', preview: body.slice(0, MESSAGE_PREVIEW_LENGTH),

@@ -245,7 +245,7 @@ describe('hosted GitHub identity', () => {
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toMatchObject({
       from: 'dylan_d-codex', kind: 'fyi',
-      body: 'dylan_d-codex (GitHub @dylan.d) joined. If they need push access to ronit/my-app, run: agentteams access grant dylan_d-codex',
+      body: 'dylan_d-codex (GitHub @dylan.d) joined the team. Repo access to ronit/my-app must be granted by a human: ask your user to run "agentteams access grant dylan_d-codex" in their own terminal.',
     });
     const events = await getActivity(hosted.ctx, orch);
     const joinEvent = events.filter((e) => e.type === 'agent_joined').at(-1)!;
