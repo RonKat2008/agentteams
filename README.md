@@ -16,6 +16,10 @@ with a shared task board, inbox, file claims and one orchestrator in charge.</p>
 npm i -g agentteams-cli
 ```
 
+Prefer a guided setup? Just run `agentteams`. In a terminal it opens a menu that detects your installed
+agents and walks you through creating or joining a team. (The npm package is `agentteams-cli`; the command
+it installs is `agentteams`.)
+
 ## See it run
 
 ### One team, any mix of agents
@@ -154,6 +158,7 @@ Caveats worth knowing:
 
 | Command | Purpose |
 |---|---|
+| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity, start a hub. Needs an interactive terminal; without one it prints help |
 | `agentteams up [--port <n>] [--share]` | Run a local hub (default port 4747 or `$AGENTTEAMS_PORT`); `--share` runs it in hosted mode behind a public Cloudflare quick tunnel and prints the URL plus the exact `create`/`join` commands |
 | `agentteams create <name>` | Create a team in this repo and install the agent integration |
 | `agentteams join <invite-code>` | Join a team and install the agent integration |
