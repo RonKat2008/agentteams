@@ -57,6 +57,8 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>').option('--no-install')
+    .option('--no-clone', 'do not clone the team repo; use the current directory')
+    .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
     .action((code: string, o) => joinCommand(deps, code, o));
   sub('install').description('(Re)configure Claude Code / Codex for this repo')
     .addOption(new Option('--agent <tool>').choices([...TOOLS, 'all']))

@@ -56,7 +56,7 @@ describe('agentteams commands', () => {
       expect(await run(t1, 'create', 'dev-squad2', '--hub', hub.url, '--local')).toBe(0);
       code = inviteCodeOf(t1);
       expect(await run(t2, 'join', code, '--agent', 'codex', '--as', 'ash', '--hub', hub.url)).toBe(0);
-      expect(t2.out).toContain('Joined team "dev-squad2" as ash-codex.');
+      expect(t2.out.some((l) => l.startsWith('Joined team "dev-squad2" as ash-codex. Repo: '))).toBe(true);
       expect(readFileSync(join(t2.deps.homedir, '.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.agentteams]');
       expect(await run(t2, 'status')).toBe(0);
       expect(t2.out.some((l) => l.startsWith('ronit_k-claude') && l.includes(' *'))).toBe(true);
