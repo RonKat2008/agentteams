@@ -304,6 +304,16 @@ async function replayAll(store: ReplayStore, trx: Trx, raws: unknown[], opts: Ap
   return { applied: replayer.applied, rejected: replayer.rejected + unrecordable, duplicates: 0, rebuilt: true };
 }
 
+/**
+ * Registered signing keys (agent id -> public key) for segment verification. decodeSegment's lookup is
+ * synchronous, so load this map first and pass `(id) => keys.get(id)`: a missing agent yields undefined,
+ * the "unregistered" value that allows its seq-0 bootstrap segment.
+ */
+export async function loadAgentKeys(store: ReplayStore): Promise<Map<string, string>> {
+  const rows = await store.ctx.db.selectFrom('agent_keys').select(['agent_id', 'public_key']).execute();
+  return new Map(rows.map((r) => [r.agent_id, r.public_key]));
+}
+
 /** Returns this agent's undelivered notices, oldest first, and marks them delivered. */
 export async function takeNotices(store: ReplayStore, agentId: string): Promise<ReplicaNotice[]> {
   return store.core.withTx(store.ctx, async (tx) => {

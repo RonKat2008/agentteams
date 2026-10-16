@@ -1,10 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import * as core from '@agentteams/hub/core';
-import { newAgentKeyPair } from '../../src/git/crypto.js';
+import { newAgentKeyPair, newTeamKey } from '../../src/git/crypto.js';
 import { createHlc, formatHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp, mintOpId } from '../../src/git/ops.js';
-import { rebuildView, takeNotices } from '../../src/git/replay.js';
-import type { Op } from '../../src/git/segment.js';
+import { loadAgentKeys, rebuildView, takeNotices } from '../../src/git/replay.js';
+import { decodeSegment, encodeSegment, type Op } from '../../src/git/segment.js';
 import { Scenario, TEAM_ID, batches, openReplica, prng, shuffle, type Replica, type ScenarioAgent } from './replayHelpers.js';
 
 const open: Replica[] = [];
@@ -314,6 +314,35 @@ describe('envelope validation', () => {
     expect(summary.rebuilt).toBe(true);
     await b.apply([forged, ...log.ops]);
     expect(await a.dump()).toBe(await b.dump());
+  });
+});
+
+describe('segment round trip', () => {
+  it('captured ops survive encode/decode with keys loaded from the view, then replay', async () => {
+    const teamKey = newTeamKey();
+    const pair = newAgentKeyPair();
+    const hlc = createHlc(() => Date.UTC(2026, 9, 16, 9));
+    const { agentId, op: create } = captureBootstrapOp(hlc, 'createTeam', {
+      teamId: TEAM_ID, name: 'alpha', repo: { provider: 'local', defaultBranch: 'main' }, member: 'ronit', tool: 'claude',
+      agentName: 'ronit-claude', publicKey: pair.publicKey,
+    });
+    const hello = captureOp(hlc, agentId, 'sendMessage', { to: 'all', body: 'hello' });
+    const seg0 = encodeSegment({ teamId: TEAM_ID, agent: agentId, seq: 0, ops: [create] }, teamKey, pair.privateKey);
+    const seg1 = encodeSegment({ teamId: TEAM_ID, agent: agentId, seq: 1, ops: [hello] }, teamKey, pair.privateKey);
+
+    const r = await replica(() => [create, hello]);
+    let keys = await loadAgentKeys(r.store);
+    const d0 = decodeSegment(seg0, teamKey, { teamId: TEAM_ID, agent: agentId, seq: 0 }, (id) => keys.get(id));
+    expect(d0).toMatchObject({ ok: true, bootstrapKey: pair.publicKey });
+    if (!d0.ok) throw new Error('decode failed');
+    expect(await r.apply(d0.segment.ops)).toMatchObject({ applied: 1, rejected: 0 });
+
+    keys = await loadAgentKeys(r.store);
+    expect(keys.get(agentId)).toBe(pair.publicKey);
+    const d1 = decodeSegment(seg1, teamKey, { teamId: TEAM_ID, agent: agentId, seq: 1 }, (id) => keys.get(id));
+    if (!d1.ok) throw new Error('decode failed');
+    expect(await r.apply(d1.segment.ops)).toMatchObject({ applied: 1, rejected: 0 });
+    expect((await r.store.ctx.db.selectFrom('messages').select('body').execute()).map((m) => m.body)).toEqual(['hello']);
   });
 });
 
