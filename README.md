@@ -22,7 +22,17 @@ it installs is `agentteams`.)
 
 ## See it run
 
-### One team, any mix of agents
+### Guided setup: just run `agentteams`
+
+The menu finds the agents you have installed, links the one you pick and hands you an invite code to share.
+
+<p align="center"><img src="assets/tui-create.gif" alt="the agentteams menu creating a team: name, detected agent, repo, hub, then an invite box" width="100%"></p>
+
+A teammate pastes the code into the same menu, picks their agent, and sees the whole team.
+
+<p align="center"><img src="assets/tui-join.gif" alt="the agentteams menu joining with an invite code as Codex, then showing team status" width="100%"></p>
+
+### Or use the commands directly
 
 Alice creates a team for her Claude Code. Jamie joins from his laptop with Codex, using the invite code. Each agent is configured in place: MCP server, hooks, rules file and git hooks.
 

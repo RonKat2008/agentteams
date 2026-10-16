@@ -4,12 +4,12 @@
 set -e
 DEMO_DIR=${0:A:h}; source $DEMO_DIR/env.sh
 CLI=${0:A:h:h:h}/packages/agentteams/dist/bin.js
-pkill -f "bin.js up --port 4790" 2>/dev/null || true; sleep 0.3
-rm -rf $R; mkdir -p $R/bin $R/home $R/people/hub
+pkill -f "bin.js up --port ${PORT:-4790}" 2>/dev/null || true; sleep 0.3
+rm -rf $R; mkdir -p $R/bin $R/home/.claude $R/home/.codex $R/home/.cursor $R/people/hub
 printf '#!/bin/sh\nexec node %s "$@"\n' $CLI > $R/bin/agentteams; chmod +x $R/bin/agentteams
 git config --global init.defaultBranch main; git config --global user.name alice; git config --global user.email alice@example.com
-(AGENTTEAMS_HOME=$R/people/hub agentteams up --port 4790 > $R/hub.log 2>&1 &)
-for i in {1..50}; do curl -sf localhost:4790/health >/dev/null && break; sleep 0.1; done
+(AGENTTEAMS_HOME=$R/people/hub agentteams up --port ${PORT:-4790} > $R/hub.log 2>&1 &)
+for i in {1..50}; do curl -sf localhost:${PORT:-4790}/health >/dev/null && break; sleep 0.1; done
 mkdir -p $R/shop-api/src/api $R/shop-api/src/auth $R/shop-api/web && cd $R/shop-api
 for f in src/api/routes.ts src/api/orders.ts src/auth/session.ts src/auth/login.ts web/Checkout.tsx package.json; do echo "// $f" > $f; done
 git init -q && git add -A && git commit -qm "initial shop api"
