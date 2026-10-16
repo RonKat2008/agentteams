@@ -3,8 +3,26 @@ import { homedir, userInfo } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { colorEnabled } from './color.js';
 
-export interface ExecResult { code: number; stdout: string; stderr: string }
-export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; input?: string }) => Promise<ExecResult>;
+export interface ExecResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  /** Raw stdout bytes; set only when the call asked for `binary: true`. */
+  stdoutBuf?: Buffer;
+  /** True when the child was killed because `timeoutMs` elapsed. */
+  timedOut?: boolean;
+}
+export interface ExecOpts {
+  cwd?: string;
+  input?: string | Buffer;
+  /** Extra environment variables, merged over process.env. */
+  env?: Record<string, string>;
+  /** Also return stdout as an unmodified Buffer in `stdoutBuf`. */
+  binary?: boolean;
+  /** Kill the child after this many ms. Default: no timeout. */
+  timeoutMs?: number;
+}
+export type Exec = (cmd: string, args: string[], opts?: ExecOpts) => Promise<ExecResult>;
 
 export interface CliDeps {
   env: NodeJS.ProcessEnv;
@@ -24,13 +42,22 @@ export interface CliDeps {
 
 export const realExec: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
-    const child = execFile(cmd, args, { cwd: opts.cwd, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const env = opts.env ? { ...process.env, ...opts.env } : undefined;
+    const encoding = opts.binary ? 'buffer' : 'utf8';
+    const child = execFile(cmd, args, { cwd: opts.cwd, env, encoding, maxBuffer: 64 * 1024 * 1024, ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}) }, (error, stdout, stderr) => {
       if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
         resolve({ code: 127, stdout: '', stderr: `command not found: ${cmd}` });
         return;
       }
       const code = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
-      resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+      const timedOut = Boolean(opts.timeoutMs && error && (error as { killed?: boolean }).killed);
+      resolve({
+        code,
+        stdout: opts.binary ? '' : String(stdout),
+        stderr: String(stderr),
+        ...(opts.binary ? { stdoutBuf: stdout as unknown as Buffer } : {}),
+        ...(timedOut ? { timedOut } : {}),
+      });
     });
     // Always close stdin (so children never wait on input) and swallow EPIPE-style errors.
     child.stdin?.on('error', () => {});
