@@ -73,7 +73,7 @@ async function upShare(deps: CliDeps, opts: UpOptions): Promise<void> {
   const home = await ensureHome(deps);
   const requested = portFrom(opts.port ?? deps.env.AGENTTEAMS_PORT);
   const port = requested === 0 ? await freePort() : requested;
-  const tunnel = await startTunnel(opts.tunnel ?? realTunnelStarter(), `http://127.0.0.1:${port}`);
+  const tunnel = await startTunnel(opts.tunnel ?? realTunnelStarter({ log: deps.out }), `http://127.0.0.1:${port}`);
   let hub: RunningHub;
   try {
     hub = await startHub({

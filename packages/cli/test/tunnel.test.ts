@@ -28,6 +28,17 @@ describe('realTunnelStarter', () => {
     expect(f.emitter.stopped).toBe(1);
   });
 
+  it('announces the first-use download and explains a missing optional package', async () => {
+    const f = fakeCf();
+    const lines: string[] = [];
+    const p = realTunnelStarter({ load: async () => f.mod, log: (l) => lines.push(l) })('http://127.0.0.1:9');
+    await new Promise((r) => setTimeout(r, 10));
+    f.emitter.emit('url', 'https://abc.trycloudflare.com');
+    await p;
+    expect(lines.join('\n')).toMatch(/Downloading the cloudflared binary/);
+    await expect(realTunnelStarter({ load: async () => { throw new Error('the "cloudflared" package is not installed'); } })('http://x')).rejects.toThrow(/not installed/);
+  });
+
   it('skips the download when the binary exists', async () => {
     const f = fakeCf({ binExists: true });
     const p = realTunnelStarter({ load: async () => f.mod })('http://127.0.0.1:9');

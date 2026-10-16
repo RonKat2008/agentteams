@@ -36,6 +36,8 @@ async function loadCloudflared(): Promise<CloudflaredModule> {
 export interface RealTunnelOptions {
   load?: () => Promise<CloudflaredModule>;
   timeoutMs?: number;
+  /** Progress lines (e.g. the first-use binary download). */
+  log?: (line: string) => void;
 }
 
 /** Cloudflare quick tunnel via the optional `cloudflared` package; fetches the binary on first use. */
@@ -43,6 +45,7 @@ export function realTunnelStarter(opts: RealTunnelOptions = {}): TunnelStarter {
   return async (localUrl) => {
     const cf = await (opts.load ?? loadCloudflared)();
     if (!existsSync(cf.bin)) {
+      opts.log?.('Downloading the cloudflared binary (first use only)...');
       try {
         await cf.install(cf.bin);
       } catch (e) {
