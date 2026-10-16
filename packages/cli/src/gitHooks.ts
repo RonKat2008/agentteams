@@ -1,6 +1,7 @@
 import { RepoPath, type CheckFilesResult } from '@agentteams/shared';
 import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
+import { PRE_COMMIT_BLOCKED } from './exitCodes.js';
 import { oneLine } from './format.js';
 import { currentBranch, headCommit, stagedFiles } from './git.js';
 import { HubClient } from './hubClient.js';
@@ -78,7 +79,7 @@ export async function runPreCommit(deps: Deps): Promise<number> {
       ...conflicts.map((c) => `  ${oneLine(c.path)}  (claimed by ${oneLine(c.agent)} via ${oneLine(c.glob)}, until ${hhmm(c.expiresAt)})`),
       'Ask them via send_message, wait for release, or override with: AGENTTEAMS_ALLOW=1 git commit ...',
     ].join('\n'));
-    return 1;
+    return PRE_COMMIT_BLOCKED;
   } catch (e) {
     deps.err(`agentteams: warning: claim check failed (${message(e)}); committing anyway`);
     return 0;

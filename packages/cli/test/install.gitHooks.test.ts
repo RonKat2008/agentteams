@@ -140,17 +140,28 @@ describe('installGitHooks', () => {
   it('default node/bin targets are guarded so a missing bin does not block', async () => {
     await installGitHooks(deps, repo);
     const pre = join(repo, '.git/hooks/pre-commit');
-    expect(readFileSync(pre, 'utf8')).toMatch(/if \[ -x '.*' \] && \[ -f '.*' \]; then exec /);
+    expect(readFileSync(pre, 'utf8')).toMatch(/if \[ -x '.*' \] && \[ -f '.*' \]; then '.*' '.*' git-hook pre-commit/);
     expect(readFileSync(pre, 'utf8').trimEnd().endsWith('exit 0')).toBe(true);
   });
 
-  it('pre-commit blocks when the target exits 1; post-commit failure leaves the commit', async () => {
-    const failing = mkStandin('fail.sh', 'exit 1');
-    await installGitHooks(deps, repo, { command: failing });
-    expect((await commitFile()).code).not.toBe(0);
-    rmSync(join(repo, '.git/hooks/pre-commit'));
+  it('a crashing CLI (exit 1) never blocks a commit', async () => {
+    await installGitHooks(deps, repo, { command: mkStandin('crash.sh', 'exit 1') });
     expect((await commitFile()).code).toBe(0);
     expect((await realExec('git', ['rev-parse', '--verify', 'HEAD'], { cwd: repo })).code).toBe(0);
+  });
+
+  it('blocks only when the target exits 3 (the runner\'s "blocked" code)', async () => {
+    await installGitHooks(deps, repo, { command: mkStandin('block.sh', 'exit 3') });
+    expect((await commitFile()).code).not.toBe(0);
+    expect((await realExec('git', ['rev-parse', '--verify', 'HEAD'], { cwd: repo })).code).not.toBe(0);
+  });
+
+  it('warns on stderr and passes when the CLI is missing', async () => {
+    const gone = join(tmp, 'gone.sh');
+    await installGitHooks(deps, repo, { command: gone });
+    const r = await commitFile();
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain(`agentteams: warning: CLI not found at ${gone}; run agentteams install`);
   });
 
   it('chains a user post-commit hook, moving it to prev', async () => {

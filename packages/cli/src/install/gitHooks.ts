@@ -4,6 +4,7 @@ import type { CliDeps } from '../deps.js';
 import { oneLine } from '../format.js';
 import { gitPath, hooksPathConfigured } from '../git.js';
 import { cliArgv, shellQuote } from '../paths.js';
+import { PRE_COMMIT_BLOCKED } from '../exitCodes.js';
 import { MANAGED_MARKER } from './hooksConfig.js';
 
 export type GitHookName = 'pre-commit' | 'post-commit';
@@ -19,27 +20,32 @@ const FILE_MARKER = '# agentteams-managed';
 /** What the hook execs: node plus the CLI entry point, or (tests) a single executable. */
 export type HookTarget = { node: string; bin: string } | { command: string };
 
-const targetParts = (t: HookTarget): { argv: string; guard: string } => {
-  if ('command' in t) return { argv: shellQuote(t.command), guard: `[ -x ${shellQuote(t.command)} ]` };
+const targetParts = (t: HookTarget): { argv: string; guard: string; where: string } => {
+  if ('command' in t) return { argv: shellQuote(t.command), guard: `[ -x ${shellQuote(t.command)} ]`, where: t.command };
   const [node, bin] = [shellQuote(t.node), shellQuote(t.bin)];
-  return { argv: `${node} ${bin}`, guard: `[ -x ${node} ] && [ -f ${bin} ]` };
+  return { argv: `${node} ${bin}`, guard: `[ -x ${node} ] && [ -f ${bin} ]`, where: t.bin };
 };
 
 /**
  * Pure: the managed hook script. The final invocation is guarded so that a moved or deleted
- * node/CLI never blocks a commit (the script just exits 0). The injectable test `command` is a
- * single executable path, guarded with `-x`; the default is guarded on both node (`-x`) and bin (`-f`).
+ * node/CLI never blocks a commit (the script warns on stderr and exits 0). pre-commit blocks only
+ * when the CLI exits 3 (its "blocked" code); any other status, such as a crash, allows the commit.
+ * The injectable test `command` is a single executable path, guarded with `-x`; the default is
+ * guarded on both node (`-x`) and bin (`-f`).
  */
 export function managedScript(name: GitHookName, target: HookTarget): string {
   const blocking = name === 'pre-commit';
-  const { argv, guard } = targetParts(target);
+  const { argv, guard, where } = targetParts(target);
   const invoke = `${argv} git-hook ${name} ${MANAGED_MARKER}`;
+  const warn = `echo ${shellQuote(oneLine(`agentteams: warning: CLI not found at ${where}; run agentteams install`))} >&2`;
   return [
     '#!/bin/sh',
     FILE_MARKER,
     `prev="$(dirname "$0")/${name}.agentteams-prev"`,
     `if [ -x "$prev" ]; then "$prev" "$@" ${blocking ? '|| exit $?' : '|| true'}; fi`,
-    blocking ? `if ${guard}; then exec ${invoke}; fi` : `if ${guard}; then ${invoke} || true; fi`,
+    blocking
+      ? `if ${guard}; then ${invoke}; rc=$?; [ "$rc" -eq ${PRE_COMMIT_BLOCKED} ] && exit 1; else ${warn}; fi`
+      : `if ${guard}; then ${invoke} || true; else ${warn}; fi`,
     'exit 0',
     '',
   ].join('\n');

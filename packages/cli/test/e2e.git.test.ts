@@ -136,7 +136,7 @@ describe('git workflow end to end', () => {
 
     const blocked = hookDeps(worker, wt);
     const errsBefore = worker.err.length;
-    expect(await runPreCommit(blocked)).toBe(1);
+    expect(await runPreCommit(blocked)).toBe(3);
     expect(worker.err.slice(errsBefore).join('\n')).toContain(orchCred.agentName);
 
     const allowed = hookDeps(worker, wt, { AGENTTEAMS_ALLOW: '1' });

@@ -97,7 +97,7 @@ describe('runPreCommit', () => {
     await saveCredential(mkDeps(), cred(ronitKey));
     await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     await stage('src/a.ts');
-    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(await runPreCommit(mkDeps())).toBe(3);
     const text = err.join('\n');
     expect(text).toContain('commit blocked');
     expect(text).toContain('src/a.ts');
@@ -119,7 +119,7 @@ describe('runPreCommit', () => {
     await saveCredential(mkDeps(), cred(ronitKey));
     await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     await stage('src/a.ts');
-    expect(await runPreCommit(mkDeps({ AGENTTEAMS_ALLOW: v }))).toBe(1);
+    expect(await runPreCommit(mkDeps({ AGENTTEAMS_ALLOW: v }))).toBe(3);
     const events = await new HubClient(hub.url, { apiKey: ronitKey }).activity({ limit: 50 });
     expect(events.filter((e) => e.type === 'claim_overridden')).toHaveLength(0);
   });
@@ -131,7 +131,7 @@ describe('runPreCommit', () => {
     await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     mkdirSync(join(repo, 'lib'));
     await git(repo, 'mv', 'src/old.ts', 'lib/new.ts');
-    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(await runPreCommit(mkDeps())).toBe(3);
     expect(err.join('\n')).toContain('src/old.ts');
   });
 
@@ -147,7 +147,7 @@ describe('runPreCommit', () => {
     await saveCredential(mkDeps(), { ...cred(ashKey), tool: 'codex', agentName: 'ash-codex' });
     await mcp(ronitKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     await stage('src/a.ts');
-    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(await runPreCommit(mkDeps())).toBe(3);
   });
 });
 
@@ -194,7 +194,7 @@ describe('agent selection when claude and codex share a repo', () => {
   it('still blocks the codex worktree on a claim held by the claude agent', async () => {
     await mcp(ronitKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     await stageIn(wt, 'src/a.ts');
-    expect(await runPreCommit(depsIn(wt))).toBe(1);
+    expect(await runPreCommit(depsIn(wt))).toBe(3);
     expect(err.join('\n')).toContain('ronit-claude');
   });
 });
@@ -205,7 +205,7 @@ describe('odd and numerous staged paths', () => {
     await mcp(ashKey, 'claim_files', { globs: ['src/**'], exclusive: true });
     const long = `${['a', 'b', 'c', 'd'].map((c) => c.repeat(95)).join('/')}/f.md`; // ~390 chars, each segment under the 255 limit
     await stage('src/a.ts', long);
-    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(await runPreCommit(mkDeps())).toBe(3);
     expect(err.join('\n')).toContain('src/a.ts');
     expect(err.join('\n')).not.toContain('could not check');
   });
@@ -220,7 +220,7 @@ describe('odd and numerous staged paths', () => {
       const r = await realExec(cmd, args, o);
       return cmd === 'git' && args.includes('--cached') ? { ...r, stdout: `${r.stdout}${huge}\0` } : r;
     };
-    expect(await runPreCommit({ ...mkDeps(), exec })).toBe(1);
+    expect(await runPreCommit({ ...mkDeps(), exec })).toBe(3);
     expect(err.join('\n')).not.toContain('could not check');
   });
 
@@ -232,7 +232,7 @@ describe('odd and numerous staged paths', () => {
     for (const f of files) writeFileSync(join(repo, f), 'x\n');
     await stage('claimed/one.ts');
     await git(repo, 'add', 'bulk');
-    expect(await runPreCommit(mkDeps())).toBe(1);
+    expect(await runPreCommit(mkDeps())).toBe(3);
     expect(err.join('\n')).toContain('claimed/one.ts');
     expect(err.join('\n')).not.toContain('could not check');
   });
