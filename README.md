@@ -142,9 +142,8 @@ local hub stays the default; this is only for teammates on other machines.
 2. Add Neon Postgres from the Vercel Marketplace. It sets `DATABASE_URL`. The function should use the
    pooled (`-pooler`) URL; the migration step prefers `DATABASE_URL_UNPOOLED` when present. The pool is
    capped at 3 connections per instance on Vercel (override with `PG_POOL_MAX`).
-3. Optional, for a custom domain: `vercel env add AGENTTEAMS_ALLOWED_HOSTS` (comma-separated host names).
-   On Vercel it defaults to `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL` and `VERCEL_BRANCH_URL`; extra
-   custom domains need `AGENTTEAMS_ALLOWED_HOSTS`. Preview deployments sit behind Vercel Deployment Protection.
+3. Allowed hosts: on Vercel no host allowlist is applied unless `AGENTTEAMS_ALLOWED_HOSTS` is set. If you set it
+   (comma-separated host names), include every domain, including `<project>.vercel.app`. Self-hosting needs it.
    Builds run migrations, so give Preview its own Neon branch database; a preview without database
    variables skips migration and then fails at runtime.
 4. `vercel deploy --prod`. The build command (`vercel.json`) builds the workspace and runs
@@ -153,7 +152,7 @@ local hub stays the default; this is only for teammates on other machines.
 5. Members: `agentteams create my-app --hub https://<project>.vercel.app`. Friends run
    `agentteams join <code> --hub https://<project>.vercel.app`. The creator runs `agentteams access grant <agent>`.
 
-Layout: `api/index.ts` re-exports `createVercelHandler()` from `@agentteams/hub/vercel` as the
+Layout: `api/index.mjs` (plain ESM, so no TypeScript compile step is needed) re-exports `createVercelHandler()` from `@agentteams/hub/vercel` as the
 `GET`/`POST`/... handlers, and `vercel.json` rewrites every path to `/api`. Hosted mode is forced for the
 function. `framework` is `null` because this repo is a pnpm workspace whose hub package must be built
 first, and an explicit `api/` function plus build command is predictable. (Vercel may also support Hono with
@@ -168,9 +167,27 @@ Security notes:
 - Rate limits are in-memory token buckets, so on serverless they are per function instance and only
   best-effort (a burst spread over several instances is not counted together). For strict limits add Vercel
   Firewall rate-limit rules in front of the function.
-- Client IPs for the per-IP limits come from `x-vercel-forwarded-for`, then `x-real-ip`, then
-  `Fly-Client-IP` / `X-Forwarded-For` (IPv6 clients are bucketed by /64). Only run hosted mode behind a proxy
-  that sets these. `/health` is exempt from the Host allowlist.
+- Client IP trust: on Vercel the hub uses Vercel's own headers, on Fly it uses `fly-client-ip`, and behind any
+  other proxy you must set `AGENTTEAMS_TRUSTED_IP_HEADER`; otherwise the socket address is used. IPv6 clients
+  are bucketed by /64. `/health` is exempt from the Host allowlist.
+- Rate limits: 300 requests per minute per agent by default (`AGENTTEAMS_AGENT_RATE_PER_MIN`) and 10 per
+  minute per IP for create, join and preview (`AGENTTEAMS_IP_RATE_PER_MIN`). On Vercel they are best-effort
+  per instance.
+- `agentteams access grant <agent>` needs a human at a terminal; agents cannot grant access. Scripted use needs
+  `--yes` together with `AGENTTEAMS_ALLOW_GRANT=1`.
+- Your GitHub token is sent once to the hub you name (the CLI tells you when) and redirects are refused.
+  Only join hubs you trust.
+- `agentteams worktree <task> --remove` removes a finished task's worktree.
+
+### First-deploy checklist
+
+- [ ] `curl https://<prod>/health` returns `{"ok":true,"mode":"hosted"}`.
+- [ ] `curl https://<prod>/nope` returns a JSON 404 from the hub.
+- [ ] `curl -sI https://<prod>/api/team/status` returns 401 with `WWW-Authenticate`.
+- [ ] The build log shows the migrations ran.
+- [ ] Runtime `DATABASE_URL` is the Neon pooled URL.
+- [ ] Previews use a Neon branch database.
+- [ ] Deployment Protection is off for production, or you use the production domain.
 
 ### Self-hosting with Node
 
