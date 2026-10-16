@@ -13,7 +13,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsup && node scripts/copy-docs.mjs && chmod +x dist/bin.js"
+    "build": "tsup && node scripts/copy-docs.mjs && chmod +x dist/bin.js",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
