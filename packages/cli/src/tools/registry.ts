@@ -1,18 +1,17 @@
 import { ToolKind } from '@agentteams/shared';
 import { claudeAdapter } from './claude.js';
+import { clineAdapter } from './cline.js';
 import { codexAdapter } from './codex.js';
 import { copilotAdapter } from './copilot.js';
 import { droidAdapter } from './droid.js';
 import { geminiAdapter } from './gemini.js';
-import { clinePlaceholder } from './placeholders.js';
-import { cursorPlaceholder } from './placeholders.js';
-import { opencodePlaceholder } from './placeholders.js';
-import { otherPlaceholder } from './placeholders.js';
-import { rooPlaceholder } from './placeholders.js';
-import { windsurfPlaceholder } from './placeholders.js';
+import { opencodeAdapter } from './opencode.js';
+import { otherAdapter } from './other.js';
+import { rooAdapter } from './roo.js';
+import { cursorPlaceholder, windsurfPlaceholder } from './placeholders.js';
 import type { ToolAdapter } from './types.js';
 
-/** One entry per ToolKind (the type forces completeness). A tool's task replaces only its own line. */
+/** One entry per ToolKind (the type forces completeness). */
 const ADAPTERS: Record<ToolKind, ToolAdapter> = {
   claude: claudeAdapter,
   codex: codexAdapter,
@@ -20,11 +19,11 @@ const ADAPTERS: Record<ToolKind, ToolAdapter> = {
   gemini: geminiAdapter,
   copilot: copilotAdapter,
   droid: droidAdapter,
-  opencode: opencodePlaceholder,
+  opencode: opencodeAdapter,
   windsurf: windsurfPlaceholder,
-  cline: clinePlaceholder,
-  roo: rooPlaceholder,
-  other: otherPlaceholder,
+  cline: clineAdapter,
+  roo: rooAdapter,
+  other: otherAdapter,
 };
 
 export const getAdapter = (kind: ToolKind): ToolAdapter => ADAPTERS[kind];
