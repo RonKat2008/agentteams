@@ -94,6 +94,27 @@ export function setMcpEntry(cfg: JsonConfig, key: string, entry: unknown): JsonC
   return { ...cfg, [key]: { ...servers, [MCP_ENTRY_NAME]: entry } };
 }
 
+/**
+ * For a global (not per-repo) config that holds one "agentteams" entry pinned with `--repo`: sets the entry and warns
+ * when it was pointing at a different repo, since that repo's agent now reads this repo's team.
+ */
+export async function upsertPinnedMcpEntry(
+  path: string, shown: string, key: string, entry: unknown, repo: string, report: InstallReport,
+): Promise<ManagedStatus> {
+  let previous: string | undefined;
+  const status = await upsertManagedJson(path, shown, (c) => {
+    const servers = c[key];
+    if (isPlainObject(servers) && isManagedMcpEntry(servers[MCP_ENTRY_NAME])) previous = mcpEntryRepo(servers[MCP_ENTRY_NAME]);
+    return setMcpEntry(c, key, entry);
+  }, report);
+  if (isWritten(status) && previous !== undefined && previous !== repo) {
+    report.warnings.push(
+      `${shown}: agentteams MCP was pointing at ${previous}; it now points at ${repo} (this agent supports one agentteams repo at a time)`,
+    );
+  }
+  return status;
+}
+
 export type ManagedStatus = UpsertStatus | 'shape';
 
 export const isWritten = (s: ManagedStatus): boolean => s !== 'invalid' && s !== 'shape';

@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CliDeps } from '../deps.js';
 import { claudeDialect } from './dialects.js';
-import { isWritten, setMcpEntry, upsertManagedJson } from './jsonConfig.js';
+import { isWritten, upsertPinnedMcpEntry } from './jsonConfig.js';
 import { mcpStdioArgv, writeRulesFile } from './projectMcp.js';
 import type { InstallReport, ToolAdapter } from './types.js';
 
@@ -35,10 +35,9 @@ export const clineAdapter: ToolAdapter = {
     const entry = { ...mcpStdioArgv('cline', cred.repoPath), disabled: false, autoApprove: [] as string[] };
     for (const path of await clineSettingsPaths(deps)) {
       const shown = path.startsWith(deps.homedir) ? `~${path.slice(deps.homedir.length)}` : path;
-      const status = await upsertManagedJson(path, shown, (c) => setMcpEntry(c, 'mcpServers', entry), report);
-      if (isWritten(status)) report.done.push(`registered MCP server "agentteams" in ${shown}`);
+      const status = await upsertPinnedMcpEntry(path, shown, 'mcpServers', entry, cred.repoPath, report);
+      if (isWritten(status)) report.done.push(`registered MCP server "agentteams" in ${shown} (global: pinned to this repo)`);
     }
-    report.warnings.push('Cline MCP settings are global: the "agentteams" entry is pinned to this repo; re-run install in another repo to repoint it');
     await writeRulesFile(cred.repoPath, '.clinerules/agentteams.md', cred, report);
     return report;
   },

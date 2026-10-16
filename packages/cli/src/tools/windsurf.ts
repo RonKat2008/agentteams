@@ -4,7 +4,7 @@ import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { cliArgv } from '../paths.js';
 import { claudeDialect } from './dialects.js';
-import { isWritten, setMcpEntry, upsertManagedJson } from './jsonConfig.js';
+import { isWritten, upsertPinnedMcpEntry } from './jsonConfig.js';
 import { writeOwnedRulesFile } from './rulesFile.js';
 import type { HookDialect, InstallReport, ToolAdapter } from './types.js';
 
@@ -38,7 +38,7 @@ export async function installWindsurf(
   const entry = { command: argv.command, args: [...argv.args, 'mcp', '--tool', 'windsurf', '--repo', cred.repoPath] };
   for (const path of windsurfMcpPaths(deps)) {
     const shown = path.startsWith(deps.homedir) ? `~${path.slice(deps.homedir.length)}` : path;
-    const status = await upsertManagedJson(path, shown, (c) => setMcpEntry(c, 'mcpServers', entry), report);
+    const status = await upsertPinnedMcpEntry(path, shown, 'mcpServers', entry, cred.repoPath, report);
     if (isWritten(status)) report.done.push(`registered MCP server "agentteams" in ${shown}`);
   }
   for (const dir of ['.devin', '.windsurf']) {

@@ -88,6 +88,24 @@ describe.each(REPO_CASES)('git-exclude policy: %s %s', (tool, file, key) => {
   });
 });
 
+describe.each([
+  ['cline', '~/.cline/data/settings/cline_mcp_settings.json'],
+  ['windsurf', '~/.config/devin/mcp_config.json'],
+] as Array<[ToolKind, string]>)('global single-entry config: %s', (tool, shown) => {
+  it('warns when the managed entry is repointed from another repo, and only then', async () => {
+    const other = join(t.root, 'repo-b');
+    mkdirSync(other, { recursive: true });
+    const first = await getAdapter(tool).install(t.deps, credFor(tool));
+    expect(first.warnings.filter((w) => w.includes('pointing at'))).toEqual([]);
+    const same = await getAdapter(tool).install(t.deps, credFor(tool));
+    expect(same.warnings.filter((w) => w.includes('pointing at'))).toEqual([]);
+    const moved = await getAdapter(tool).install(t.deps, credFor(tool, other));
+    expect(moved.warnings).toContain(
+      `${shown}: agentteams MCP was pointing at ${t.deps.cwd}; it now points at ${other} (this agent supports one agentteams repo at a time)`,
+    );
+  });
+});
+
 describe('gemini hooks shape', () => {
   it('non-object "hooks" leaves settings.json untouched with a warning', async () => {
     const text = JSON.stringify({ hooks: 'nope' });
