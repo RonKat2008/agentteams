@@ -2,7 +2,10 @@ import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CliDeps } from './deps.js';
 
-export const DEFAULT_HUB_URL = 'http://127.0.0.1:4747';
+/** The public hub teams use when no --hub / AGENTTEAMS_HUB is given. */
+export const DEFAULT_HUB_URL = 'https://agentteams-two.vercel.app';
+/** What `--hub local` means: the hub started by `agentteams up`. */
+export const LOCAL_HUB_URL = 'http://127.0.0.1:4747';
 
 type HomeDeps = Pick<CliDeps, 'env' | 'homedir'>;
 
@@ -17,7 +20,10 @@ export const credentialsPath = (d: HomeDeps): string => join(agentteamsHome(d), 
 export const codexHome = (d: HomeDeps): string => d.env.CODEX_HOME ?? join(d.homedir, '.codex');
 
 export function hubUrlFrom(flag: string | undefined, env: NodeJS.ProcessEnv): string {
-  return (flag ?? env.AGENTTEAMS_HUB ?? DEFAULT_HUB_URL).replace(/\/+$/, '');
+  const fromEnv = env.AGENTTEAMS_HUB === '' ? undefined : env.AGENTTEAMS_HUB;
+  const raw = (flag ?? fromEnv ?? DEFAULT_HUB_URL).trim();
+  if (raw.toLowerCase() === 'local') return LOCAL_HUB_URL;
+  return raw.replace(/\/+$/, '');
 }
 
 export function shellQuote(s: string): string {
