@@ -84,6 +84,7 @@ describe('hosted team end to end', () => {
     const inbox = (await ronitClient.ping()).messages;
     expect(inbox.some((m) => m.kind === 'fyi' && m.body.includes('agentteams access grant dylanx-codex'))).toBe(true);
 
+    ronit.deps.env.AGENTTEAMS_ALLOW_GRANT = '1'; // a human consents (non-TTY test run)
     expect(await run(ronit, 'access', 'grant', 'dylanx-codex', '--yes')).toBe(0);
     expect(ronitGh).toContainEqual(['api', '-X', 'PUT', 'repos/me/app/collaborators/DylanX', '-f', 'permission=push']);
 

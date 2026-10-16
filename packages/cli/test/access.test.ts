@@ -17,7 +17,7 @@ let localKey = '';
 const clis: TestCli[] = [];
 const run = (t: TestCli, ...args: string[]) => main(['node', 'agentteams', ...args], t.deps);
 
-interface Opts { agents?: { name: string; githubLogin: string | null }[]; tty?: boolean; answer?: string; ghFail?: boolean; local?: boolean }
+interface Opts { allow?: boolean; agents?: { name: string; githubLogin: string | null }[]; tty?: boolean; answer?: string; ghFail?: boolean; local?: boolean }
 async function cli(o: Opts = {}): Promise<{ t: TestCli; gh: string[][]; prompts: string[] }> {
   const gh: string[][] = [];
   const prompts: string[] = [];
@@ -36,7 +36,7 @@ async function cli(o: Opts = {}): Promise<{ t: TestCli; gh: string[][]; prompts:
     : undefined;
   const t = makeTestCli({
     ...(fakeFetch ? { fetch: fakeFetch } : {}),
-    exec, isTTY: o.tty ?? false,
+    exec, isTTY: o.tty ?? false, env: o.allow ? { AGENTTEAMS_ALLOW_GRANT: '1' } : {},
     prompt: async (q) => { prompts.push(q); return o.answer ?? ''; },
   });
   clis.push(t);
@@ -69,15 +69,15 @@ afterAll(async () => {
 const PUT = ['api', '-X', 'PUT', 'repos/me/app/collaborators/bob', '-f', 'permission=push'];
 
 describe('access grant', () => {
-  it('--yes calls gh with the exact args (by login)', async () => {
-    const { t, gh } = await cli();
+  it('--yes plus AGENTTEAMS_ALLOW_GRANT=1 calls gh with the exact args (by login)', async () => {
+    const { t, gh } = await cli({ allow: true });
     expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(0);
     expect(gh).toEqual([PUT]);
     expect(t.out.join('\n')).toContain('Invited @bob to me/app with push access (they must accept the GitHub invitation).');
   });
 
   it('resolves an agent name to its login', async () => {
-    const { t, gh } = await cli();
+    const { t, gh } = await cli({ allow: true });
     const status = await new HubClient(hosted.url, { apiKey: ownerKey }).status();
     const bobAgent = status.agents.find((a) => a.githubLogin === 'bob')!.name;
     expect(await run(t, 'access', 'grant', bobAgent, '--yes')).toBe(0);
@@ -98,10 +98,34 @@ describe('access grant', () => {
     expect(t.out.join('\n')).not.toContain('Invited');
   });
 
-  it('without a TTY and without --yes, refuses', async () => {
+  const REFUSAL = 'access grant needs a human: run it in your own terminal (agents cannot grant repo access)';
+
+  it('without a TTY and without --yes, refuses with no mention of --yes', async () => {
     const { t, gh } = await cli();
     expect(await run(t, 'access', 'grant', 'bob')).toBe(1);
-    expect(t.err.join('\n')).toContain('refusing to grant access without confirmation; re-run with --yes');
+    expect(t.err.join('\n')).toContain(REFUSAL);
+    expect(t.err.join('\n')).not.toContain('--yes');
+    expect(gh).toEqual([]);
+  });
+
+  it('without a TTY, --yes alone is not enough', async () => {
+    const { t, gh } = await cli();
+    expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(1);
+    expect(t.err.join('\n')).toContain(REFUSAL);
+    expect(t.err.join('\n')).not.toContain('--yes');
+    expect(gh).toEqual([]);
+  });
+
+  it('without a TTY, AGENTTEAMS_ALLOW_GRANT=1 alone (no --yes) is not enough', async () => {
+    const { t, gh } = await cli({ allow: true });
+    expect(await run(t, 'access', 'grant', 'bob')).toBe(1);
+    expect(gh).toEqual([]);
+  });
+
+  it('on a TTY, --yes without the env var still prompts and n cancels', async () => {
+    const { t, gh, prompts } = await cli({ tty: true, answer: 'n' });
+    expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(0);
+    expect(prompts).toHaveLength(1);
     expect(gh).toEqual([]);
   });
 
@@ -120,7 +144,7 @@ describe('access grant', () => {
   });
 
   it('gh failure surfaces the first stderr line', async () => {
-    const { t } = await cli({ ghFail: true });
+    const { t } = await cli({ ghFail: true, allow: true });
     expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(1);
     expect(t.err.join('\n')).toContain('HTTP 403: forbidden');
     expect(t.err.join('\n')).not.toContain('more');

@@ -29,13 +29,14 @@ export async function accessGrantCommand(
   if (!login) throw new Error(`${oneLine(first.name)} has no GitHub identity (local-mode join)`);
   if (!LOGIN_RE.test(login)) throw new Error('the hub returned an invalid GitHub login');
 
-  if (!opts.yes) {
-    if (!deps.isTTY) throw new Error('refusing to grant access without confirmation; re-run with --yes');
+  if (deps.isTTY) {
     const answer = (await deps.prompt(`Grant push access to ${slug} for GitHub user ${login}? [y/N] `)).trim().toLowerCase();
     if (answer !== 'y' && answer !== 'yes') {
       deps.out('Cancelled; no access granted.');
       return;
     }
+  } else if (!(opts.yes && deps.env.AGENTTEAMS_ALLOW_GRANT === '1')) {
+    throw new Error('access grant needs a human: run it in your own terminal (agents cannot grant repo access)');
   }
   const res = await deps.exec('gh', ['api', '-X', 'PUT', `repos/${slug}/collaborators/${login}`, '-f', 'permission=push']);
   if (res.code !== 0) {
