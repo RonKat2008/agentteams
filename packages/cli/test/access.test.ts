@@ -17,7 +17,7 @@ let localKey = '';
 const clis: TestCli[] = [];
 const run = (t: TestCli, ...args: string[]) => main(['node', 'agentteams', ...args], t.deps);
 
-interface Opts { tty?: boolean; answer?: string; ghFail?: boolean; local?: boolean }
+interface Opts { agents?: { name: string; githubLogin: string | null }[]; tty?: boolean; answer?: string; ghFail?: boolean; local?: boolean }
 async function cli(o: Opts = {}): Promise<{ t: TestCli; gh: string[][]; prompts: string[] }> {
   const gh: string[][] = [];
   const prompts: string[] = [];
@@ -28,7 +28,14 @@ async function cli(o: Opts = {}): Promise<{ t: TestCli; gh: string[][]; prompts:
     }
     return { code: 0, stdout: '', stderr: '' };
   };
+  const fakeFetch = o.agents
+    ? ((async () => new Response(JSON.stringify({
+      team: { name: 'acc', repo: { provider: 'github', slug: 'me/app', defaultBranch: 'main' }, orchestrator: null },
+      agents: o.agents.map((a) => ({ ...a, member: 'm', tool: 'claude', presence: 'online', currentTask: null, claims: [] })),
+    }), { status: 200 })) as typeof fetch)
+    : undefined;
   const t = makeTestCli({
+    ...(fakeFetch ? { fetch: fakeFetch } : {}),
     exec, isTTY: o.tty ?? false,
     prompt: async (q) => { prompts.push(q); return o.answer ?? ''; },
   });
@@ -117,5 +124,19 @@ describe('access grant', () => {
     expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(1);
     expect(t.err.join('\n')).toContain('HTTP 403: forbidden');
     expect(t.err.join('\n')).not.toContain('more');
+  });
+
+  it.each(['a-', 'a--b', '-a'])('refuses an invalid hub-supplied login %s without calling gh', async (bad) => {
+    const { t, gh } = await cli({ agents: [{ name: 'evil-claude', githubLogin: bad }] });
+    expect(await run(t, 'access', 'grant', 'evil-claude', '--yes')).toBe(1);
+    expect(t.err.join('\n')).toContain('invalid GitHub login');
+    expect(gh).toEqual([]);
+  });
+
+  it('refuses a target matching two different GitHub users', async () => {
+    const { t, gh } = await cli({ agents: [{ name: 'bob', githubLogin: 'alice' }, { name: 'x-claude', githubLogin: 'bob' }] });
+    expect(await run(t, 'access', 'grant', 'bob', '--yes')).toBe(1);
+    expect(t.err.join('\n')).toContain('"bob" matches more than one GitHub user (alice, bob); use the agent name');
+    expect(gh).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@ import { oneLine } from '../format.js';
 import { validSlug } from './join.js';
 import { clientFor, requireCredential } from './shared.js';
 
-const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
 
 export async function accessGrantCommand(
@@ -16,10 +16,17 @@ export async function accessGrantCommand(
   if (repo.provider !== 'github') throw new Error('access grant needs a team linked to a GitHub repo');
   const slug = validSlug(repo.slug);
   const wanted = target.replace(/^@/, '').toLowerCase();
-  const agent = status.agents.find((a) => a.name.toLowerCase() === wanted || a.githubLogin?.toLowerCase() === wanted);
-  if (!agent) throw new Error(`no agent or GitHub login "${oneLine(target).slice(0, 80)}" in this team`);
-  const login = agent.githubLogin;
-  if (!login) throw new Error(`${oneLine(agent.name)} has no GitHub identity (local-mode join)`);
+  const matches = status.agents.filter((a) => a.name.toLowerCase() === wanted || a.githubLogin?.toLowerCase() === wanted);
+  const first = matches[0];
+  if (!first) throw new Error(`no agent or GitHub login "${oneLine(target).slice(0, 80)}" in this team`);
+  const logins = new Map<string, string>();
+  for (const m of matches) if (m.githubLogin) logins.set(m.githubLogin.toLowerCase(), m.githubLogin);
+  if (logins.size > 1) {
+    const shown = [...logins.values()].map((l) => oneLine(l).slice(0, 40)).join(', ');
+    throw new Error(`"${oneLine(target).slice(0, 80)}" matches more than one GitHub user (${shown}); use the agent name`);
+  }
+  const login = [...logins.values()][0];
+  if (!login) throw new Error(`${oneLine(first.name)} has no GitHub identity (local-mode join)`);
   if (!LOGIN_RE.test(login)) throw new Error('the hub returned an invalid GitHub login');
 
   if (!opts.yes) {

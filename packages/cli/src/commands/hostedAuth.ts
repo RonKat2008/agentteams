@@ -8,7 +8,7 @@ function assertSafeTransport(hubUrl: string): void {
   try {
     url = new URL(hubUrl);
   } catch {
-    throw new Error(`invalid hub URL: ${hubUrl}`);
+    throw new Error('invalid hub URL');
   }
   if (url.protocol === 'https:') return;
   if (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)) return;

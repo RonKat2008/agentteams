@@ -149,6 +149,23 @@ describe('githubTokenFor', () => {
     expect(await githubTokenFor(t.deps, 'http://localhost:1')).toBe(TOKEN);
   });
 
+  it('accepts IPv6 loopback http', async () => {
+    const t = mk('ok', [], fakeHealth('hosted'));
+    expect(await githubTokenFor(t.deps, 'http://[::1]:4747')).toBe(TOKEN);
+  });
+
+  it.each(['http://localhost.evil.com', 'HTTP://hub.example.com', 'http://127.0.0.1.evil.com'])('refuses %s', async (url) => {
+    const calls: string[][] = [];
+    const t = mk('ok', calls, fakeHealth('hosted'));
+    await expect(githubTokenFor(t.deps, url)).rejects.toThrow('refusing to send your GitHub token to a non-HTTPS hub');
+    expect(calls).toEqual([]);
+  });
+
+  it('invalid-URL error does not echo the URL', async () => {
+    const t = mk('ok', [], fakeHealth('hosted'));
+    await expect(githubTokenFor(t.deps, 'not a url?token=secret')).rejects.toThrow(/^invalid hub URL$/);
+  });
+
   it('returns undefined for a local hub', async () => {
     const t = mk('ok', [], fakeHealth('local'));
     expect(await githubTokenFor(t.deps, 'http://hub.example.com')).toBeUndefined();
