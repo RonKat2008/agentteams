@@ -1,5 +1,6 @@
 import { loadCredentials, resolveCredentialForCwd, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
+import { hasLocalTeam } from '../local/team.js';
 import { detectTools, which, type ToolChoice } from './detect.js';
 import {
   createFlow, joinFlow, linkFlow, logFlow, realCommands, statusFlow, upFlow, type TuiCommands, type TuiContext,
@@ -71,7 +72,8 @@ async function loop(deps: CliDeps, p: Prompter, o: TuiOptions, sigint: Sigint): 
     const flow = FLOWS[action];
     if (action === 'up') sigint.pause(); // `up` stops the hub itself on Ctrl-C
     try {
-      await flow.run({ deps: menuDeps(deps, p), p, commands, tools, hasGh, linked });
+      const localTeam = await hasLocalTeam(deps, deps.cwd);
+      await flow.run({ deps: menuDeps(deps, p), p, commands, tools, hasGh, linked, localTeam });
     } catch (e) {
       if (e instanceof CancelledError) throw e;
       p.error(messageOf(e));

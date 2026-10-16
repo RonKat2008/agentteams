@@ -66,13 +66,13 @@ Kai's Cursor claimed `src/auth/login.ts`. Jamie's commit to it is blocked until 
 ## Quick start
 
 ```bash
-# 1. In your repo: create a team (you become the orchestrator).
-#    Uses the public hub; needs the GitHub CLI logged in (gh auth login).
+# 1. In your repo: create a team (you become the orchestrator). No hub, no account, no network:
+#    the team lives in the repo's .git/agentteams.
 cd ~/code/my-repo
 agentteams create my-team --agent claude        # prints an invite code
 
-# 2. Add another agent on this machine, or let a teammate run this on theirs
-agentteams join <invite-code> --agent codex     # clones the team repo with gh unless --no-clone
+# 2. Add another agent on this machine (run it in the same repo)
+agentteams join <invite-code> --agent codex
 
 # 3. Open the agents in the repo. In Codex, run /hooks once and approve the agentteams hooks.
 ```
@@ -80,12 +80,12 @@ agentteams join <invite-code> --agent codex     # clones the team repo with gh u
 `create` and `join` install everything (MCP server, hooks, instruction block). Run `agentteams install`
 to redo that, for example after updating the CLI or switching Node versions (hooks embed the node path).
 
-Pick where the hub runs:
+For teammates on other computers, use a hub server for now (add `--hub <url>` to `create` / `join`):
 
 | You want | Run | Then |
 |---|---|---|
-| Zero setup, agents anywhere | nothing (the public hub is the default) | `agentteams create` / `join` |
-| Same machine only, no network | `agentteams up` (local SQLite, port 4747) | add `--hub local` to `create` / `join` |
+| Same machine only | nothing (the default) | `agentteams create` / `join` |
+| Agents anywhere, public hub | nothing | add `--hub https://agentteams-two.vercel.app` to `create` / `join` |
 | Private team across machines | `agentteams up --share` | send teammates the printed `join` command |
 
 `up --share` starts the hub in hosted mode on loopback behind a free Cloudflare quick tunnel
@@ -189,8 +189,9 @@ Caveats worth knowing:
 <summary><b>Options</b></summary>
 
 - `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name),
-  `--hub <url>` (or `local` for http://127.0.0.1:4747; default `$AGENTTEAMS_HUB`, else the public hub
-  https://agentteams-two.vercel.app), `--no-install` (skip tool setup).
+  `--hub <url>` (or `local` for http://127.0.0.1:4747; default `$AGENTTEAMS_HUB`), `--no-install` (skip tool setup).
+  Without `--hub` or `$AGENTTEAMS_HUB`, `create` makes a team stored in this repo (`.git/agentteams`), and `join`
+  joins it when the code belongs to that team; any other code goes to the public hub https://agentteams-two.vercel.app.
 - `create` only: `--repo <owner/name>` links a GitHub repo; `--local` makes a local-only team. Without
   either, the GitHub `origin` is detected, falling back to a local-only team.
   `--new-repo` creates a new GitHub repo with `gh` and links the team to it (`--owner <org>` picks the owner;
@@ -335,7 +336,8 @@ Environment variables:
 
 - `AGENTTEAMS_HOME`: data directory (default `~/.agentteams`; must be an absolute path, empty means default)
 - `AGENTTEAMS_PORT`: listen port for `up` and the hub (default `4747`)
-- `AGENTTEAMS_HUB`: hub URL the CLI talks to; `local` means http://127.0.0.1:4747 (default the public hub)
+- `AGENTTEAMS_HUB`: hub URL the CLI talks to; `local` means http://127.0.0.1:4747 (when unset, `create` makes a
+  team stored in the repo and `join` falls back to the public hub for codes that team does not know)
 
 To run the local hub without the CLI: `node packages/hub/dist/bin.js` (listens on http://127.0.0.1:4747).
 

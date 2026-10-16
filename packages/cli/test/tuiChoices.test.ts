@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentChoices, createOptions, hubFlag, joinOptions, repoChoices, validateHubUrl, validateInviteCode, validateTeamName,
+  agentChoices, createOptions, joinOptions, repoChoices, teamKindChoices, validateHubTarget, validateHubUrl, validateInviteCode,
+  validateTeamName,
 } from '../src/tui/choices.js';
 import { DEFAULT_HUB_URL } from '../src/paths.js';
 
@@ -43,10 +44,26 @@ describe('choices', () => {
     expect(agentChoices(tools, ['codex', 'gemini']).map((c) => c.value)).toEqual(['claude']);
   });
 
-  it('maps hub choices to --hub values', () => {
-    expect(hubFlag('public')).toBe(DEFAULT_HUB_URL);
-    expect(hubFlag('local')).toBe('local');
-    expect(hubFlag('custom', ' https://h.example.com ')).toBe('https://h.example.com');
+  it('asks who will be on the team: local first, git disabled until it ships, a hub server last', () => {
+    const kinds = teamKindChoices();
+    expect(kinds.map((k) => k.value)).toEqual(['local', 'git', 'hub']);
+    expect(kinds[0]!.label).toBe('Just my agents on this computer');
+    expect(kinds[1]).toMatchObject({ disabled: true, hint: 'coming soon' });
+    expect(kinds[2]!.label).toBe('A hub server (advanced)');
+  });
+
+  it('a hub server answer is an http(s) URL or "local"', () => {
+    expect(validateHubTarget('local')).toBeUndefined();
+    expect(validateHubTarget(' LOCAL ')).toBeUndefined();
+    expect(validateHubTarget('https://h.example.com')).toBeUndefined();
+    expect(validateHubTarget('h.example.com')).toMatch(/or "local"/);
+  });
+
+  it('a team on this computer needs a git repo, so "local only" is not offered outside one', () => {
+    const vals = (c: ReturnType<typeof repoChoices>) => c.map((x) => x.value);
+    expect(vals(repoChoices({ isGit: false, slug: null, hasGh: true, localTeam: true }, 't'))).toEqual(['new']);
+    expect(vals(repoChoices({ isGit: false, slug: null, hasGh: false, localTeam: true }, 't'))).toEqual([]);
+    expect(vals(repoChoices({ isGit: true, slug: null, hasGh: false, localTeam: true }, 't'))).toEqual(['local']);
   });
 
   it('offers linking only with a GitHub origin and a new repo only outside a repo with gh', () => {
@@ -79,6 +96,13 @@ describe('answers → command options', () => {
     expect(createOptions({ name: 't', agent: 'claude', repo: 'new', visibility: 'public', hub: 'https://h.example.com' }))
       .toEqual({ agent: 'claude', hub: 'https://h.example.com', install: true, newRepo: true, visibility: 'public' });
     expect(createOptions({ name: 't', agent: 'claude', repo: 'new', hub: 'local' }).visibility).toBe('private');
+  });
+
+  it('create/join: no hub means no --hub (a local team)', () => {
+    expect(createOptions({ name: 't', agent: 'claude', repo: 'local', as: 'ada' }))
+      .toEqual({ agent: 'claude', install: true, local: true, as: 'ada' });
+    expect(joinOptions({ code: 'abcd-efgh-jkmn-pqrs', agent: 'codex', clone: false }).opts)
+      .toEqual({ agent: 'codex', install: true, clone: false });
   });
 
   it('join: trims the code and maps clone', () => {

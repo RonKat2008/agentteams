@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { saveCredential } from '../src/credentials.js';
 import type { CreateOpts } from '../src/commands/create.js';
@@ -103,10 +106,21 @@ const link = async (tool: 'claude' | 'codex') => saveCredential(t.deps, {
   apiKey: 'at_secret', createdAt: '2026-10-01T00:00:00.000Z',
 });
 
+/** git answers for a repo whose common dir holds a local team database. */
+function localTeamTable(): Record<string, { stdout: string }> {
+  const common = mkdtempSync(join(tmpdir(), 'agentteams-tui-common-'));
+  mkdirSync(join(common, 'agentteams'));
+  writeFileSync(join(common, 'agentteams', 'team.db'), '');
+  temps.push(common);
+  return { 'git rev-parse --path-format=absolute --git-common-dir': { stdout: `${common}\n` } };
+}
+const temps: string[] = [];
+afterEach(() => { temps.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true })); });
+
 describe('guided menu', () => {
   it('creates a team for the linked GitHub repo and shows the invite box', async () => {
     const { p, calls, run } = setup(
-      ['create', 'squad', 'codex', 'link', 'public'],
+      ['create', 'squad', 'codex', 'hub', 'link', DEFAULT_HUB_URL],
       { table: { 'git remote get-url origin': { stdout: 'git@github.com:me/app.git\n' } } },
     );
     expect(await run()).toBe(0);
@@ -120,15 +134,15 @@ describe('guided menu', () => {
   });
 
   it('lists detected agents first and defaults the agent prompt accordingly', async () => {
-    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'local']);
-    await run();
+    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'local', 'ada']);
+    expect(await run()).toBe(0);
     const agentPrompt = p.asked.find((a) => a.message.startsWith('Which agent'))!;
     expect(agentPrompt.choices!.map((c) => c.value)).toEqual(['codex', 'claude', 'gemini']);
     expect(agentPrompt.choices![0]!.hint).toMatch(/detected/);
   });
 
   it('creates a new public GitHub repo outside a git repo when gh is available', async () => {
-    const { calls, run } = setup(['create', 'squad', 'claude', 'new', 'public', 'custom', 'https://hub.example.com'], {
+    const { calls, run } = setup(['create', 'squad', 'claude', 'hub', 'new', 'public', 'https://hub.example.com'], {
       table: { 'git rev-parse --show-toplevel': { code: 128 } }, hasGh: true,
     });
     expect(await run()).toBe(0);
@@ -142,14 +156,14 @@ describe('guided menu', () => {
   });
 
   it('asks for your name on a local-mode hub and passes it as --as', async () => {
-    const { p, calls, run } = setup(['create', 'squad', 'claude', 'local', 'local', 'Alice'], { hub: 'local' });
+    const { p, calls, run } = setup(['create', 'squad', 'claude', 'hub', 'local', 'local', 'Alice'], { hub: 'local' });
     expect(await run()).toBe(0);
     expect(p.asked.some((a) => a.message === 'Your name on this team')).toBe(true);
     expect(calls.create[0]![1]).toEqual({ agent: 'claude', hub: 'local', install: true, local: true, as: 'alice' });
   });
 
   it('does not ask for a name on a hosted hub', async () => {
-    const { p, calls, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'gemini', 'custom', 'https://hub.example.com', 'here'], { hub: 'hosted' });
+    const { p, calls, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'gemini', 'https://hub.example.com', 'here'], { hub: 'hosted' });
     expect(await run()).toBe(0);
     expect(p.asked.some((a) => a.message === 'Your name on this team')).toBe(false);
     expect(calls.join[0]![1]).not.toHaveProperty('as');
@@ -160,10 +174,58 @@ describe('guided menu', () => {
     const join: TuiCommands['join'] = async (deps) => {
       answers.push(await deps.prompt('Send your GitHub token to hub.example.com? [y/N] '));
     };
-    const { p, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'claude', 'public', 'clone', false], { commands: { join } });
+    const { p, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'claude', DEFAULT_HUB_URL, 'clone', false], { commands: { join } });
     await run();
     expect(answers).toEqual(['n']);
     expect(p.asked.at(-1)!.message).toBe('Send your GitHub token to hub.example.com?');
+  });
+
+  it('creates a team for this computer by default, asking for your name instead of a hub', async () => {
+    const create: TuiCommands['create'] = async (_d, name) =>
+      ({ teamName: name, inviteCode: 'abcd-efgh-jkmn-pqrs', inviteExpiresAt: '2026-11-01T00:00:00.000Z', hubUrl: '' });
+    const created: CreateOpts[] = [];
+    const hubEnv: (string | undefined)[] = [];
+    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'local', 'Ada'], {
+      commands: { create: async (d, n, o) => { created.push(o); hubEnv.push(d.env.AGENTTEAMS_HUB); return create(d, n, o); } },
+    });
+    t.deps.env.AGENTTEAMS_HUB = 'https://hub.example.com';
+    expect(await run()).toBe(0);
+    const who = p.asked.find((a) => a.message === 'Who will be on this team?')!;
+    expect(who.choices!.map((c) => c.value)).toEqual(['local', 'git', 'hub']);
+    expect(who.choices!.find((c) => c.value === 'git')).toMatchObject({ disabled: true, hint: 'coming soon' });
+    expect(p.asked.some((a) => a.message.startsWith('Hub URL'))).toBe(false);
+    expect(created).toEqual([{ agent: 'claude', install: true, local: true, as: 'ada' }]);
+    expect(hubEnv).toEqual(['']); // AGENTTEAMS_HUB must not turn the local choice into a hub team
+    const box = p.log.find((l) => l.startsWith('box:'))!;
+    expect(box).toContain('Add another agent on this computer');
+    expect(box).toContain('agentteams join abcd-efgh-jkmn-pqrs');
+    expect(box).not.toContain('--hub');
+  });
+
+  it('a team for this computer outside a git repo (and no gh) explains that it needs git init', async () => {
+    const { p, calls, run } = setup(['create', 'squad', 'claude', 'local', 'quit'], {
+      table: { 'git rev-parse --show-toplevel': { code: 128 } },
+    });
+    expect(await run()).toBe(0);
+    expect(calls.create).toEqual([]);
+    expect(p.log.some((l) => l.startsWith('error:') && l.includes('git init'))).toBe(true);
+  });
+
+  it('joins the local team in this repo without asking about hubs or cloning', async () => {
+    const { p, calls, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'codex', 'ada'], { table: localTeamTable() });
+    expect(await run()).toBe(0);
+    expect(p.asked.some((a) => a.message.startsWith('Hub URL') || a.message.startsWith('Where'))).toBe(false);
+    expect(calls.join).toEqual([['abcd-efgh-jkmn-pqrs', { agent: 'codex', install: true, clone: false, as: 'ada' }]]);
+  });
+
+  it('links another agent to a local team without a hub', async () => {
+    const { calls, run } = setup(['link', 'gemini', 'abcd-efgh-jkmn-pqrs'], { table: localTeamTable() });
+    await saveCredential(t.deps, {
+      repoPath: t.deps.cwd, tool: 'codex', hubUrl: '', teamName: 'squad', agentName: 'ada-codex',
+      apiKey: 'at_secret', createdAt: '2026-10-01T00:00:00.000Z', transport: 'local',
+    });
+    expect(await run()).toBe(0);
+    expect(calls.join).toEqual([['abcd-efgh-jkmn-pqrs', { agent: 'gemini', install: true, clone: false, as: 'ada' }]]);
   });
 
   it('hides "link another agent" and disables status/activity without a team here', async () => {
@@ -219,7 +281,7 @@ describe('guided menu', () => {
 
   it('exits cleanly when the token confirm inside a command is cancelled', async () => {
     const join: TuiCommands['join'] = async (deps) => { await deps.prompt('Send your GitHub token to h? [y/N] '); };
-    const { p, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'claude', 'public', 'clone', CANCEL], { commands: { join } });
+    const { p, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'claude', DEFAULT_HUB_URL, 'clone', CANCEL], { commands: { join } });
     expect(await run()).toBe(0);
     expect(p.log.at(-1)).toBe('cancel: Cancelled.');
   });
