@@ -11,6 +11,8 @@ const portFrom = (raw: string | undefined): number => (raw?.trim() === '0' ? 0 :
 
 /** Header Cloudflare sets (and overwrites) with the real client IP; the hub only listens on loopback behind the tunnel. */
 const CLOUDFLARE_IP_HEADER = 'cf-connecting-ip';
+/** --share keeps its own database so internet-exposed teams never mix with the local hub's (`--hub local`) teams. */
+export const SHARE_DB = 'share.db';
 
 function untilStopped(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -77,7 +79,7 @@ async function upShare(deps: CliDeps, opts: UpOptions): Promise<void> {
   let hub: RunningHub;
   try {
     hub = await startHub({
-      dbPath: join(home, 'hub.db'),
+      dbPath: join(home, SHARE_DB),
       host: '127.0.0.1',
       port,
       mode: 'hosted',
@@ -88,11 +90,12 @@ async function upShare(deps: CliDeps, opts: UpOptions): Promise<void> {
     await tunnel.stop();
     throw e;
   }
-  deps.out(`agentteams hub listening on ${hub.url} (hosted mode, data: ${home})`);
+  deps.out(`agentteams hub listening on ${hub.url} (hosted mode, data: ${join(home, SHARE_DB)})`);
   deps.out(`Public URL: ${tunnel.url}`);
   deps.out('Anyone with the URL and an invite code can join, and must sign in with GitHub (gh auth login).');
   deps.out(`Create a team:  agentteams create <team-name> --hub ${tunnel.url}`);
   deps.out(`Teammates join: agentteams join <invite-code> --hub ${tunnel.url}`);
+  deps.out('Note: this URL changes every time you restart --share; teammates must re-join after a restart (or keep this running).');
   deps.out('Press Ctrl-C to stop sharing.');
   const tunnelDied = tunnel.exited.then(() => {
     deps.err('The share tunnel closed unexpectedly; stopping the hub.');

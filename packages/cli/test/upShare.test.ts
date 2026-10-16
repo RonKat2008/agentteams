@@ -1,5 +1,5 @@
 import { request } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -85,6 +85,10 @@ describe('up --share', () => {
     expect((await get(local, 'fake-share-abc.trycloudflare.com', '/nope')).status).toBe(404);
     expect((await get(local, '127.0.0.1', '/nope')).status).toBe(403);
     expect((await get(local, 'evil.example.com', '/nope')).status).toBe(403);
+
+    expect(out).toContain('this URL changes every time you restart');
+    expect(existsSync(join(t.deps.env.AGENTTEAMS_HOME!, 'share.db'))).toBe(true);
+    expect(existsSync(join(t.deps.env.AGENTTEAMS_HOME!, 'hub.db'))).toBe(false);
 
     ac.abort();
     await done;
