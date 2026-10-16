@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolKind } from '@agentteams/shared';
-import { resolveCredentialForCwd } from './credentials.js';
+import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
 
 const errorResult = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
@@ -152,15 +152,43 @@ export async function createProxyServer(opts: ProxyOptions) {
   return server;
 }
 
+type StdioServer = Awaited<ReturnType<typeof createProxyServer>>;
+
+/** For a local credential: the team's tools in-process over this repo's database (no hub, no proxy retries). */
+async function localServer(deps: CliDeps, cred: Credential): Promise<StdioServer> {
+  try {
+    return await (await import('./local/mcp.js')).createLocalMcpServer(deps, cred);
+  } catch (e) {
+    // Stay up like the proxy does, so the agent sees why each call fails instead of a dead server.
+    const why = e instanceof Error ? e.message : String(e);
+    deps.err(`agentteams: cannot open the local team for ${cred.repoPath}: ${why}`);
+    return createProxyServer({ connect: () => Promise.reject(Object.assign(new Error(why), { code: 401 })) });
+  }
+}
+
+async function serverFor(deps: CliDeps, cwd: string, cred: Credential | null): Promise<StdioServer> {
+  if (!cred) {
+    deps.err(`agentteams: no team credentials for ${cwd}`);
+    return createProxyServer({ connect: null });
+  }
+  const transport = cred.transport ?? 'http';
+  if (transport === 'local') return localServer(deps, cred);
+  if (transport !== 'http') {
+    deps.err(`agentteams: the ${transport} transport is not supported by this version`);
+    return createProxyServer({ connect: null });
+  }
+  return createProxyServer({ connect: () => connectUpstream(cred.hubUrl, cred.apiKey), hubUrl: cred.hubUrl });
+}
+
 /** `repo` overrides the cwd used to find credentials (for configs whose process does not start in the repo). */
 export async function runMcpProxy(deps: CliDeps, tool: ToolKind, opts: { repo?: string } = {}): Promise<void> {
   const cwd = opts.repo ? resolve(deps.cwd, opts.repo) : deps.cwd;
   const cred = await resolveCredentialForCwd(deps, cwd, tool);
-  if (!cred) deps.err(`agentteams: no team credentials for ${cwd}`);
-  const server = await createProxyServer({
-    connect: cred ? () => connectUpstream(cred.hubUrl, cred.apiKey) : null,
-    hubUrl: cred?.hubUrl,
-  });
+  await serveStdio(await serverFor(deps, cwd, cred));
+}
+
+/** Serves `server` on stdin/stdout until stdin ends (after in-flight requests are answered) or the server closes. */
+async function serveStdio(server: StdioServer): Promise<void> {
   const closed = new Promise<void>((resolve) => {
     const prev = server.onclose;
     server.onclose = () => {
