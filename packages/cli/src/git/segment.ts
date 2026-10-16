@@ -23,7 +23,7 @@ export interface SegmentLocation {
   seq: number;
 }
 
-export type RejectReason = 'decrypt' | 'malformed' | 'unknown-agent' | 'bad-signature' | 'version' | 'context';
+export type RejectReason = 'decrypt' | 'malformed' | 'unknown-agent' | 'bad-signature' | 'version' | 'context' | 'bootstrap';
 
 export type DecodeResult =
   | { ok: true; segment: Segment; bootstrapKey?: string }
@@ -122,27 +122,40 @@ function decodeUnsafe(
   const ops = p.ops;
   const signed = Buffer.concat([ctx, plaintext]);
 
+  // Lookup contract: undefined = not registered (bootstrap allowed); a throw, null or a
+  // non-string = reject; a string that is not a valid key fails signature verification.
   let registered: unknown;
   try {
     registered = lookupPublicKey(agent);
   } catch {
-    registered = undefined;
+    return { ok: false, reason: 'unknown-agent' };
   }
   let bootstrapKey: string | undefined;
   let key: string;
-  if (registered !== undefined && registered !== null) {
-    if (!isKeyString(registered)) return { ok: false, reason: 'bad-signature' };
-    key = registered;
-  } else {
+  if (registered === undefined) {
     bootstrapKey = bootstrapKeyOf(seq, ops);
     if (!bootstrapKey) return { ok: false, reason: 'unknown-agent' };
+    // A bootstrap segment is exactly one join/createTeam op, about this agent only.
+    if (ops.length !== 1 || !bootstrapIdMatches(ops[0], agent)) return { ok: false, reason: 'bootstrap' };
     key = bootstrapKey;
+  } else if (typeof registered === 'string') {
+    key = registered;
+  } else {
+    return { ok: false, reason: 'unknown-agent' };
   }
   if (!verify(key, signed, signature)) return { ok: false, reason: 'bad-signature' };
 
   if (!ops.every((o) => isOp(o, agent))) return { ok: false, reason: 'malformed' };
+  // join/createTeam may only appear in a bootstrap segment.
+  if (!bootstrapKey && ops.some((o) => BOOTSTRAP_OPS.has((o as Op).op))) return { ok: false, reason: 'bootstrap' };
   const segment: Segment = { v: 1, agent, seq, ops: ops as Op[] };
   return bootstrapKey ? { ok: true, segment, bootstrapKey } : { ok: true, segment };
+}
+
+function bootstrapIdMatches(op: unknown, agent: string): boolean {
+  const input = (op as { input?: Record<string, unknown> }).input;
+  const id = input?.agentId;
+  return id === undefined || id === agent;
 }
 
 function bootstrapKeyOf(seq: number, ops: unknown[]): string | undefined {
