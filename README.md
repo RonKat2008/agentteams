@@ -119,14 +119,16 @@ hook manager yourself. They do nothing on machines without `agentteams` installe
 
 ```sh
 # pre-commit
-command -v agentteams >/dev/null 2>&1 || exit 0
-agentteams git-hook pre-commit; [ $? -ne 3 ] || exit 1
+if command -v agentteams >/dev/null 2>&1; then
+  agentteams git-hook pre-commit; [ $? -ne 3 ] || exit 1
+fi
 ```
 
 ```sh
 # post-commit
-command -v agentteams >/dev/null 2>&1 || exit 0
-agentteams git-hook post-commit || true
+if command -v agentteams >/dev/null 2>&1; then
+  agentteams git-hook post-commit || true
+fi
 ```
 
 `create --new-repo` makes a GitHub repo for you, and `join` clones the team repo (skip with `--no-clone`).

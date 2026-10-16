@@ -57,7 +57,10 @@ export async function runPreCommit(deps: Deps): Promise<number> {
   try {
     const cred = await pickCredential(deps);
     if (!cred) return 0;
-    const paths = checkable(await stagedFiles(deps, deps.cwd));
+    const staged = await stagedFiles(deps, deps.cwd);
+    const paths = checkable(staged);
+    const skipped = staged.length - paths.length;
+    if (skipped > 0) deps.err(`agentteams: warning: skipped ${skipped} path(s) that cannot be checked for claims`);
     if (paths.length === 0) return 0;
     const client = clientFor(deps, cred);
     let conflicts;
