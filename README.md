@@ -26,13 +26,16 @@ npm i -g agentteams
 <td width="50%">
 
 ```text
-$ agentteams create my-team --agent claude
-Team "my-team" created.
-Invite code: <code>
-Installed: MCP server, hooks, CLAUDE.md block
+$ agentteams create my-team --agent cursor
+Created team "my-team". You are ronit-cursor (orchestrator).
+Invite code: abcd-efgh-jkmn-pqrs (expires 2026-10-23)
+Teammates join with: agentteams join abcd-efgh-jkmn-pqrs
+Hub: https://agentteams-two.vercel.app (public)
+  ✓ registered MCP server "agentteams" in .cursor/mcp.json
+  ✓ installed hooks in .cursor/hooks.json
 ```
 
-*Illustrative output.*
+*Real output; names and invite code changed.*
 
 </td>
 </tr>
