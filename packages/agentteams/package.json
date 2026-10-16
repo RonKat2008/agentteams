@@ -1,5 +1,5 @@
 {
-  "name": "agentteams",
+  "name": "agentteams-cli",
   "version": "0.2.0",
   "description": "Coordinate multiple AI coding agents working in the same repo.",
   "license": "MIT",
@@ -8,7 +8,7 @@
   "bin": {
     "agentteams": "dist/bin.js"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "assets", "README.md", "LICENSE"],
   "engines": {
     "node": ">=22"
   },

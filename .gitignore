@@ -7,3 +7,4 @@ coverage/
 .env*
 packages/agentteams/LICENSE
 packages/agentteams/README.md
+packages/agentteams/assets

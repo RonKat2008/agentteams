@@ -65,5 +65,5 @@ export function ephemeralInstallReason(p: string = binPath(), env: NodeJS.Proces
 
 export function ephemeralInstallWarning(reason: string): string {
   return `WARNING: agentteams is running from a ${reason}. Hooks and MCP configs written now will break when that cache is cleaned. ` +
-    'Run: npm i -g agentteams && agentteams install';
+    'Run: npm i -g agentteams-cli && agentteams install';
 }

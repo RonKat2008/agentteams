@@ -54,7 +54,7 @@ describe('agentteams commands', () => {
     const { runInstallers } = await import('../src/commands/install.js');
     const cred = { repoPath: t.deps.cwd, tool: 'claude' as const, hubUrl: hub.url, teamName: 'x', agentName: 'a-claude', apiKey: 'k', createdAt: 'x' };
     await runInstallers(t.deps, cred, { binPath: '/h/.npm/_npx/ab/node_modules/agentteams/dist/bin.js' });
-    expect(t.err.join('\n')).toContain('npm i -g agentteams && agentteams install');
+    expect(t.err.join('\n')).toContain('npm i -g agentteams-cli && agentteams install');
     const t2 = mk({}, { claude: { code: 0 } });
     await runInstallers(t2.deps, { ...cred, repoPath: t2.deps.cwd }, { binPath: '/usr/lib/node_modules/agentteams/dist/bin.js' });
     expect(t2.err.join('\n')).not.toContain('npm i -g');
