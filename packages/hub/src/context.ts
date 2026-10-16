@@ -41,6 +41,7 @@ function isRetryable(err: unknown): boolean {
  * serialization failures / deadlocks, so fn must be safe to re-run. SQLite serialises writers itself.
  */
 export async function withTx<T>(ctx: HubContext, fn: (tx: HubContext) => Promise<T>): Promise<T> {
+  if (ctx.db.isTransaction) throw new Error('withTx must not be nested');
   if (ctx.dialect !== 'postgres') return ctx.db.transaction().execute((trx) => fn({ ...ctx, db: trx }));
   for (let attempt = 1; ; attempt++) {
     try {
