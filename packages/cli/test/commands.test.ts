@@ -79,21 +79,21 @@ describe('agentteams commands', () => {
       expect(t2.out.some((l) => l.startsWith('Joined team "dev-squad2" as ash-codex. Repo: '))).toBe(true);
       expect(readFileSync(join(t2.deps.homedir, '.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.agentteams]');
       expect(await run(t2, 'status')).toBe(0);
-      expect(t2.out.some((l) => l.startsWith('ronit_k-claude') && l.includes(' *'))).toBe(true);
-      expect(t2.out.some((l) => l.startsWith('ash-codex') && l.includes(' (you)'))).toBe(true);
+      expect(t2.out.some((l) => l.includes('ronit_k-claude') && l.includes('★ orchestrator'))).toBe(true);
+      expect(t2.out.some((l) => l.includes('ash-codex') && l.includes('you'))).toBe(true);
     });
 
     it('log prints history and follow streams new events until aborted', async () => {
       expect(await run(t1, 'log')).toBe(0);
-      expect(t1.out.some((l) => l.includes('team_created'))).toBe(true);
-      expect(t1.out.some((l) => l.includes('agent_joined'))).toBe(true);
+      expect(t1.out.some((l) => l.includes('created team'))).toBe(true);
+      expect(t1.out.some((l) => l.includes('joined ('))).toBe(true);
       const t3 = mk({}, { claude: { code: 0 } });
       const ac = new AbortController();
       const done = logCommand(t1.deps, { follow: true, limit: 20, intervalMs: 50, signal: ac.signal });
       await new Promise((r) => setTimeout(r, 100));
       expect(await run(t3, 'join', code, '--as', 'zed', '--hub', hub.url)).toBe(0);
       await new Promise((r) => setTimeout(r, 300));
-      expect(t1.out.some((l) => l.includes('agent_joined') && l.includes('zed-claude'))).toBe(true);
+      expect(t1.out.some((l) => l.includes('joined (') && l.includes('zed-claude'))).toBe(true);
       ac.abort();
       await expect(done).resolves.toBeUndefined();
     });

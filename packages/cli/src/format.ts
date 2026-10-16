@@ -1,4 +1,6 @@
 import type { ActivityEvent, InboxMessage, TeamStatus } from '@agentteams/shared';
+import { makePalette, padVisible, type Palette } from './color.js';
+import { describeEvent } from './eventText.js';
 
 const KIND_LABELS: Record<InboxMessage['kind'], string> = { command: 'Command', question: 'Question', fyi: 'FYI' };
 
@@ -63,6 +65,21 @@ export function formatStatus(status: TeamStatus, me: string): string {
   return lines.join('\n');
 }
 
-export function formatEvent(e: ActivityEvent): string {
-  return `${e.createdAt.slice(11, 19)} ${oneLine(e.agent ?? '-')} ${e.type} ${JSON.stringify(e.data)}`;
+const AGENT_COLUMN_WIDTH = 14;
+
+/** HH:MM:SS in local time, or the sanitised raw value when unparsable. */
+function localTime(createdAt: string): string {
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return oneLine(String(createdAt));
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
+function colorDescription(e: ActivityEvent, text: string, p: Palette): string {
+  if (e.type !== 'message_sent' || !text.startsWith('command')) return text;
+  return p.bold(p.yellow('command')) + text.slice('command'.length);
+}
+
+export function formatEvent(e: ActivityEvent, p: Palette = makePalette(false)): string {
+  const agent = padVisible(p.agent(oneLine(e.agent ?? '-')), AGENT_COLUMN_WIDTH);
+  return `${p.dim(localTime(e.createdAt))}  ${agent}  ${colorDescription(e, describeEvent(e), p)}`;
 }

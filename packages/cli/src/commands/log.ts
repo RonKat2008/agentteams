@@ -1,4 +1,5 @@
 import type { ToolKind } from '@agentteams/shared';
+import { makePalette } from '../color.js';
 import type { CliDeps } from '../deps.js';
 import { formatEvent } from '../format.js';
 import { clientFor, requireCredential } from './shared.js';
@@ -18,8 +19,9 @@ export interface LogOpts { agent?: ToolKind; follow: boolean; limit: number; int
 
 export async function logCommand(deps: CliDeps, opts: LogOpts): Promise<void> {
   const client = clientFor(deps, await requireCredential(deps, opts.agent));
+  const palette = makePalette(deps.color);
   const first = await client.activity({ limit: opts.limit });
-  for (const e of first) deps.out(formatEvent(e));
+  for (const e of first) deps.out(formatEvent(e, palette));
   if (!opts.follow) return;
   let last = first.reduce<string | undefined>((m, e) => (m === undefined || e.createdAt > m ? e.createdAt : m), undefined);
   while (!opts.signal?.aborted) {
@@ -27,7 +29,7 @@ export async function logCommand(deps: CliDeps, opts: LogOpts): Promise<void> {
     if (opts.signal?.aborted) break;
     const events = await client.activity({ since: last, limit: FOLLOW_BATCH });
     for (const e of events) {
-      deps.out(formatEvent(e));
+      deps.out(formatEvent(e, palette));
       if (last === undefined || e.createdAt > last) last = e.createdAt;
     }
   }

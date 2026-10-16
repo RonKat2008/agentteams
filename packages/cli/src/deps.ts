@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { homedir, userInfo } from 'node:os';
 import { createInterface } from 'node:readline/promises';
+import { colorEnabled } from './color.js';
 
 export interface ExecResult { code: number; stdout: string; stderr: string }
 export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; input?: string }) => Promise<ExecResult>;
@@ -17,6 +18,7 @@ export interface CliDeps {
   homedir: string;
   username: string;
   isTTY: boolean;
+  color: boolean;
   prompt: (question: string) => Promise<string>;
 }
 
@@ -64,6 +66,7 @@ export function realDeps(): CliDeps {
     homedir: homedir(),
     username: userInfo().username,
     isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    color: colorEnabled(process.env, Boolean(process.stdout.isTTY)),
     prompt: readlinePrompt,
   };
 }

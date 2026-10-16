@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { InboxMessage, TeamStatus } from '@agentteams/shared';
+import type { ActivityEvent, InboxMessage, TeamStatus } from '@agentteams/shared';
+import { makePalette } from '../src/color.js';
 import { formatEvent, formatMessages, formatStatus, oneLine } from '../src/format.js';
 
 const msg = (over: Partial<InboxMessage>): InboxMessage => ({
@@ -45,10 +46,66 @@ describe('formatStatus', () => {
   });
 });
 
+const at = '2026-01-01T09:05:07.000Z';
+const localHms = ['getHours', 'getMinutes', 'getSeconds'].map((m) => String((new Date(at) as any)[m]()).padStart(2, '0')).join(':');
+const ev = (type: string, data: Record<string, unknown>, agent: string | null = 'jamie-claude'): ActivityEvent =>
+  ({ id: '1', type: type as ActivityEvent['type'], agent, data, createdAt: at });
+const describe1 = (type: string, data: Record<string, unknown>) => formatEvent(ev(type, data)).slice(`${localHms}  ${'jamie-claude'.padEnd(14)}  `.length);
+
 describe('formatEvent', () => {
-  it('renders one compact line', () => {
-    expect(formatEvent({ id: '1', type: 'task_claimed', agent: 'ash-codex', data: { task: 4 }, createdAt: '2026-01-01T09:05:07.000Z' }))
-      .toBe('09:05:07 ash-codex task_claimed {"task":4}');
+  it('prints local time, padded agent and a description', () => {
+    expect(formatEvent(ev('task_claimed', { task: 1, title: 'Rate-limit POST /login' }, 'ash')))
+      .toBe(`${localHms}  ${'ash'.padEnd(14)}  started #1 "Rate-limit POST /login"`);
+  });
+  it.each([
+    ['team_created', { name: 'shop-api', repo: {} }, 'created team "shop-api"'],
+    ['agent_joined', { agent: 'a-claude', member: 'alice', tool: 'claude' }, 'joined (claude, member alice)'],
+    ['orchestrator_changed', { to: 'alice-claude' }, 'made alice-claude the orchestrator'],
+    ['invite_rotated', {}, 'rotated the invite code'],
+    ['invite_revoked', {}, 'revoked the invite code'],
+    ['task_created', { task: 1, title: 'Rate-limit', assignee: 'jamie-claude' }, 'created #1 "Rate-limit" → jamie-claude'],
+    ['task_created', { task: 2, title: 'Tests', assignee: null }, 'created #2 "Tests"'],
+    ['task_assigned', { task: 1, assignee: 'kai-cursor' }, 'assigned #1 → kai-cursor'],
+    ['task_claimed', { task: 1, title: 'Rate-limit' }, 'started #1 "Rate-limit"'],
+    ['task_updated', { task: 1, status: 'blocked', note: 'waiting on api' }, 'updated #1 → blocked: waiting on api'],
+    ['task_completed', { task: 1, branch: 'b', summary: '5 req/min per IP' }, 'finished #1: 5 req/min per IP'],
+    ['files_claimed', { globs: ['src/auth/**', 'web/x.ts'], exclusive: true }, 'claimed src/auth/**, web/x.ts'],
+    ['files_released', { globs: 'all', count: 2 }, 'released all'],
+    ['commit', { sha: '3989f08aaaa', branch: 'at/jamie-claude/1', subject: 'rate-limit login', files: 1, insertions: 1, deletions: 0 },
+      'committed 3989f08 on at/jamie-claude/1 "rate-limit login" (1 file, +1 −0)'],
+    ['message_sent', { to: 'alice-claude', kind: 'question', preview: 'Should tests use the store?' }, 'question → alice-claude: "Should tests use the store?"'],
+    ['merged', { task: 3, branch: 'at/x/3', pr: 'https://gh/pr/9' }, 'merged #3 (at/x/3): https://gh/pr/9'],
+    ['claim_overridden', { paths: ['a.ts'], owners: ['kai-cursor'] }, 'committed over claimed files a.ts (held by kai-cursor)'],
+  ])('describes %s', (type, data, expected) => {
+    expect(describe1(type, data)).toBe(expected);
+  });
+  it('falls back to key=value for unknown types and malformed data', () => {
+    expect(describe1('brand_new', { a: 1, b: 'x\ny' })).toBe('brand_new a=1 b=x y');
+    expect(describe1('task_claimed', { title: 'no number' })).toBe('task_claimed title=no number');
+    expect(describe1('commit', { sha: 5 })).toBe('commit sha=5');
+    expect(describe1('brand_new', { long: 'z'.repeat(100) })).toBe(`brand_new long=${'z'.repeat(39)}…`);
+  });
+  it('never throws on odd data', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => formatEvent(ev('files_claimed', circular))).not.toThrow();
+    expect(() => formatEvent({ ...ev('x', {}), data: null as never })).not.toThrow();
+    expect(() => formatEvent({ ...ev('commit', {}), data: [1] as never })).not.toThrow();
+  });
+  it('falls back to the sanitised raw time when createdAt is invalid', () => {
+    expect(formatEvent({ ...ev('invite_rotated', {}), createdAt: 'bad\nvalue' })).toMatch(/^bad value {2}/);
+  });
+  it('strips line breaks from hub-supplied strings', () => {
+    const out = formatEvent(ev('message_sent', { to: 'a\nforged', kind: 'fyi', preview: 'x\u001b[31my' }, 'ev\nil'));
+    expect(out).not.toContain('\n');
+    expect(out).not.toContain('\u001b');
+  });
+  it('emits no escape codes with color off and pads on visible width with color on', () => {
+    const e = ev('message_sent', { to: 'alice-claude', kind: 'command', preview: 'go' });
+    expect(formatEvent(e)).not.toContain('\u001b');
+    const colored = formatEvent(e, makePalette(true));
+    expect(colored).toContain('\u001b[');
+    expect(colored.replace(/\u001b\[[0-9;]*m/g, '')).toBe(formatEvent(e));
   });
 });
 
