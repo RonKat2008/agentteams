@@ -69,7 +69,7 @@ describe('hosted create and join', () => {
   it('create sends the gh token to the hub and never prints it', async () => {
     const t = mk('ok');
     await initRepo(t);
-    expect(await run(t, 'create', 'hteam', '--repo', 'me/app', '--hub', hosted.url, '--no-install')).toBe(0);
+    expect(await run(t, 'create', 'hteam', '--repo', 'me/app', '--hub', hosted.url, '--trust-hub', '--no-install')).toBe(0);
     expect(seenTokens).toEqual([TOKEN]);
     expect(allOutput(t)).not.toContain(TOKEN);
     const host = new URL(hosted.url).hostname;
@@ -81,13 +81,13 @@ describe('hosted create and join', () => {
   it('join sends the gh token once and never prints it', async () => {
     const owner = mk('ok');
     await initRepo(owner);
-    await run(owner, 'create', 'jteam', '--repo', 'me/app', '--hub', hosted.url, '--no-install');
+    await run(owner, 'create', 'jteam', '--repo', 'me/app', '--hub', hosted.url, '--trust-hub', '--no-install');
     const code = /Invite code: (\S+)/.exec(owner.out.join('\n'))![1]!;
     seenTokens.length = 0;
     const joiner = mk('ok');
     await initRepo(joiner);
     await realExec('git', ['remote', 'add', 'origin', 'https://github.com/me/app.git'], { cwd: joiner.deps.cwd });
-    expect(await run(joiner, 'join', code, '--hub', hosted.url, '--no-install')).toBe(0);
+    expect(await run(joiner, 'join', code, '--hub', hosted.url, '--trust-hub', '--no-install')).toBe(0);
     expect(seenTokens).toEqual([TOKEN]);
     expect(allOutput(joiner)).not.toContain(TOKEN);
   });
@@ -103,7 +103,7 @@ describe('hosted create and join', () => {
   it('errors when gh is missing, before any request that creates a team', async () => {
     const t = mk('missing');
     await initRepo(t);
-    expect(await run(t, 'create', 'x1', '--repo', 'me/app', '--hub', hosted.url, '--no-install')).toBe(1);
+    expect(await run(t, 'create', 'x1', '--repo', 'me/app', '--hub', hosted.url, '--trust-hub', '--no-install')).toBe(1);
     expect(t.err.join('\n')).toContain('this hub requires GitHub identity: install the GitHub CLI and run gh auth login');
     expect(seenTokens).toEqual([]);
   });
@@ -111,25 +111,25 @@ describe('hosted create and join', () => {
   it('errors when gh is not logged in', async () => {
     const t = mk('logged-out');
     await initRepo(t);
-    expect(await run(t, 'create', 'x2', '--repo', 'me/app', '--hub', hosted.url, '--no-install')).toBe(1);
+    expect(await run(t, 'create', 'x2', '--repo', 'me/app', '--hub', hosted.url, '--trust-hub', '--no-install')).toBe(1);
     expect(t.err.join('\n')).toContain('gh is not logged in; run: gh auth login');
   });
 
   it('get the token before creating a new repo', async () => {
     const calls: string[][] = [];
     const t = mk('logged-out', calls);
-    expect(await run(t, 'create', 'newr', '--new-repo', '--hub', hosted.url)).toBe(1);
+    expect(await run(t, 'create', 'newr', '--new-repo', '--hub', hosted.url, '--trust-hub')).toBe(1);
     expect(calls.map((a) => a.join(' '))).toEqual(['auth token']);
   });
 
   it('join gets the token before cloning', async () => {
     const owner = mk('ok');
     await initRepo(owner);
-    await run(owner, 'create', 'cteam', '--repo', 'me/app', '--hub', hosted.url, '--no-install');
+    await run(owner, 'create', 'cteam', '--repo', 'me/app', '--hub', hosted.url, '--trust-hub', '--no-install');
     const code = /Invite code: (\S+)/.exec(owner.out.join('\n'))![1]!;
     const calls: string[][] = [];
     const joiner = mk('logged-out', calls);
-    expect(await run(joiner, 'join', code, '--hub', hosted.url, '--no-install')).toBe(1);
+    expect(await run(joiner, 'join', code, '--hub', hosted.url, '--trust-hub', '--no-install')).toBe(1);
     expect(calls.map((a) => a.join(' '))).toEqual(['auth token']);
   });
 });
@@ -147,13 +147,13 @@ describe('githubTokenFor', () => {
 
   it('accepts https hubs and loopback http', async () => {
     const t = mk('ok', [], fakeHealth('hosted'));
-    expect(await githubTokenFor(t.deps, 'https://hub.example.com')).toBe(TOKEN);
-    expect(await githubTokenFor(t.deps, 'http://localhost:1')).toBe(TOKEN);
+    expect(await githubTokenFor(t.deps, 'https://hub.example.com', { trustHub: true })).toBe(TOKEN);
+    expect(await githubTokenFor(t.deps, 'http://localhost:1', { trustHub: true })).toBe(TOKEN);
   });
 
   it('accepts IPv6 loopback http', async () => {
     const t = mk('ok', [], fakeHealth('hosted'));
-    expect(await githubTokenFor(t.deps, 'http://[::1]:4747')).toBe(TOKEN);
+    expect(await githubTokenFor(t.deps, 'http://[::1]:4747', { trustHub: true })).toBe(TOKEN);
   });
 
   it.each(['http://localhost.evil.com', 'HTTP://hub.example.com', 'http://127.0.0.1.evil.com'])('refuses %s', async (url) => {
@@ -175,5 +175,65 @@ describe('githubTokenFor', () => {
 
   it('health is exposed by HubClient', async () => {
     expect(await new HubClient(hosted.url).health()).toEqual({ ok: true, mode: 'hosted' });
+  });
+});
+
+describe('third-party hub trust', () => {
+  const hostedHealth: typeof fetch = (async () => new Response(JSON.stringify({ ok: true, mode: 'hosted' }), { status: 200 })) as typeof fetch;
+  const OTHER = 'https://x.trycloudflare.com';
+
+  it('sends the token to the official hub without asking', async () => {
+    const calls: string[][] = [];
+    const t = mk('ok', calls, hostedHealth);
+    t.deps.prompt = async () => { throw new Error('should not prompt'); };
+    expect(await githubTokenFor(t.deps, 'https://agentteams-two.vercel.app')).toBe(TOKEN);
+  });
+
+  it('asks on a TTY, warns with the hostname, and sends on y', async () => {
+    const t = mk('ok', [], hostedHealth);
+    const asked: string[] = [];
+    t.deps.isTTY = true;
+    t.deps.prompt = async (q) => { asked.push(q); return 'y'; };
+    expect(await githubTokenFor(t.deps, OTHER)).toBe(TOKEN);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('x.trycloudflare.com');
+    expect(t.err.join('\n')).toContain('This sends your GitHub token to x.trycloudflare.com. Only continue if you trust whoever runs it');
+  });
+
+  it.each(['', 'n', 'no', 'maybe'])('refuses on a TTY when the answer is %j (default No) and never runs gh', async (ans) => {
+    const calls: string[][] = [];
+    const t = mk('ok', calls, hostedHealth);
+    t.deps.isTTY = true;
+    t.deps.prompt = async () => ans;
+    await expect(githubTokenFor(t.deps, OTHER)).rejects.toThrow('cancelled');
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses without a TTY unless --trust-hub, and never runs gh', async () => {
+    const calls: string[][] = [];
+    const t = mk('ok', calls, hostedHealth);
+    await expect(githubTokenFor(t.deps, OTHER)).rejects.toThrow('--trust-hub');
+    expect(calls).toEqual([]);
+  });
+
+  it('--trust-hub skips the prompt even on a TTY', async () => {
+    const t = mk('ok', [], hostedHealth);
+    t.deps.isTTY = true;
+    t.deps.prompt = async () => { throw new Error('should not prompt'); };
+    expect(await githubTokenFor(t.deps, OTHER, { trustHub: true })).toBe(TOKEN);
+  });
+
+  it('still refuses plain http even with --trust-hub', async () => {
+    const t = mk('ok', [], hostedHealth);
+    await expect(githubTokenFor(t.deps, 'http://hub.example.com', { trustHub: true })).rejects.toThrow('non-HTTPS');
+  });
+
+  it('create without --trust-hub fails non-interactively before creating anything', async () => {
+    const calls: string[][] = [];
+    const t = mk('ok', calls);
+    await initRepo(t);
+    expect(await run(t, 'create', 'nt', '--repo', 'me/app', '--hub', hosted.url, '--no-install')).toBe(1);
+    expect(t.err.join('\n')).toContain('--trust-hub');
+    expect(calls).toEqual([]);
   });
 });

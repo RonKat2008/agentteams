@@ -5,11 +5,11 @@ import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
 import { githubTokenFor } from './hostedAuth.js';
-import { hubUrlFrom } from '../paths.js';
+import { hubLabel, hubUrlFrom } from '../paths.js';
 import { checkTeamDir, detectGithubSlug, real, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 
-export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean; clone: boolean; dir?: string }
+export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean; clone: boolean; dir?: string; trustHub?: boolean }
 
 const SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
@@ -65,7 +65,7 @@ export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): 
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const client = new HubClient(hubUrl, { fetch: deps.fetch });
   const preview = await client.previewInvite(code);
-  const githubToken = await githubTokenFor(deps, hubUrl); // before cloning anything
+  const githubToken = await githubTokenFor(deps, hubUrl, { trustHub: opts.trustHub }); // before cloning anything
   const repoPath = await resolveRepoPath(deps, preview, opts);
   await checkTeamDir(deps, repoPath);
   const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
@@ -76,5 +76,6 @@ export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): 
   };
   await saveCredential(deps, cred);
   deps.out(`Joined team "${res.teamName}" as ${res.agentName}. Repo: ${repoPath}`);
+  deps.out(`Hub: ${hubLabel(hubUrl)}`);
   if (opts.install) printReport(deps, await runInstallers(deps, cred));
 }

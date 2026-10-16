@@ -16,6 +16,7 @@ import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
+const TRUST_HUB_HELP = 'send your GitHub token to a non-official hosted hub without asking (required when not interactive)';
 
 function parsePositive(name: string) {
   return (v: string): number => {
@@ -50,15 +51,17 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('create').description('Create a team in this repo').argument('<name>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
-    .addOption(new Option('--local', 'local-only team (no GitHub link)').conflicts('newRepo'))
+    .addOption(new Option('--local', 'local-only repo (no GitHub link); this is NOT the local hub, use --hub local for that').conflicts('newRepo'))
     .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
     .addOption(new Option('--private', 'new repo is private (default)').conflicts('public'))
     .addOption(new Option('--public', 'new repo is public'))
     .option('--owner <org>', 'GitHub owner/org for --new-repo').option('--no-install')
+    .option('--trust-hub', TRUST_HUB_HELP)
     .action((name: string, o: { public?: boolean } & CreateOpts) =>
       createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: public hub or $AGENTTEAMS_HUB)').option('--no-install')
+    .option('--trust-hub', TRUST_HUB_HELP)
     .option('--no-clone', 'do not clone the team repo; use the current directory')
     .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
     .action((code: string, o) => joinCommand(deps, code, o));

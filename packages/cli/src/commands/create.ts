@@ -6,14 +6,14 @@ import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
 import { HubClient } from '../hubClient.js';
 import { githubTokenFor } from './hostedAuth.js';
-import { hubUrlFrom } from '../paths.js';
+import { hubLabel, hubUrlFrom } from '../paths.js';
 import { checkTeamDir, detectGithubSlug, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
 export interface CreateOpts {
   agent: ToolKind; as?: string; hub?: string; repo?: string; local?: boolean; install: boolean;
-  newRepo?: boolean; visibility?: 'private' | 'public'; owner?: string;
+  newRepo?: boolean; trustHub?: boolean; visibility?: 'private' | 'public'; owner?: string;
 }
 
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
@@ -115,6 +115,7 @@ async function registerTeam(
   deps.out(`Created team "${res.teamName}". You are ${res.agentName} (orchestrator).`);
   deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
   deps.out(`Teammates join with: agentteams join ${res.inviteCode} --hub ${hubUrl}`);
+  deps.out(`Hub: ${hubLabel(hubUrl)}`);
   await saveCredential(deps, cred);
   return cred;
 }
@@ -123,7 +124,7 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
   // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
   await checkTeamDir(opts.newRepo ? { ...deps, err: () => {} } : deps, deps.cwd);
   // Before any side effect (repo creation); hosted hubs need the gh identity once.
-  const githubToken = await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env));
+  const githubToken = await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env), { trustHub: opts.trustHub });
   if (!opts.newRepo) {
     const repoPath = await repoRoot(deps, deps.cwd);
     const repo = await resolveRepoLink(deps, opts, repoPath);
