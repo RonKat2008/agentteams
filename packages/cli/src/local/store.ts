@@ -1,5 +1,5 @@
-import { chmod, mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { chmod, mkdir, open as openFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { CliDeps } from '../deps.js';
 
 type Deps = Pick<CliDeps, 'exec'>;
@@ -15,12 +15,33 @@ const STORE_DIR_MODE = 0o700;
 const STORE_FILE_MODE = 0o600;
 const stores = new Map<string, Promise<TeamStore>>();
 
-/** `<abs git-common-dir>/agentteams/team.db`; a linked worktree resolves to the main repo's database. */
-export async function teamDbPath(deps: Deps, repoPath: string): Promise<string> {
-  const r = await deps.exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: repoPath });
+const dbPaths = new Map<string, Promise<string>>();
+const SIDECARS = ['-wal', '-shm'];
+
+async function resolveDbPath(deps: Deps, repoPath: string): Promise<string> {
+  // Plain --git-common-dir (relative to cwd on older git, absolute otherwise); resolve it ourselves.
+  const r = await deps.exec('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath });
   const common = r.stdout.trim();
   if (r.code !== 0 || !common) throw new Error(`not a git repository: ${repoPath}`);
-  return join(common, 'agentteams', 'team.db');
+  return join(isAbsolute(common) ? common : resolve(repoPath, common), 'agentteams', 'team.db');
+}
+
+/** `<abs git-common-dir>/agentteams/team.db`; a linked worktree resolves to the main repo's database. Cached per repoPath. */
+export function teamDbPath(deps: Deps, repoPath: string): Promise<string> {
+  let p = dbPaths.get(repoPath);
+  if (!p) {
+    p = resolveDbPath(deps, repoPath);
+    dbPaths.set(repoPath, p);
+    p.catch(() => dbPaths.delete(repoPath));
+  }
+  return p;
+}
+
+/** Create the file private before SQLite touches it, so it is never briefly world-readable. */
+async function ensurePrivateFile(path: string): Promise<void> {
+  const fh = await openFile(path, 'a', STORE_FILE_MODE);
+  await fh.close();
+  await chmod(path, STORE_FILE_MODE);
 }
 
 async function open(path: string): Promise<TeamStore> {
@@ -28,9 +49,11 @@ async function open(path: string): Promise<TeamStore> {
   const core = await import('@agentteams/hub/core');
   await mkdir(dirname(path), { recursive: true, mode: STORE_DIR_MODE });
   await chmod(dirname(path), STORE_DIR_MODE);
+  await ensurePrivateFile(path);
   const db = core.createSqliteDb(path);
-  await chmod(path, STORE_FILE_MODE);
   await core.migrateToLatest(db);
+  // WAL sidecars appear once SQLite writes; tighten whichever exist (the 0700 directory covers the rest).
+  for (const suffix of SIDECARS) await chmod(path + suffix, STORE_FILE_MODE).catch(() => undefined);
   return { path, core, ctx: core.createContext(db, { mode: 'local' }) };
 }
 

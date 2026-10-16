@@ -146,7 +146,18 @@ export async function migrateTo(db: Kysely<Database>, name: string): Promise<voi
   if (error) throw error instanceof Error ? error : new Error(String(error));
 }
 
+const SQLITE_MIGRATE_ATTEMPTS = 5;
+const SQLITE_MIGRATE_BACKOFF_MS = 50;
+
 export async function migrateToLatest(db: Kysely<Database>): Promise<void> {
-  const { error } = await new Migrator({ db, provider: new InCodeMigrationProvider() }).migrateToLatest();
-  if (error) throw error instanceof Error ? error : new Error(String(error));
+  const migrator = new Migrator({ db, provider: new InCodeMigrationProvider() });
+  // SQLite has no migration lock: two processes opening a fresh file can both start the same migration. Each
+  // migration is transactional, so the loser fails cleanly; retrying re-reads what the winner applied.
+  const attempts = db.getExecutor().adapter instanceof PostgresAdapter ? 1 : SQLITE_MIGRATE_ATTEMPTS;
+  for (let attempt = 1; ; attempt++) {
+    const { error } = await migrator.migrateToLatest();
+    if (!error) return;
+    if (attempt >= attempts) throw error instanceof Error ? error : new Error(String(error));
+    await new Promise((r) => setTimeout(r, SQLITE_MIGRATE_BACKOFF_MS * attempt));
+  }
 }

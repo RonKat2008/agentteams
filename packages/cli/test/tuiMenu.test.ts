@@ -112,7 +112,8 @@ function localTeamTable(): Record<string, { stdout: string }> {
   mkdirSync(join(common, 'agentteams'));
   writeFileSync(join(common, 'agentteams', 'team.db'), '');
   temps.push(common);
-  return { 'git rev-parse --path-format=absolute --git-common-dir': { stdout: `${common}\n` } };
+  const out = { stdout: `${common}\n` };
+  return { 'git rev-parse --path-format=absolute --git-common-dir': out, 'git rev-parse --git-common-dir': out };
 }
 const temps: string[] = [];
 afterEach(() => { temps.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true })); });

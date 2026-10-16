@@ -11,6 +11,14 @@ const STATUS: Record<string, number> = {
   unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, invalid: 400, rate_limited: 429,
 };
 
+const isBusy = (e: unknown): boolean => /^SQLITE_BUSY|database is locked/.test(`${(e as { code?: string })?.code ?? ''} ${(e as Error)?.message ?? ''}`);
+
+/** Same rule as the HTTP route: a positive safe integer. */
+function taskNumber(n: number): number {
+  if (!Number.isSafeInteger(n) || n < 1) throw new HubError('invalid', 'task number must be a positive integer', 400);
+  return n;
+}
+
 /** HTTP responses are JSON; round-trip so callers see exactly the shapes HubClient returns. */
 const wire = <T>(v: unknown): T => JSON.parse(JSON.stringify(v ?? null)) as T;
 
@@ -25,7 +33,8 @@ export class LocalTeamClient implements TeamClient {
       return wire<T>(await fn(store, actor));
     } catch (err) {
       if (err instanceof store.core.DomainError) throw new HubError(err.code, err.message, STATUS[err.code] ?? 500);
-      throw err;
+      if (isBusy(err)) throw new HubError('conflict', 'the team database is busy (another agent is writing); retry in a moment', 409);
+      throw new HubError('internal', 'internal error', 500);
     }
   }
 
@@ -60,16 +69,20 @@ export class LocalTeamClient implements TeamClient {
   claimOverride(paths: string[], sha?: string) {
     return this.run<{ owners: string[] }>((s, a) => s.core.recordClaimOverride(s.ctx, a, { paths, ...(sha === undefined ? {} : { sha }) } as never));
   }
-  claimTask(n: number) {
+  async claimTask(n: number) {
+    taskNumber(n);
     return this.run<TaskView>((s, a) => s.core.claimTask(s.ctx, a, { task: n }));
   }
-  completeTask(n: number, summary: string, branch: string) {
+  async completeTask(n: number, summary: string, branch: string) {
+    taskNumber(n);
     return this.run<TaskView>((s, a) => s.core.completeTask(s.ctx, a, { task: n, summary, branch } as never));
   }
-  markMerged(n: number, pr?: string) {
+  async markMerged(n: number, pr?: string) {
+    taskNumber(n);
     return this.run<TaskView>((s, a) => s.core.markMerged(s.ctx, a, { task: n, ...(pr === undefined ? {} : { pr }) } as never));
   }
-  getTask(n: number) {
+  async getTask(n: number) {
+    taskNumber(n);
     return this.run<TaskView>((s, a) => s.core.getTaskView(s.ctx, a, n));
   }
   recordCommit(input: CommitInput) {

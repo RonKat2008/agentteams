@@ -78,6 +78,8 @@ export interface ProxyOptions {
   /** Opens a connection to the hub; null when this directory has no credentials. */
   connect: (() => Promise<Client>) | null;
   hubUrl?: string;
+  /** Overrides the texts for local credentials, where there is no hub to reject or be unreachable. */
+  messages?: { authRejected: string; unavailable: string };
   /** Tool list served while the hub is unreachable. Defaults to the hub package's definitions. */
   tools?: () => Promise<Tool[]>;
 }
@@ -141,11 +143,13 @@ export async function createProxyServer(opts: ProxyOptions) {
         drop();
         lastError = e;
         if (isRetryableCallError(e)) continue;
-        return errorResult(isAuthRejection(e) ? AUTH_REJECTED : AMBIGUOUS);
+        return errorResult(isAuthRejection(e) ? (opts.messages?.authRejected ?? AUTH_REJECTED) : AMBIGUOUS);
       }
     }
     return errorResult(
-      isAuthRejection(lastError) ? AUTH_REJECTED : `agentteams hub unreachable at ${opts.hubUrl} — is it running?`,
+      isAuthRejection(lastError)
+        ? (opts.messages?.authRejected ?? AUTH_REJECTED)
+        : (opts.messages?.unavailable ?? `agentteams hub unreachable at ${opts.hubUrl} — is it running?`),
     );
   });
   server.onclose = () => drop();
@@ -162,7 +166,14 @@ async function localServer(deps: CliDeps, cred: Credential): Promise<StdioServer
     // Stay up like the proxy does, so the agent sees why each call fails instead of a dead server.
     const why = e instanceof Error ? e.message : String(e);
     deps.err(`agentteams: cannot open the local team for ${cred.repoPath}: ${why}`);
-    return createProxyServer({ connect: () => Promise.reject(Object.assign(new Error(why), { code: 401 })) });
+    const rejected = (e as { code?: unknown } | null)?.code === 'unauthorized';
+    return createProxyServer({
+      connect: () => Promise.reject(Object.assign(new Error(why), rejected ? { code: 401 } : {})),
+      messages: {
+        authRejected: "this agent's local team credential was rejected (re-run agentteams join)",
+        unavailable: `the local team for ${cred.repoPath} is unavailable: ${why}`,
+      },
+    });
   }
 }
 

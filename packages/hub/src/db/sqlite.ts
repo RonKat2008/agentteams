@@ -23,9 +23,25 @@ class ImmediateSqliteDialect extends SqliteDialect {
   }
 }
 
+const WAL_ATTEMPTS = 50;
+const WAL_BACKOFF_MS = 20;
+
+/** Switching a fresh file to WAL can fail with SQLITE_BUSY without consulting busy_timeout; retry briefly. */
+function enableWal(sqlite: SqliteDatabase.Database): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      sqlite.pragma('journal_mode = WAL');
+      return;
+    } catch (err) {
+      if (attempt >= WAL_ATTEMPTS || !/locked|busy/i.test((err as Error).message)) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, WAL_BACKOFF_MS);
+    }
+  }
+}
+
 export function createSqliteDb(path: string): Kysely<Database> {
   const sqlite = new SqliteDatabase(path);
-  sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('busy_timeout = 5000');
+  enableWal(sqlite);
   return new Kysely<Database>({ dialect: new ImmediateSqliteDialect(sqlite) });
 }

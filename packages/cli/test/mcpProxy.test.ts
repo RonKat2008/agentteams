@@ -126,6 +126,19 @@ describe('MCP proxy', () => {
     await downstream.close();
   });
 
+  it('uses the local-credential wording when a local team rejects the agent', async () => {
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await (await createProxyServer({
+      connect: () => Promise.reject(Object.assign(new Error('unauthorized: invalid API key'), { code: 401 })),
+      messages: { authRejected: "this agent's local team credential was rejected (re-run agentteams join)", unavailable: 'unavailable' },
+    })).connect(a);
+    const downstream = new Client({ name: 'codex', version: '0' });
+    await downstream.connect(b);
+    const res = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(textOf(res)).toBe("this agent's local team credential was rejected (re-run agentteams join)");
+    await downstream.close();
+  });
+
   it('never retries a call that timed out, since the hub may have processed it', async () => {
     const { McpError, ErrorCode } = await import('@modelcontextprotocol/sdk/types.js');
     let connects = 0;
