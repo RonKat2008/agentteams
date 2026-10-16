@@ -33,7 +33,10 @@ export interface ToolAdapter {
   label: string;
   /** full: MCP + context hooks; mcp: MCP + rules only. */
   tier: 'full' | 'mcp';
+  /** Shell command that starts this agent in a directory, e.g. "claude" or "cursor ." (used in "Next:" hints). */
+  launch: string;
   install(deps: CliDeps, cred: Credential): Promise<InstallReport>;
+  /** Writes the untracked, machine-specific files a new worktree needs (they do not follow `git worktree add`). */
   installForWorktree?(deps: CliDeps, cred: Credential, worktreePath: string): Promise<InstallReport>;
   dialect: HookDialect;
 }

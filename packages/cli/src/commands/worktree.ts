@@ -85,5 +85,5 @@ export async function worktreeCommand(deps: CliDeps, task: number, opts: Worktre
   if (hooks.status === 'skipped') deps.err(`agentteams: warning: ${hooks.detail.startsWith('git hooks') ? hooks.detail : `git hooks not installed: ${hooks.detail}`}`);
 
   deps.out(`Task #${task} claimed. Worktree: ${path} (branch ${branch})`);
-  deps.out(`Next: cd ${path} && ${cred.tool === 'codex' ? 'codex' : 'claude'}`);
+  deps.out(`Next: cd ${path} && ${adapter.launch}`);
 }

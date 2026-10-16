@@ -53,6 +53,7 @@ export const windsurfAdapter: ToolAdapter = {
   kind: 'windsurf',
   label: 'Windsurf / Devin',
   tier: 'mcp',
+  launch: 'windsurf .',
   dialect: windsurfDialect,
   install: (deps, cred) => installWindsurf(deps, cred),
 };

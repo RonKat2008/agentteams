@@ -73,6 +73,7 @@ export const cursorAdapter: ToolAdapter = {
   kind: 'cursor',
   label: 'Cursor',
   tier: 'full',
+  launch: 'cursor .',
   dialect: cursorDialect,
   install: (deps, cred) => installCursor(deps, cred),
   installForWorktree: (deps, cred, worktreePath) => installCursorForWorktree(deps, cred, worktreePath),

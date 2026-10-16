@@ -35,10 +35,21 @@ export async function installDroid(deps: CliDeps, cred: Credential, opts: { cli?
   return report;
 }
 
+/** Per-worktree: only the git-excluded .factory files (pinned to the worktree). */
+export async function installDroidForWorktree(
+  deps: CliDeps, _cred: Credential, worktreePath: string, opts: { cli?: string; argv?: Argv } = {},
+): Promise<InstallReport> {
+  const report: InstallReport = { tool: 'droid', done: [], warnings: [] };
+  await installProject(deps, worktreePath, opts.cli ?? cliCommand(), opts.argv ?? cliArgv(), report);
+  return report;
+}
+
 export const droidAdapter: ToolAdapter = {
   kind: 'droid',
   label: 'Factory Droid',
   tier: 'full',
+  launch: 'droid',
   dialect: { ...claudeDialect },
   install: (deps, cred) => installDroid(deps, cred),
+  installForWorktree: (deps, cred, worktreePath) => installDroidForWorktree(deps, cred, worktreePath),
 };

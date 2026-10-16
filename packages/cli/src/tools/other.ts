@@ -12,6 +12,7 @@ export const otherAdapter: ToolAdapter = {
   kind: 'other',
   label: 'Other',
   tier: 'mcp',
+  launch: '<start your agent>',
   dialect: claudeDialect,
   async install(_deps, cred) {
     const report: InstallReport = { tool: 'other', done: [], warnings: [] };

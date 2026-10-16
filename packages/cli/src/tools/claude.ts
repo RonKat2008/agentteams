@@ -6,6 +6,7 @@ export const claudeAdapter: ToolAdapter = {
   kind: 'claude',
   label: 'Claude Code',
   tier: 'full',
+  launch: 'claude',
   dialect: claudeDialect,
   install: (deps, cred) => installClaude(deps, cred),
   installForWorktree: (deps, cred, worktreePath) => installClaudeForWorktree(deps, cred, worktreePath),

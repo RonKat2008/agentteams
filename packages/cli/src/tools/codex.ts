@@ -6,6 +6,7 @@ export const codexAdapter: ToolAdapter = {
   kind: 'codex',
   label: 'Codex',
   tier: 'full',
+  launch: 'codex',
   dialect: codexDialect,
   install: (deps, cred) => installCodex(deps, cred),
 };

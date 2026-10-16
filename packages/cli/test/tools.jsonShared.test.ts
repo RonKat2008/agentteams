@@ -106,6 +106,36 @@ describe.each([
   });
 });
 
+describe.each([
+  ['gemini', '.gemini/settings.json', 'mcpServers'],
+  ['droid', '.factory/mcp.json', 'mcpServers'],
+  ['opencode', 'opencode.json', 'mcp'],
+  ['roo', '.roo/mcp.json', 'mcpServers'],
+  ['cursor', '.cursor/mcp.json', 'mcpServers'],
+  ['copilot', '.github/mcp.json', 'mcpServers'],
+] as Array<[ToolKind, string, string]>)('installForWorktree: %s', (tool, file, key) => {
+  it('writes the machine-specific config into the worktree pinned to it, no instruction files', async () => {
+    const wt = join(t.root, 'wt');
+    mkdirSync(wt, { recursive: true });
+    const adapter = getAdapter(tool);
+    expect(adapter.installForWorktree).toBeTypeOf('function');
+    const r = await adapter.installForWorktree!(t.deps, credFor(tool), wt);
+    expect(r.warnings).toEqual([]);
+    const entry = JSON.parse(readFileSync(join(wt, file), 'utf8'))[key].agentteams;
+    expect(mcpEntryRepo(entry)).toBe(wt);
+    for (const f of ['AGENTS.md', 'GEMINI.md']) expect(existsSync(join(wt, f))).toBe(false);
+    expect(excludeLines()).toContain(file);
+  });
+});
+
+describe('launch hints', () => {
+  it('every adapter names how to start it', () => {
+    const expected: Partial<Record<ToolKind, string>> = { claude: 'claude', codex: 'codex', gemini: 'gemini', copilot: 'copilot', droid: 'droid', opencode: 'opencode', cursor: 'cursor .' };
+    for (const [kind, launch] of Object.entries(expected)) expect(getAdapter(kind as ToolKind).launch).toBe(launch);
+    for (const kind of ['windsurf', 'cline', 'roo', 'other'] as ToolKind[]) expect(getAdapter(kind).launch).not.toBe('');
+  });
+});
+
 describe('gemini hooks shape', () => {
   it('non-object "hooks" leaves settings.json untouched with a warning', async () => {
     const text = JSON.stringify({ hooks: 'nope' });

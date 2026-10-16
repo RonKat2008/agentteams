@@ -18,11 +18,17 @@ export const rooAdapter: ToolAdapter = {
   kind: 'roo',
   label: 'Roo Code',
   tier: 'mcp',
+  launch: 'code .',
   dialect: claudeDialect,
   async install(deps, cred) {
     const report: InstallReport = { tool: 'roo', done: [], warnings: [] };
     await installRooMcp(deps, cred.repoPath, report);
     await writeRulesFile(cred.repoPath, '.roo/rules/agentteams.md', cred, report);
+    return report;
+  },
+  async installForWorktree(deps, _cred, worktreePath) {
+    const report: InstallReport = { tool: 'roo', done: [], warnings: [] };
+    await installRooMcp(deps, worktreePath, report);
     return report;
   },
 };

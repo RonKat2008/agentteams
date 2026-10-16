@@ -23,6 +23,7 @@ let cli: TestCli;
 let claudeCalls: FakeExecCall[];
 let client: HubClient;
 let orchKey: string;
+let inviteCode: string;
 
 const git = async (cwd: string, ...args: string[]) => {
   const r = await realExec('git', args, { cwd });
@@ -66,6 +67,7 @@ beforeEach(async () => {
   const anon = new HubClient(hub.url);
   const created = await anon.createTeam({ name: 'dev-squad', member: 'ronit', tool: 'claude', repo: { provider: 'local', defaultBranch: 'main' } });
   orchKey = created.apiKey;
+  inviteCode = created.inviteCode;
   const joined = await anon.joinTeam({ inviteCode: created.inviteCode, member: 'dylan', tool: 'claude' });
   client = new HubClient(hub.url, { apiKey: joined.apiKey });
   const cred: Credential = {
@@ -95,6 +97,23 @@ describe('agentteams worktree', () => {
     expect(add?.cwd).toBe(wt);
     expect(cli.out).toContain(`Task #1 claimed. Worktree: ${wt} (branch at/dylan-claude/1)`);
     expect(cli.out).toContain(`Next: cd ${wt} && claude`);
+  });
+
+  it('sets up a non-claude agent (gemini) in the worktree: git-excluded config pinned to it, tool-specific Next hint', async () => {
+    const anon = new HubClient(hub.url);
+    const team = await anon.joinTeam({ inviteCode, member: 'gem', tool: 'gemini' });
+    await saveCredential(cli.deps, {
+      repoPath: repo, tool: 'gemini', hubUrl: hub.url, teamName: 'dev-squad', agentName: team.agentName,
+      apiKey: team.apiKey, createdAt: new Date().toISOString(),
+    });
+    await createTask(orchKey, team.agentName);
+    expect(await run(repo, 'worktree', '2', '--agent', 'gemini')).toBe(0);
+    const wt = join(tmp, 'proj.at', `${team.agentName}-2`);
+    const settings = JSON.parse(readFileSync(join(wt, '.gemini', 'settings.json'), 'utf8'));
+    expect(settings.mcpServers.agentteams.args.slice(-2)).toEqual(['--repo', wt]);
+    expect(settings.hooks.SessionStart).toHaveLength(1);
+    expect(await git(wt, 'status', '--porcelain')).toBe('');
+    expect(cli.out).toContain(`Next: cd ${wt} && gemini`);
   });
 
   it('is idempotent when run twice', async () => {

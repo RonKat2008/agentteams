@@ -77,10 +77,21 @@ export async function installGemini(
   return report;
 }
 
+/** Per-worktree: only the git-excluded settings file (pinned to the worktree); credentials resolve via the main repo. */
+export async function installGeminiForWorktree(
+  deps: CliDeps, _cred: Credential, worktreePath: string, opts: { cli?: string; argv?: Argv } = {},
+): Promise<InstallReport> {
+  const report: InstallReport = { tool: 'gemini', done: [], warnings: [] };
+  await installSettings(deps, worktreePath, opts.cli ?? cliCommand(), opts.argv ?? cliArgv(), report);
+  return report;
+}
+
 export const geminiAdapter: ToolAdapter = {
   kind: 'gemini',
   label: 'Gemini CLI',
   tier: 'full',
+  launch: 'gemini',
   dialect: geminiDialect,
   install: (deps, cred) => installGemini(deps, cred),
+  installForWorktree: (deps, cred, worktreePath) => installGeminiForWorktree(deps, cred, worktreePath),
 };

@@ -49,12 +49,18 @@ export const opencodeAdapter: ToolAdapter = {
   kind: 'opencode',
   label: 'OpenCode',
   tier: 'full',
+  launch: 'opencode',
   dialect: opencodeDialect,
   async install(deps: CliDeps, cred: Credential): Promise<InstallReport> {
     const report: InstallReport = { tool: 'opencode', done: [], warnings: [] };
     const repo = cred.repoPath;
     await installRepoFiles(deps, repo, report);
     await writeRulesFile(repo, 'AGENTS.md', cred, report);
+    return report;
+  },
+  async installForWorktree(deps: CliDeps, _cred: Credential, worktreePath: string): Promise<InstallReport> {
+    const report: InstallReport = { tool: 'opencode', done: [], warnings: [] };
+    await installRepoFiles(deps, worktreePath, report);
     return report;
   },
 };

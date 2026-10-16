@@ -29,6 +29,7 @@ export const clineAdapter: ToolAdapter = {
   kind: 'cline',
   label: 'Cline',
   tier: 'mcp',
+  launch: 'code .',
   dialect: claudeDialect,
   async install(deps, cred) {
     const report: InstallReport = { tool: 'cline', done: [], warnings: [] };
