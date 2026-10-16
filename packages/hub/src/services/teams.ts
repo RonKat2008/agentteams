@@ -30,7 +30,7 @@ const MESSAGE_PREVIEW_LENGTH = 80; // matches sendMessage
 const MAX_GITHUB_TOKEN_LENGTH = 512;
 const GITHUB_REQUIRED = 'this hub requires GitHub identity; install gh and run: gh auth login';
 
-interface ResolvedIdentity { member: string; githubLogin: string | null }
+interface ResolvedIdentity { member: string; githubLogin: string | null; githubId: number | null }
 
 /**
  * Hosted: verifies the token (network I/O, so callers run this before withTx) and derives the member
@@ -40,7 +40,7 @@ async function resolveIdentity(
   ctx: HubContext, input: { member?: string; githubToken?: unknown },
 ): Promise<ResolvedIdentity> {
   if (ctx.mode !== 'hosted') {
-    return { member: parseInput(MemberName, input.member), githubLogin: null };
+    return { member: parseInput(MemberName, input.member), githubLogin: null, githubId: null };
   }
   if (input.githubToken === undefined || input.githubToken === null) throw new DomainError('unauthorized', GITHUB_REQUIRED);
   const token = input.githubToken;
@@ -49,12 +49,12 @@ async function resolveIdentity(
   }
   if (!ctx.verifyGithub) throw new DomainError('unauthorized', 'could not verify GitHub identity');
   const user = await ctx.verifyGithub(token);
-  return { member: defaultMemberName(user.login), githubLogin: user.login };
+  return { member: defaultMemberName(user.login), githubLogin: user.login, githubId: user.id };
 }
 
 export async function createTeam(ctx: HubContext, input: CreateTeamInput) {
   const p = parseInput(CreateTeamInput, input);
-  const { member, githubLogin } = await resolveIdentity(ctx, p);
+  const { member, githubLogin, githubId } = await resolveIdentity(ctx, p);
   const inviteCode = generateInviteCode();
   const apiKey = generateApiKey();
   const teamId = ctx.newId();
@@ -73,7 +73,7 @@ export async function createTeam(ctx: HubContext, input: CreateTeamInput) {
     }).execute();
     await tx.db.insertInto('agents').values({
       id: agentId, team_id: teamId, name: agentName, member, tool: p.tool,
-      api_key_hash: hashSecret(apiKey), last_seen_at: nowIso, created_at: nowIso, github_login: githubLogin,
+      api_key_hash: hashSecret(apiKey), last_seen_at: nowIso, created_at: nowIso, github_login: githubLogin, github_id: githubId,
     }).execute();
     await logEvent(tx, teamId, agentId, 'team_created', { name: p.name, repo: p.repo });
     await logEvent(tx, teamId, agentId, 'agent_joined', { agent: agentName, member, tool: p.tool, githubLogin });
@@ -121,7 +121,7 @@ async function notifyAccessRequest(
 export async function joinTeam(ctx: HubContext, input: JoinTeamInput) {
   const p = parseInput(JoinTeamInput, input);
   const team = await findInvitedTeam(ctx, p.inviteCode);
-  const { member, githubLogin } = await resolveIdentity(ctx, p);
+  const { member, githubLogin, githubId } = await resolveIdentity(ctx, p);
 
   const apiKey = generateApiKey();
   const agentId = ctx.newId();
@@ -130,7 +130,7 @@ export async function joinTeam(ctx: HubContext, input: JoinTeamInput) {
     const name = await uniqueAgentName(tx, team.id, `${member}-${p.tool}`);
     await tx.db.insertInto('agents').values({
       id: agentId, team_id: team.id, name, member, tool: p.tool,
-      api_key_hash: hashSecret(apiKey), last_seen_at: nowIso, created_at: nowIso, github_login: githubLogin,
+      api_key_hash: hashSecret(apiKey), last_seen_at: nowIso, created_at: nowIso, github_login: githubLogin, github_id: githubId,
     }).execute();
     await logEvent(tx, team.id, agentId, 'agent_joined', { agent: name, member, tool: p.tool, githubLogin });
     await notifyAccessRequest(tx, team, { agentId, name, member, githubLogin });
@@ -180,6 +180,7 @@ export async function getTeamStatus(ctx: HubContext, actor: Actor): Promise<Team
         currentTask: current ? { number: current.number, title: current.title, status: current.status } : null,
         claims: claims.filter((c) => c.agent_id === a.id).map((c) => c.glob),
         githubLogin: a.github_login,
+        githubId: a.github_id,
       };
     }),
   };

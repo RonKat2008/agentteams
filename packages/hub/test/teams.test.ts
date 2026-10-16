@@ -217,6 +217,9 @@ describe('hosted GitHub identity', () => {
     expect(actor.member).toBe('ronit_k');
     const status = await getTeamStatus(hosted.ctx, actor);
     expect(status.agents[0]!.githubLogin).toBe('Ronit-K');
+    expect(status.agents[0]!.githubId).toBe(1);
+    const row = await hosted.ctx.db.selectFrom('agents').select('github_id').executeTakeFirstOrThrow();
+    expect(row.github_id).toBe(1);
     expect(calls).toEqual([SECRET]);
   });
 
@@ -241,6 +244,7 @@ describe('hosted GitHub identity', () => {
     const orch = await authenticate(hosted.ctx, created.apiKey);
     const status = await getTeamStatus(hosted.ctx, orch);
     expect(status.agents.map((a) => a.githubLogin)).toEqual(['Ronit-K', 'dylan.d']);
+    expect(status.agents.map((a) => a.githubId)).toEqual([1, 2]);
     const msgs = await readInbox(hosted.ctx, orch);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toMatchObject({
@@ -313,7 +317,7 @@ describe('local mode ignores GitHub tokens', () => {
       const rows = await local.ctx.db.selectFrom('agents').select('github_login').execute();
       expect(rows.every((r) => r.github_login === null)).toBe(true);
       const status = await getTeamStatus(local.ctx, await authenticate(local.ctx, res.apiKey));
-      expect(status.agents.every((a) => a.githubLogin === null)).toBe(true);
+      expect(status.agents.every((a) => a.githubLogin === null && a.githubId === null)).toBe(true);
       for (const bad of ['', 'x'.repeat(600), 42]) {
         const r = await createTeam(local.ctx, { name: 'z', member: 'ronit', tool: 'claude', repo: githubRepo, githubToken: bad });
         await joinTeam(local.ctx, { inviteCode: r.inviteCode, member: 'dylan', tool: 'claude', githubToken: bad });
