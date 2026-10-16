@@ -1,5 +1,5 @@
 import type { ToolKind } from '@agentteams/shared';
-import { HOOK_EVENTS, HOOK_EVENT_NAMES } from '../hooks.js';
+import { HOOK_EVENTS, HOOK_EVENT_NAMES, type HookEvent } from '../hookEvents.js';
 
 export interface HookHandler { type: string; command: string; timeout?: number }
 export interface HookGroup { matcher?: string; hooks: HookHandler[] }
@@ -9,6 +9,11 @@ export const HOOK_TIMEOUT_SECONDS = 10;
 
 /** Stable flag appended to every generated hook command so reinstalls find their own handlers. */
 export const MANAGED_MARKER = '--agentteams-managed';
+
+/** Shell command a hook config should run: `<cli> hook <neutral-event> --tool <kind> --agentteams-managed`. */
+export function hookCommand(cli: string, event: HookEvent, tool: ToolKind): string {
+  return `${cli} hook ${event} --tool ${tool} ${MANAGED_MARKER}`;
+}
 
 export function isManagedHookCommand(cmd: unknown): boolean {
   if (typeof cmd !== 'string') return false;
@@ -31,7 +36,7 @@ export function mergeManagedHooks(config: HooksJson, cli: string, tool: ToolKind
       .filter((g) => !Array.isArray(g?.hooks) || g.hooks.length > 0);
     kept.push({
       matcher: '',
-      hooks: [{ type: 'command', command: `${cli} hook ${event} --tool ${tool} ${MANAGED_MARKER}`, timeout: HOOK_TIMEOUT_SECONDS }],
+      hooks: [{ type: 'command', command: hookCommand(cli, event, tool), timeout: HOOK_TIMEOUT_SECONDS }],
     });
     hooks[name] = kept;
   }

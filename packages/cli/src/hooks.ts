@@ -4,20 +4,16 @@ import type { CliDeps } from './deps.js';
 import type { InboxMessage } from '@agentteams/shared';
 import { fitMessages, formatMessages, formatStatus } from './format.js';
 import { HubClient } from './hubClient.js';
+import { HOOK_EVENTS, HOOK_EVENT_NAMES, type HookEvent } from './hookEvents.js';
+import { getAdapter } from './tools/registry.js';
+import type { HookOutcome } from './tools/types.js';
 
-export type HookEvent = 'session-start' | 'user-prompt-submit' | 'post-tool-use' | 'stop';
-export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'user-prompt-submit', 'post-tool-use', 'stop'];
-export const HOOK_EVENT_NAMES: Record<HookEvent, string> = {
-  'session-start': 'SessionStart',
-  'user-prompt-submit': 'UserPromptSubmit',
-  'post-tool-use': 'PostToolUse',
-  stop: 'Stop',
-};
+export { HOOK_EVENTS, HOOK_EVENT_NAMES, type HookEvent };
 
 export interface HookResult { stdout: string; exitCode: 0 }
 
 const HOOK_TIMEOUT_MS = 2000;
-const EMPTY: HookResult = { stdout: '', exitCode: 0 };
+const NONE: HookOutcome = { type: 'none' };
 
 function parseInput(text: string): Record<string, unknown> {
   try {
@@ -27,11 +23,6 @@ function parseInput(text: string): Record<string, unknown> {
     return {};
   }
 }
-
-const contextOutput = (event: HookEvent, additionalContext: string): HookResult => ({
-  stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: HOOK_EVENT_NAMES[event], additionalContext } }),
-  exitCode: 0,
-});
 
 /** Messages that fit the caps from an unread peek; null when nothing fits. */
 async function consumeFitting(client: HubClient, peeked: InboxMessage[]): Promise<{ messages: InboxMessage[]; more: number } | null> {
@@ -44,6 +35,38 @@ async function consumeFitting(client: HubClient, peeked: InboxMessage[]): Promis
 
 const isRealCommand = (m: InboxMessage): boolean => m.kind === 'command' && m.body.trim() !== '';
 
+/** Computes what the hook should say, independent of the agent's wire format. */
+async function computeOutcome(
+  event: HookEvent,
+  tool: ToolKind,
+  input: Record<string, unknown>,
+  cwd: string,
+  deps: Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec'>,
+): Promise<HookOutcome> {
+  const stopLoop = getAdapter(tool).dialect.isStopLoop(input);
+  const cred = await resolveCredentialForCwd(deps, cwd, tool);
+  if (!cred) return NONE;
+  const client = new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
+
+  if (event === 'session-start') {
+    const status = await client.status();
+    const taken = await consumeFitting(client, (await client.ping(false)).messages);
+    const text = formatStatus(status, cred.agentName) + (taken ? `\n\n${formatMessages(taken.messages, taken.more)}` : '');
+    return { type: 'context', event, text };
+  }
+  if (event === 'stop') {
+    if (stopLoop) return NONE;
+    const peeked = (await client.ping(false)).messages;
+    if (!fitMessages(peeked).some(isRealCommand)) return NONE;
+    const taken = await consumeFitting(client, peeked);
+    if (!taken?.messages.some(isRealCommand)) return NONE;
+    return { type: 'block', text: formatMessages(taken.messages, taken.more) };
+  }
+  const taken = await consumeFitting(client, (await client.ping(false)).messages);
+  if (!taken || taken.messages.length === 0) return NONE;
+  return { type: 'context', event, text: formatMessages(taken.messages, taken.more) };
+}
+
 export async function runHook(
   event: HookEvent,
   stdinText: string,
@@ -52,29 +75,10 @@ export async function runHook(
 ): Promise<HookResult> {
   try {
     const input = parseInput(stdinText);
-    const cwd = typeof input.cwd === 'string' ? input.cwd : deps.cwd;
-    const cred = await resolveCredentialForCwd(deps, cwd, tool);
-    if (!cred) return EMPTY;
-    const client = new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
-
-    if (event === 'session-start') {
-      const status = await client.status();
-      const taken = await consumeFitting(client, (await client.ping(false)).messages);
-      const text = formatStatus(status, cred.agentName) + (taken ? `\n\n${formatMessages(taken.messages, taken.more)}` : '');
-      return contextOutput(event, text);
-    }
-    if (event === 'stop') {
-      if (input.stop_hook_active === true) return EMPTY;
-      const peeked = (await client.ping(false)).messages;
-      if (!fitMessages(peeked).some(isRealCommand)) return EMPTY;
-      const taken = await consumeFitting(client, peeked);
-      if (!taken?.messages.some(isRealCommand)) return EMPTY;
-      return { stdout: JSON.stringify({ decision: 'block', reason: formatMessages(taken.messages, taken.more) }), exitCode: 0 };
-    }
-    const taken = await consumeFitting(client, (await client.ping(false)).messages);
-    if (!taken || taken.messages.length === 0) return EMPTY;
-    return contextOutput(event, formatMessages(taken.messages, taken.more));
+    const dialect = getAdapter(tool).dialect;
+    const outcome = await computeOutcome(event, tool, input, dialect.readCwd(input) ?? deps.cwd, deps);
+    return dialect.render(outcome, input);
   } catch {
-    return EMPTY;
+    return { stdout: '', exitCode: 0 };
   }
 }

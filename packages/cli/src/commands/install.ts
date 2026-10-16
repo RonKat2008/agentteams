@@ -2,18 +2,15 @@ import type { ToolKind } from '@agentteams/shared';
 import { realpath } from 'node:fs/promises';
 import { loadCredentials, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { installClaude, type InstallReport } from '../install/claude.js';
-import { installCodex } from '../install/codex.js';
+import { getAdapter } from '../tools/registry.js';
+import type { InstallReport } from '../tools/types.js';
 import { installGitHooks } from '../install/gitHooks.js';
 import { mainRepoRoot } from '../git.js';
 import { repoRoot } from '../repo.js';
 import { noCredentialsMessage } from './shared.js';
 
 export async function runInstallers(deps: CliDeps, cred: Credential): Promise<InstallReport> {
-  const report: InstallReport =
-    cred.tool === 'claude' ? await installClaude(deps, cred)
-    : cred.tool === 'codex' ? await installCodex(deps, cred)
-    : { tool: cred.tool, done: [], warnings: [`no installer for tool "${cred.tool}"`] };
+  const report: InstallReport = await getAdapter(cred.tool).install(deps, cred);
   const git = await installGitHooks(deps, cred.repoPath).catch((e: unknown) => ({
     status: 'skipped' as const, detail: e instanceof Error ? e.message : String(e),
   }));

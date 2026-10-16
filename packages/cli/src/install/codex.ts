@@ -1,11 +1,11 @@
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { writeInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand, codexHome } from '../paths.js';
-import type { InstallReport } from './claude.js';
+import { readTextIfExists, upsertJsonConfig, writeWithBackup } from '../tools/jsonConfig.js';
+import type { InstallReport } from '../tools/types.js';
 import { mergeManagedHooks, type HooksJson } from './hooksConfig.js';
 
 export const TOML_START = '# >>> agentteams (managed) >>>';
@@ -74,19 +74,7 @@ export function upsertCodexConfig(existing: string, block: string): string {
   return `${existing.replace(/\n*$/, '\n')}\n${block}`;
 }
 
-async function readText(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw e;
-  }
-}
-
-async function writeWithBackup(path: string, old: string | null, next: string): Promise<void> {
-  if (old !== null && !existsSync(`${path}.bak`)) await writeFile(`${path}.bak`, old);
-  await writeFile(path, next);
-}
+const readText = readTextIfExists;
 
 async function installMcp(home: string, argv: { command: string; args: string[] }, report: InstallReport): Promise<void> {
   const path = join(home, 'config.toml');
@@ -103,21 +91,11 @@ async function installMcp(home: string, argv: { command: string; args: string[] 
 }
 
 async function installHooks(home: string, cli: string, report: InstallReport): Promise<void> {
-  const path = join(home, 'hooks.json');
-  const text = await readText(path);
-  let config: HooksJson = {};
-  if (text !== null && text.trim() !== '') {
-    try {
-      const parsed: unknown = JSON.parse(text);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('not an object');
-      config = parsed as HooksJson;
-    } catch {
-      report.warnings.push('~/.codex/hooks.json is not valid JSON; hooks not installed');
-      return;
-    }
+  const status = await upsertJsonConfig(join(home, 'hooks.json'), (c) => mergeManagedHooks(c as HooksJson, cli, 'codex'));
+  if (status === 'invalid') {
+    report.warnings.push('~/.codex/hooks.json is not valid JSON; hooks not installed');
+    return;
   }
-  const next = `${JSON.stringify(mergeManagedHooks(config, cli, 'codex'), null, 2)}\n`;
-  if (next !== text) await writeWithBackup(path, text, next);
   report.done.push('installed hooks in ~/.codex/hooks.json');
   report.done.push('approve the agentteams hooks once in Codex with /hooks (Codex requires this for new hooks)');
 }

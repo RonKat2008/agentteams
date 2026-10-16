@@ -4,7 +4,7 @@ import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import type { HubClient } from '../hubClient.js';
 import { gitTopLevel, mainRepoRoot } from '../git.js';
-import { installClaudeForWorktree } from '../install/claude.js';
+import { getAdapter } from '../tools/registry.js';
 import { installGitHooks } from '../install/gitHooks.js';
 import { clientFor, refExists, requireCredential, teamDefaultBranch } from './shared.js';
 
@@ -73,8 +73,9 @@ export async function worktreeCommand(deps: CliDeps, task: number, opts: Worktre
     if (res.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr.trim() || `exit ${res.code}`}`);
   }
 
-  if (cred.tool === 'claude') {
-    const report = await installClaudeForWorktree(deps, cred, path);
+  const adapter = getAdapter(cred.tool);
+  if (adapter.installForWorktree) {
+    const report = await adapter.installForWorktree(deps, cred, path);
     for (const w of report.warnings) deps.err(`agentteams: warning: ${w}`);
   }
 

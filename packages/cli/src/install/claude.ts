@@ -1,14 +1,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ToolKind } from '@agentteams/shared';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { gitPath } from '../git.js';
 import { writeInstructionFile } from '../instructions.js';
 import { cliCommand } from '../paths.js';
+import { addToGitExclude } from '../tools/gitExclude.js';
+import type { InstallReport } from '../tools/types.js';
 import { mergeManagedHooks, type HooksJson } from './hooksConfig.js';
 
-export interface InstallReport { tool: ToolKind; done: string[]; warnings: string[] }
+export type { InstallReport };
 
 const EXCLUDE_LINE = '.claude/settings.local.json';
 
@@ -62,20 +62,8 @@ async function installHooks(repo: string, cli: string, report: InstallReport): P
 }
 
 async function gitExclude(deps: Pick<CliDeps, 'exec'>, repo: string, report: InstallReport): Promise<void> {
-  let path: string;
-  try {
-    path = await gitPath(deps, repo, 'info/exclude');
-  } catch {
-    return; // not a git repo
-  }
-  try {
-    const existing = (await readText(path)) ?? '';
-    if (existing.split('\n').some((l) => l.trim() === EXCLUDE_LINE)) return;
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`}${EXCLUDE_LINE}\n`);
-  } catch (err) {
-    report.warnings.push(`could not update git exclude: ${(err as Error).message}`);
-  }
+  const warning = await addToGitExclude(deps, repo, EXCLUDE_LINE);
+  if (warning) report.warnings.push(warning);
 }
 
 export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli?: string } = {}): Promise<InstallReport> {
