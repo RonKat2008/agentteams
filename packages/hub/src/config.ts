@@ -64,6 +64,11 @@ function parseIpSource(env: NodeJS.ProcessEnv, mode: 'local' | 'hosted'): IpSour
   if (!HEADER_NAME.test(header)) {
     throw new Error(`AGENTTEAMS_TRUSTED_IP_HEADER must be a lowercase header name (got "${header}")`);
   }
+  if (header === 'x-forwarded-for' && env.AGENTTEAMS_TRUSTED_PROXY_APPENDS !== '1') {
+    throw new Error(
+      'AGENTTEAMS_TRUSTED_IP_HEADER=x-forwarded-for needs AGENTTEAMS_TRUSTED_PROXY_APPENDS=1 (the hub uses the last entry); prefer a header your proxy overwrites, such as x-real-ip',
+    );
+  }
   return { header };
 }
 

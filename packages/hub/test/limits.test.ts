@@ -36,8 +36,8 @@ describe('clientIp', () => {
     expect(await ipFor('hosted', { 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' }, 'fly')).toBe('1.1.1.1');
     expect(await ipFor('hosted', { 'x-forwarded-for': '2.2.2.2', 'x-vercel-forwarded-for': '4.4.4.4' }, 'fly')).toBe('unknown');
   });
-  it('a configured header source uses that header first comma entry', async () => {
-    expect(await ipFor('hosted', { 'x-client': '3.3.3.3, 9.9.9.9', 'x-forwarded-for': '2.2.2.2' }, { header: 'x-client' })).toBe('3.3.3.3');
+  it('a configured header source uses the LAST comma entry (appending proxies add the real client last)', async () => {
+    expect(await ipFor('hosted', { 'x-client': '9.9.9.9, 3.3.3.3', 'x-forwarded-for': '2.2.2.2' }, { header: 'x-client' })).toBe('3.3.3.3');
   });
   it('socket source (the hosted default) ignores every forwarding header, so spoofing makes no new bucket', async () => {
     const spoof = { 'x-vercel-forwarded-for': '4.4.4.4', 'x-real-ip': '6.6.6.6', 'fly-client-ip': '1.1.1.1', 'x-forwarded-for': '2.2.2.2' };

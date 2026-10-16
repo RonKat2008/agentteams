@@ -66,6 +66,9 @@ export type IpSource = 'socket' | 'vercel' | 'fly' | { header: string };
 
 const firstEntry = (value: string | undefined): string | undefined => value?.split(',')[0]?.trim() || undefined;
 
+/** Appending proxies add the real client address last, so a custom header uses its last entry. */
+const lastEntry = (value: string | undefined): string | undefined => value?.split(',').at(-1)?.trim() || undefined;
+
 /**
  * Client address for rate limiting. Forwarding headers are trusted only in hosted mode and only the
  * ones the configured platform overwrites; every other header is attacker-controlled and ignored.
@@ -79,7 +82,7 @@ export function clientIp(c: Context, mode: 'local' | 'hosted', source: IpSource 
     const forwarded =
       source === 'vercel' ? header('x-vercel-forwarded-for') ?? header('x-real-ip')
       : source === 'fly' ? header('fly-client-ip')
-      : header(source.header);
+      : lastEntry(c.req.header(source.header));
     if (forwarded) return normalizeIp(forwarded);
   }
   return fallbackIp(c);

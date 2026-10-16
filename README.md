@@ -168,7 +168,9 @@ Security notes:
   best-effort (a burst spread over several instances is not counted together). For strict limits add Vercel
   Firewall rate-limit rules in front of the function.
 - Client IP trust: on Vercel the hub uses Vercel's own headers, on Fly it uses `fly-client-ip`, and behind any
-  other proxy you must set `AGENTTEAMS_TRUSTED_IP_HEADER`; otherwise the socket address is used. IPv6 clients
+  other proxy you must set `AGENTTEAMS_TRUSTED_IP_HEADER` to a header your proxy overwrites (for example
+  `x-real-ip`), and the hub uses the last comma-separated entry; `x-forwarded-for` is refused unless
+  `AGENTTEAMS_TRUSTED_PROXY_APPENDS=1` is also set. Otherwise the socket address is used. IPv6 clients
   are bucketed by /64. `/health` is exempt from the Host allowlist.
 - Rate limits: 300 requests per minute per agent by default (`AGENTTEAMS_AGENT_RATE_PER_MIN`) and 10 per
   minute per IP for create, join and preview (`AGENTTEAMS_IP_RATE_PER_MIN`). On Vercel they are best-effort

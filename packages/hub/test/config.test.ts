@@ -67,6 +67,11 @@ describe('trusted client-IP source', () => {
   it('AGENTTEAMS_TRUSTED_IP_HEADER selects that header', () => {
     expect(loadHubConfig({ ...hosted, AGENTTEAMS_TRUSTED_IP_HEADER: 'cf-connecting-ip' }, '/h').ipSource).toEqual({ header: 'cf-connecting-ip' });
   });
+  it('refuses x-forwarded-for unless AGENTTEAMS_TRUSTED_PROXY_APPENDS=1', () => {
+    const msg = 'AGENTTEAMS_TRUSTED_IP_HEADER=x-forwarded-for needs AGENTTEAMS_TRUSTED_PROXY_APPENDS=1 (the hub uses the last entry); prefer a header your proxy overwrites, such as x-real-ip';
+    expect(() => loadHubConfig({ ...hosted, AGENTTEAMS_TRUSTED_IP_HEADER: 'x-forwarded-for' }, '/h')).toThrow(msg);
+    expect(loadHubConfig({ ...hosted, AGENTTEAMS_TRUSTED_IP_HEADER: 'x-forwarded-for', AGENTTEAMS_TRUSTED_PROXY_APPENDS: '1' }, '/h').ipSource).toEqual({ header: 'x-forwarded-for' });
+  });
   it('rejects a malformed header name', () => {
     expect(() => loadHubConfig({ ...hosted, AGENTTEAMS_TRUSTED_IP_HEADER: 'X IP' }, '/h')).toThrow(/AGENTTEAMS_TRUSTED_IP_HEADER/);
   });
