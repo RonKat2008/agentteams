@@ -31,7 +31,7 @@ function parseLimit(v: string): number {
   return n;
 }
 
-const agentOpt = (def?: string) => new Option('--agent <tool>', 'claude | codex | other').choices(TOOLS).default(def);
+const agentOpt = (def?: string) => new Option('--agent <tool>', TOOLS.join(' | ')).choices(TOOLS).default(def);
 
 function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   const program = new Command('agentteams')
@@ -117,7 +117,8 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   sub('mcp').description('(internal) stdio MCP proxy')
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
-    .action(async (o: { tool: ToolKind }) => (await import('./mcpProxy.js')).runMcpProxy(deps, o.tool));
+    .option('--repo <path>', 'resolve team credentials for this repo instead of the current directory')
+    .action(async (o: { tool: ToolKind; repo?: string }) => (await import('./mcpProxy.js')).runMcpProxy(deps, o.tool, { repo: o.repo }));
   return program;
 }
 

@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolKind } from '@agentteams/shared';
@@ -151,9 +152,11 @@ export async function createProxyServer(opts: ProxyOptions) {
   return server;
 }
 
-export async function runMcpProxy(deps: CliDeps, tool: ToolKind): Promise<void> {
-  const cred = await resolveCredentialForCwd(deps, deps.cwd, tool);
-  if (!cred) deps.err(`agentteams: no team credentials for ${deps.cwd}`);
+/** `repo` overrides the cwd used to find credentials (for configs whose process does not start in the repo). */
+export async function runMcpProxy(deps: CliDeps, tool: ToolKind, opts: { repo?: string } = {}): Promise<void> {
+  const cwd = opts.repo ? resolve(deps.cwd, opts.repo) : deps.cwd;
+  const cred = await resolveCredentialForCwd(deps, cwd, tool);
+  if (!cred) deps.err(`agentteams: no team credentials for ${cwd}`);
   const server = await createProxyServer({
     connect: cred ? () => connectUpstream(cred.hubUrl, cred.apiKey) : null,
     hubUrl: cred?.hubUrl,
