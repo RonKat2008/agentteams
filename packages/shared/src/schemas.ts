@@ -8,7 +8,7 @@ const SINGLE_LINE_MESSAGE = 'must not contain control characters or line breaks'
 /** Names end up in injected agent context and committed files, so also keep markup out. */
 const noMarkup = (s: string): boolean => !/[<>]/.test(s);
 
-export const ToolKind = z.enum(['claude', 'codex', 'other']);
+export const ToolKind = z.enum(['claude', 'codex', 'cursor', 'gemini', 'copilot', 'droid', 'opencode', 'windsurf', 'cline', 'roo', 'other']);
 export type ToolKind = z.infer<typeof ToolKind>;
 
 export const MessageKind = z.enum(['command', 'question', 'fyi']);
