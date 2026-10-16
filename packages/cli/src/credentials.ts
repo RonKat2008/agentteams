@@ -5,6 +5,21 @@ import type { CliDeps } from './deps.js';
 import { mainRepoRoot } from './git.js';
 import { credentialsPath } from './paths.js';
 
+/**
+ * Git-transport identity, stored inside the credential (credentials.json is 0600 in a 0700 directory).
+ * `teamKey` encrypts the team log; `privateKey` signs this agent's segments. Both are secrets.
+ */
+export interface GitCredential {
+  teamId: string;
+  /** This agent's id: the ULID of its own bootstrap (createTeam/join) op. */
+  agentId: string;
+  /** The team's git remote (URL or path) that carries refs/agentteams/<teamId>/*. */
+  remote: string;
+  teamKey: string;
+  publicKey: string;
+  privateKey: string;
+}
+
 export interface Credential {
   repoPath: string;
   tool: ToolKind;
@@ -15,6 +30,8 @@ export interface Credential {
   createdAt: string;
   /** Absent means http. Only persisted when not http. */
   transport?: 'http' | 'local' | 'git';
+  /** Required when transport is 'git'. */
+  git?: GitCredential;
 }
 
 interface CredentialsFile { version: 1; credentials: Credential[] }

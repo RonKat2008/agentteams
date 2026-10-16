@@ -28,7 +28,18 @@ async function toResult(run: () => Promise<unknown>): Promise<CallToolResult> {
   }
 }
 
-export function buildMcpServer(ctx: HubContext, actor: Actor): McpServer {
+/** The service functions behind the tools. Transports may replace some (the git transport routes writes through its op log). */
+const defaultServices = () => ({
+  getTeamStatus, sendMessage, readInbox, createTask, assignTask, listTasks, claimTask, updateTask, completeTask, markMerged,
+  claimFiles, releaseFiles, whoOwns, getActivity, getChanges,
+});
+export type McpServices = ReturnType<typeof defaultServices>;
+
+export function buildMcpServer(ctx: HubContext, actor: Actor, overrides: Partial<McpServices> = {}): McpServer {
+  const {
+    getTeamStatus, sendMessage, readInbox, createTask, assignTask, listTasks, claimTask, updateTask, completeTask, markMerged,
+    claimFiles, releaseFiles, whoOwns, getActivity, getChanges,
+  } = { ...defaultServices(), ...overrides };
   const server = new McpServer({ name: 'agentteams', version: '0.1.0' });
 
   const tool = (name: string, description: string, shape: z.ZodRawShape | null, run: (args: Args) => Promise<unknown>) => {

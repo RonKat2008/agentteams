@@ -14,13 +14,24 @@ const STATUS: Record<string, number> = {
 const isBusy = (e: unknown): boolean => /^SQLITE_BUSY|database is locked/.test(`${(e as { code?: string })?.code ?? ''} ${(e as Error)?.message ?? ''}`);
 
 /** Same rule as the HTTP route: a positive safe integer. */
-function taskNumber(n: number): number {
+export function taskNumber(n: number): number {
   if (!Number.isSafeInteger(n) || n < 1) throw new HubError('invalid', 'task number must be a positive integer', 400);
   return n;
 }
 
 /** HTTP responses are JSON; round-trip so callers see exactly the shapes HubClient returns. */
-const wire = <T>(v: unknown): T => JSON.parse(JSON.stringify(v ?? null)) as T;
+export const wire = <T>(v: unknown): T => JSON.parse(JSON.stringify(v ?? null)) as T;
+
+/** Maps a service error to the HubError an HTTP client would see (DomainError code, busy -> conflict, else internal). */
+export function toHubError(core: TeamStore['core'], err: unknown): HubError {
+  if (err instanceof HubError) return err;
+  if (err instanceof core.DomainError) return new HubError(err.code, err.message, STATUS[err.code] ?? 500);
+  if (isBusy(err)) return new HubError('conflict', 'the team database is busy (another agent is writing); retry in a moment', 409);
+  return new HubError('internal', 'internal error', 500);
+}
+
+/** HTTP-like status for a hub error code. */
+export const statusOf = (code: string): number => STATUS[code] ?? 500;
 
 /** TeamClient backed by the repo's SQLite database in-process: no server, no network. */
 export class LocalTeamClient implements TeamClient {
@@ -32,9 +43,7 @@ export class LocalTeamClient implements TeamClient {
       const actor = await store.core.authenticate(store.ctx, this.cred.apiKey);
       return wire<T>(await fn(store, actor));
     } catch (err) {
-      if (err instanceof store.core.DomainError) throw new HubError(err.code, err.message, STATUS[err.code] ?? 500);
-      if (isBusy(err)) throw new HubError('conflict', 'the team database is busy (another agent is writing); retry in a moment', 409);
-      throw new HubError('internal', 'internal error', 500);
+      throw toHubError(store.core, err);
     }
   }
 

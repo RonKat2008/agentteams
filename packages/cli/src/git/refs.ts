@@ -1,4 +1,5 @@
 import type { CliDeps } from '../deps.js';
+import { MAX_SEGMENT_BYTES } from './segment.js';
 
 /**
  * Git plumbing for the serverless op log. Everything here talks to hidden refs only:
@@ -208,21 +209,42 @@ async function agentRef(deps: GitDeps, repo: string, teamId: string, agentId: st
   return (await resolveRef(deps, repo, fetched)) ? fetched : null;
 }
 
-/** Segments with `seq >= fromSeq`, in ascending seq order. */
+/** Segments with `seq >= fromSeq`, in ascending seq order. Throws if a segment blob exceeds MAX_SEGMENT_BYTES. */
 export async function readSegments(deps: GitDeps, repo: string, teamId: string, agentId: string, fromSeq: number): Promise<Segment[]> {
   assertId('team', teamId); assertId('agent', agentId);
   const ref = await agentRef(deps, repo, teamId, agentId);
   if (!ref) return [];
+  const out: Segment[] = [];
+  for (const s of await readSegmentsAt(deps, repo, ref, fromSeq)) {
+    if (s.data === null) throw new Error(`segment ${s.seq} is ${s.size} bytes (limit ${MAX_SEGMENT_BYTES})`);
+    out.push({ seq: s.seq, data: s.data });
+  }
+  return out;
+}
+
+/** A segment read from an explicit commit; `data` is null (never read) when the blob is over the size limit. */
+export interface CheckedSegment { seq: number; size: number; data: Buffer | null }
+
+/**
+ * Segments with `seq >= fromSeq` in the log tree of `commitish`, ascending. Sizes are checked with
+ * `cat-file --batch-check` before any blob is read, so an oversized blob never enters memory.
+ */
+export async function readSegmentsAt(deps: GitDeps, repo: string, commitish: string, fromSeq: number): Promise<CheckedSegment[]> {
   const wanted: { seq: number; sha: string }[] = [];
-  for (const e of await lsTree(deps, repo, `${ref}:${OPS_DIR}`)) {
+  for (const e of await lsTree(deps, repo, `${commitish}:${OPS_DIR}`)) {
     const m = /^(\d{8})\.bin$/.exec(e.name);
-    if (m && Number(m[1]) >= fromSeq) wanted.push({ seq: Number(m[1]), sha: e.sha });
+    if (m && e.type === 'blob' && Number(m[1]) >= fromSeq) wanted.push({ seq: Number(m[1]), sha: e.sha });
   }
   wanted.sort((x, y) => x.seq - y.seq);
   if (wanted.length === 0) return [];
-  const r = await gitOk(deps, repo, ['cat-file', '--batch'], { input: `${wanted.map((w) => w.sha).join('\n')}\n`, binary: true });
-  const blobs = parseBatch(r.stdoutBuf ?? Buffer.alloc(0), wanted.length);
-  return wanted.map((w, i) => ({ seq: w.seq, data: blobs[i]! }));
+  const sizes = await blobSizes(deps, repo, wanted.map((w) => w.sha));
+  const small = wanted.filter((_, i) => sizes[i]! <= MAX_SEGMENT_BYTES);
+  const blobs = small.length === 0 ? [] : parseBatch(
+    (await gitOk(deps, repo, ['cat-file', '--batch'], { input: `${small.map((w) => w.sha).join('\n')}\n`, binary: true })).stdoutBuf ?? Buffer.alloc(0),
+    small.length,
+  );
+  const bySha = new Map(small.map((w, i) => [w.sha, blobs[i]!]));
+  return wanted.map((w, i) => ({ seq: w.seq, size: sizes[i]!, data: sizes[i]! <= MAX_SEGMENT_BYTES ? bySha.get(w.sha)! : null }));
 }
 
 /** Parse `cat-file --batch` output: `<sha> <type> <size>\n<bytes>\n` per object. */
@@ -241,8 +263,108 @@ function parseBatch(buf: Buffer, count: number): Buffer[] {
   return out;
 }
 
+/** Blob sizes via `cat-file --batch-check` (one process for all). Missing or non-blob objects throw. */
+async function blobSizes(deps: GitDeps, repo: string, shas: string[]): Promise<number[]> {
+  const r = await gitOk(deps, repo, ['cat-file', '--batch-check'], { input: `${shas.join('\n')}\n` });
+  const lines = r.stdout.split('\n').filter(Boolean);
+  if (lines.length !== shas.length) throw new Error('git cat-file --batch-check: unexpected output');
+  return lines.map((line) => {
+    const [, type, size] = line.split(' ');
+    if (type !== 'blob' || !/^\d+$/.test(size ?? '')) throw new Error(`git cat-file --batch-check: unexpected "${line}"`);
+    return Number(size);
+  });
+}
+
 export async function readPresence(deps: GitDeps, repo: string, teamId: string, agentId: string): Promise<Buffer | null> {
   assertId('team', teamId); assertId('agent', agentId);
   const ref = await agentRef(deps, repo, teamId, agentId);
-  return ref ? readFileAt(deps, repo, ref, PRESENCE_FILE) : null;
+  return ref ? readPresenceAt(deps, repo, ref) : null;
+}
+
+/** Largest presence blob that is read; anything bigger is ignored (presence is a few hundred bytes). */
+export const MAX_PRESENCE_BYTES = 64 * 1024;
+
+/** presence.bin of an explicit commit; null when absent or over MAX_PRESENCE_BYTES (checked before reading). */
+export async function readPresenceAt(deps: GitDeps, repo: string, commitish: string): Promise<Buffer | null> {
+  const size = await git(deps, repo, ['cat-file', '-s', `${commitish}:${PRESENCE_FILE}`]);
+  if (size.code !== 0 || Number(size.stdout.trim()) > MAX_PRESENCE_BYTES) return null;
+  return readFileAt(deps, repo, commitish, PRESENCE_FILE);
+}
+
+// ---- Explicit heads (used by the sync engine) ------------------------------------------------------
+
+/** Commit of this agent's own local log, or null. */
+export function localAgentHead(deps: GitDeps, repo: string, teamId: string, agentId: string): Promise<string | null> {
+  assertId('team', teamId); assertId('agent', agentId);
+  return resolveRef(deps, repo, localAgent(teamId, agentId));
+}
+
+/** Commit of the last fetched copy of an agent's log, or null. */
+export function fetchedAgentHead(deps: GitDeps, repo: string, teamId: string, agentId: string): Promise<string | null> {
+  assertId('team', teamId); assertId('agent', agentId);
+  return resolveRef(deps, repo, fetchedAgent(teamId, agentId));
+}
+
+/** Agents with a fetched ref (not our own local logs), sorted. */
+export function listFetchedAgents(deps: GitDeps, repo: string, teamId: string): Promise<string[]> {
+  assertId('team', teamId);
+  return refNames(deps, repo, `refs/agentteams-remote/${teamId}/agents/`).then((ids) => ids.sort());
+}
+
+/** True when `ancestor` is an ancestor of (or equal to) `descendant`. Throws when git cannot tell. */
+export async function isAncestor(deps: GitDeps, repo: string, ancestor: string, descendant: string): Promise<boolean> {
+  const r = await git(deps, repo, ['merge-base', '--is-ancestor', ancestor, descendant]);
+  if (r.code === 0) return true;
+  if (r.code === 1) return false;
+  throw new Error(`git merge-base failed: ${r.stderr.trim()}`);
+}
+
+const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+async function setRef(deps: GitDeps, repo: string, ref: string, sha: string): Promise<void> {
+  if (!SHA_RE.test(sha)) throw new Error(`invalid commit: ${JSON.stringify(sha)}`);
+  await gitOk(deps, repo, ['update-ref', ref, sha]);
+}
+
+/** Points our local log at `sha` (re-seeding it from the fetched copy, e.g. in a fresh clone). */
+export function setLocalAgentHead(deps: GitDeps, repo: string, teamId: string, agentId: string, sha: string): Promise<void> {
+  assertId('team', teamId); assertId('agent', agentId);
+  return setRef(deps, repo, localAgent(teamId, agentId), sha);
+}
+
+/** Records that the remote now has `sha` for our ref (after a successful push), so the next round can skip pushing. */
+export function setFetchedAgentHead(deps: GitDeps, repo: string, teamId: string, agentId: string, sha: string): Promise<void> {
+  assertId('team', teamId); assertId('agent', agentId);
+  return setRef(deps, repo, fetchedAgent(teamId, agentId), sha);
+}
+
+/**
+ * Keeps the last accepted commit of an agent's log reachable (`refs/agentteams-seen/...`): fetches force-update the
+ * fetched refs, so a rejected rewrite must not let the accepted chain be garbage-collected.
+ */
+export function setSeenAgentHead(deps: GitDeps, repo: string, teamId: string, agentId: string, sha: string): Promise<void> {
+  assertId('team', teamId); assertId('agent', agentId);
+  return setRef(deps, repo, `refs/agentteams-seen/${teamId}/agents/${agentId}`, sha);
+}
+
+/** Sequence numbers present in a log tree, ascending (no blob reads). */
+export async function segmentSeqsAt(deps: GitDeps, repo: string, commitish: string): Promise<number[]> {
+  const seqs: number[] = [];
+  for (const e of await lsTree(deps, repo, `${commitish}:${OPS_DIR}`)) {
+    const m = /^(\d{8})\.bin$/.exec(e.name);
+    if (m) seqs.push(Number(m[1]));
+  }
+  return seqs.sort((a, b) => a - b);
+}
+
+/** True when the fetched meta ref exists (the team has been published). */
+export async function hasFetchedMeta(deps: GitDeps, repo: string, teamId: string): Promise<boolean> {
+  assertId('team', teamId);
+  return (await resolveRef(deps, repo, fetchedMeta(teamId))) !== null;
+}
+
+/** True when this clone wrote the team's meta locally (it is the creator). */
+export async function hasLocalMeta(deps: GitDeps, repo: string, teamId: string): Promise<boolean> {
+  assertId('team', teamId);
+  return (await resolveRef(deps, repo, localMeta(teamId))) !== null;
 }
