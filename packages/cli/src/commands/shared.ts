@@ -1,9 +1,9 @@
 import type { ToolKind } from '@agentteams/shared';
 import { loadCredentials, resolveCredentialForCwd, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { HubClient } from '../hubClient.js';
 import { defaultBranch } from '../git.js';
 import { repoRoot } from '../repo.js';
+import { teamClientFor, type TeamClient } from '../teamClient.js';
 
 export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promise<Credential> {
   const cred = await resolveCredentialForCwd(deps, deps.cwd, agent);
@@ -21,8 +21,7 @@ export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promis
 export const noCredentialsMessage = (repo: string): string =>
   `no agentteams credentials for ${repo}; run "agentteams create" or "agentteams join" first`;
 
-export const clientFor = (deps: CliDeps, cred: Credential): HubClient =>
-  new HubClient(cred.hubUrl, { apiKey: cred.apiKey, fetch: deps.fetch });
+export const clientFor = (deps: CliDeps, cred: Credential): TeamClient => teamClientFor(deps, cred);
 
 export const dateOnly = (iso: string): string => iso.slice(0, 10);
 
@@ -40,7 +39,7 @@ export async function assertSafeBranch(deps: CliDeps, cwd: string, name: string,
 
 /** The team's default branch: the hub's recorded one when it exists in this clone, otherwise detected from git. */
 export async function teamDefaultBranch(
-  deps: CliDeps, client: HubClient, cwd: string,
+  deps: CliDeps, client: TeamClient, cwd: string,
 ): Promise<{ branch: string; provider: string }> {
   const { team } = await client.status();
   const recorded = team.repo.defaultBranch;

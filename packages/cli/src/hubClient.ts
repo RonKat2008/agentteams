@@ -3,6 +3,8 @@ import type {
   TeamStatus,
 } from '@agentteams/shared';
 
+import type { TeamClient } from './teamClient.js';
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export class HubError extends Error {
@@ -29,7 +31,7 @@ function isRedirectError(e: unknown): boolean {
   return /redirect/i.test(`${(e as Error | undefined)?.message ?? ''} ${typeof cause?.message === 'string' ? cause.message : ''}`);
 }
 
-export class HubClient {
+export class HubClient implements TeamClient {
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
 

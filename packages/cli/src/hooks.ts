@@ -3,8 +3,8 @@ import { resolveCredentialForCwd } from './credentials.js';
 import type { CliDeps } from './deps.js';
 import type { InboxMessage } from '@agentteams/shared';
 import { fitMessages, formatMessages, formatStatus } from './format.js';
-import { HubClient } from './hubClient.js';
 import { HOOK_EVENTS, HOOK_EVENT_NAMES, type HookEvent } from './hookEvents.js';
+import { teamClientFor, type TeamClient } from './teamClient.js';
 import { getAdapter } from './tools/registry.js';
 import type { HookOutcome } from './tools/types.js';
 
@@ -25,7 +25,7 @@ function parseInput(text: string): Record<string, unknown> {
 }
 
 /** Messages that fit the caps from an unread peek; null when nothing fits. */
-async function consumeFitting(client: HubClient, peeked: InboxMessage[]): Promise<{ messages: InboxMessage[]; more: number } | null> {
+async function consumeFitting(client: TeamClient, peeked: InboxMessage[]): Promise<{ messages: InboxMessage[]; more: number } | null> {
   const fit = fitMessages(peeked);
   if (fit.length === 0) return null;
   // Mark read only the messages that are actually injected; the rest stay unread.
@@ -46,7 +46,7 @@ async function computeOutcome(
   const stopLoop = getAdapter(tool).dialect.isStopLoop(input);
   const cred = await resolveCredentialForCwd(deps, cwd, tool);
   if (!cred) return NONE;
-  const client = new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
+  const client = teamClientFor(deps, cred, { timeoutMs: HOOK_TIMEOUT_MS });
   const delivers = getAdapter(tool).dialect.contextEvents;
   if (event !== 'stop' && delivers && !delivers.has(event)) {
     // The agent would discard our output: heartbeat only, never consume.

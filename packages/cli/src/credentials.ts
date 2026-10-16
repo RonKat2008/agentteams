@@ -13,6 +13,8 @@ export interface Credential {
   agentName: string;
   apiKey: string;
   createdAt: string;
+  /** Absent means http. Only persisted when not http. */
+  transport?: 'http' | 'local' | 'git';
 }
 
 interface CredentialsFile { version: 1; credentials: Credential[] }
@@ -39,7 +41,8 @@ const sameSlot = (a: Credential, b: Credential) => a.repoPath === b.repoPath && 
 const real = (p: string): Promise<string> => realpath(p).catch(() => p);
 
 export async function saveCredential(deps: Deps, input: Credential): Promise<void> {
-  const cred = { ...input, repoPath: await real(input.repoPath) };
+  const { transport, ...rest } = input;
+  const cred: Credential = { ...rest, repoPath: await real(input.repoPath), ...(transport && transport !== 'http' ? { transport } : {}) };
   const file = credentialsPath(deps);
   const dir = dirname(file);
   await mkdir(dir, { recursive: true, mode: 0o700 });

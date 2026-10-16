@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
-import type { HubClient } from '../hubClient.js';
+import type { TeamClient } from '../teamClient.js';
 import { gitTopLevel, mainRepoRoot } from '../git.js';
 import { getAdapter } from '../tools/registry.js';
 import { installGitHooks } from '../install/gitHooks.js';
@@ -22,7 +22,7 @@ async function isWorktreeOn(deps: CliDeps, path: string, branch: string): Promis
   return cur.code === 0 && cur.stdout.trim() === branch;
 }
 
-async function pickBase(deps: CliDeps, client: HubClient, root: string, base: string | undefined): Promise<string> {
+async function pickBase(deps: CliDeps, client: TeamClient, root: string, base: string | undefined): Promise<string> {
   if (base) return base;
   const { branch: d, provider } = await teamDefaultBranch(deps, client, root);
   if (provider !== 'github') return d;

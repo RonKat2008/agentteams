@@ -1,4 +1,4 @@
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadCredentials, resolveCredential, saveCredential, type Credential } from '../src/credentials.js';
@@ -15,6 +15,15 @@ const cred = (over: Partial<Credential> = {}): Credential => ({
 });
 
 describe('credentials store', () => {
+  it('persists transport only when it is not http', async () => {
+    await saveCredential(t.deps, cred());
+    await saveCredential(t.deps, cred({ tool: 'codex', transport: 'http' }));
+    await saveCredential(t.deps, cred({ tool: 'gemini', transport: 'git' }));
+    const raw = JSON.parse(readFileSync(credentialsPath(t.deps), 'utf8')) as { credentials: Record<string, unknown>[] };
+    expect(raw.credentials.map((c) => 'transport' in c)).toEqual([false, false, true]);
+    expect(raw.credentials[2]?.transport).toBe('git');
+  });
+
   it('returns [] when nothing is stored', async () => {
     expect(await loadCredentials(t.deps)).toEqual([]);
   });

@@ -4,7 +4,7 @@ import type { CliDeps } from './deps.js';
 import { PRE_COMMIT_BLOCKED } from './exitCodes.js';
 import { oneLine } from './format.js';
 import { currentBranch, headCommit, stagedFiles } from './git.js';
-import { HubClient } from './hubClient.js';
+import { teamClientFor, type TeamClient } from './teamClient.js';
 import { orderedToolKinds } from './tools/registry.js';
 
 export type { GitHookName } from './install/gitHooks.js';
@@ -32,13 +32,12 @@ async function pickCredential(deps: Deps): Promise<Credential | null> {
   return (agent !== undefined ? found.find((c) => c.agentName === agent) : undefined) ?? found[0] ?? null;
 }
 
-const clientFor = (deps: Deps, cred: Credential): HubClient =>
-  new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
+const clientFor = (deps: Deps, cred: Credential): TeamClient => teamClientFor(deps, cred, { timeoutMs: HOOK_TIMEOUT_MS });
 
 /** Paths the hub would reject (too long, control chars, absolute, `..`) must not sink the whole check. */
 const checkable = (paths: string[]): string[] => paths.filter((p) => RepoPath.safeParse(p).success);
 
-async function checkInBatches(client: HubClient, paths: string[]): Promise<CheckFilesResult['conflicts']> {
+async function checkInBatches(client: TeamClient, paths: string[]): Promise<CheckFilesResult['conflicts']> {
   const conflicts: CheckFilesResult['conflicts'] = [];
   for (let i = 0; i < paths.length; i += CHECK_BATCH_SIZE) {
     conflicts.push(...(await client.checkFiles(paths.slice(i, i + CHECK_BATCH_SIZE))).conflicts);
