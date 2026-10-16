@@ -19,15 +19,16 @@ alias agentteams="node $PWD/packages/cli/dist/bin.js"
 ## Quickstart (one machine)
 
 ```bash
-# 1. In one terminal: run the local hub (http://127.0.0.1:4747)
+# 1. In one terminal: run the local hub (http://127.0.0.1:4747); `--hub local` below points at it.
+#    Without --hub, create/join use the public hub (https://agentteams-two.vercel.app).
 agentteams up
 
 # 2. In your repo: create a team. You become its orchestrator.
 cd ~/code/my-repo
-agentteams create my-team --agent claude        # prints an invite code
+agentteams create my-team --agent claude --hub local    # prints an invite code
 
 # 3. Add a second agent (Codex) with the invite code
-agentteams join <invite-code> --agent codex
+agentteams join <invite-code> --agent codex --hub local
 
 # 4. Open Claude Code and Codex in the repo.
 #    In Codex, run /hooks once and approve the new agentteams hooks.
@@ -64,7 +65,7 @@ If you change Node versions (nvm), re-run `agentteams install` — hooks embed t
 
 | Command | Purpose |
 |---|---|
-| `agentteams up [--port <n>]` | Run a local hub (default port 4747 or `$AGENTTEAMS_PORT`) |
+| `agentteams up [--port <n>] [--share]` | Run a local hub (default port 4747 or `$AGENTTEAMS_PORT`); `--share` runs it in hosted mode behind a public Cloudflare quick tunnel and prints the URL plus the exact `create`/`join` commands |
 | `agentteams create <name>` | Create a team in this repo and install the agent integration |
 | `agentteams join <invite-code>` | Join a team and install the agent integration |
 | `agentteams install [--agent claude\|codex\|other\|all]` | (Re)configure Claude Code / Codex for this repo |
@@ -80,7 +81,7 @@ If you change Node versions (nvm), re-run `agentteams install` — hooks embed t
 Options:
 
 - `create` and `join`: `--agent <claude|codex|other>` (default `claude`), `--as <member>` (member name),
-  `--hub <url>` (default `$AGENTTEAMS_HUB` or the local hub), `--no-install` (skip tool setup).
+  `--hub <url>` (or `local` for http://127.0.0.1:4747; default `$AGENTTEAMS_HUB` or the public hub), `--no-install` (skip tool setup).
 - `create` only: `--repo <owner/name>` links a GitHub repo; `--local` makes a local-only team. Without
   either, the GitHub `origin` is detected, falling back to a local-only team.
 - `create` only: `--new-repo` creates a new GitHub repo with `gh` and links the team to it (`--owner <org>` picks the owner).
@@ -208,7 +209,7 @@ Configuration (environment variables):
 
 - `AGENTTEAMS_HOME` — data directory (default `~/.agentteams`; must be an absolute path, empty means default)
 - `AGENTTEAMS_PORT` — listen port (default `4747`)
-- `AGENTTEAMS_HUB` — hub URL the CLI talks to (default the local hub)
+- `AGENTTEAMS_HUB` — hub URL the CLI talks to; `local` means http://127.0.0.1:4747 (default the public hub)
 
 ## Develop
 
