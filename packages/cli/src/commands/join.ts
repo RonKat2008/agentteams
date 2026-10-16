@@ -46,7 +46,8 @@ async function resolveRepoPath(deps: CliDeps, preview: InvitePreview, opts: Join
   const local = await detectGithubSlug(deps, deps.cwd);
   if (local?.toLowerCase() === slug.toLowerCase()) return repoRoot(deps, deps.cwd);
   if (!opts.clone) {
-    deps.err(`warning: this team is linked to ${slug} but this directory's origin is ${local ?? 'none'}`);
+    const origin = local ?? ((await deps.exec('git', ['remote', 'get-url', 'origin'], { cwd: deps.cwd })).code === 0 ? 'not a GitHub repo' : 'none');
+    deps.err(`warning: this team is linked to ${slug} but this directory's origin is ${origin}`);
     return repoRoot(deps, deps.cwd);
   }
   const target = opts.dir ? (isAbsolute(opts.dir) ? opts.dir : resolve(deps.cwd, opts.dir)) : join(deps.cwd, slug.split('/')[1]!);

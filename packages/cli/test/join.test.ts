@@ -171,6 +171,18 @@ describe('join with preview and clone', () => {
     expect(t.err.join('\n')).toContain('warning: this team is linked to me/app');
   });
 
+  it('--no-clone says the origin is not a GitHub repo when origin exists but is not GitHub', async () => {
+    const t = mk(async (cmd, args, opts) => {
+      if (cmd === 'claude') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'git' && args.join(' ') === 'remote get-url origin') return { code: 0, stdout: 'https://gitlab.com/me/app.git\n', stderr: '' };
+      return realExec(cmd, args, opts);
+    });
+    const { code } = await team(github);
+    expect(await run(t, 'join', code, '--hub', hub.url, '--no-install', '--no-clone')).toBe(0);
+    expect(t.err.join('\n')).toContain("this directory's origin is not a GitHub repo");
+    expect(t.err.join('\n')).not.toContain('origin is none');
+  });
+
   it('does not clone for a local team', async () => {
     const calls: Call[] = [];
     const t = mk(cloneExec('gh-ok', calls));
