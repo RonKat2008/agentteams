@@ -37,10 +37,30 @@ const localAgent = (t: string, a: string) => `refs/agentteams-local/${t}/agents/
 const fetchedMeta = (t: string) => `refs/agentteams-remote/${t}/meta`;
 const fetchedAgent = (t: string, a: string) => `refs/agentteams-remote/${t}/agents/${a}`;
 
-interface RunOpts { input?: string | Buffer; binary?: boolean }
+const NETWORK_TIMEOUT_MS = 20_000;
+const ALLOWED_PROTOCOLS = 'file:git:http:https:ssh';
+
+interface RunOpts { input?: string | Buffer; binary?: boolean; env?: Record<string, string>; timeoutMs?: number }
+
+/** `remote` may come from an invite code, so it is attacker-controlled. */
+export function validateRemote(remote: string): void {
+  if (typeof remote !== 'string' || remote.length === 0) throw new Error('invalid remote: empty');
+  if (remote.startsWith('-')) throw new Error('invalid remote: must not start with "-"');
+  if (/[\0\r\n]/.test(remote)) throw new Error('invalid remote: control characters');
+  if (/^(ext|fd)::/i.test(remote)) throw new Error('invalid remote: transport not allowed');
+}
+
+function networkEnv(): Record<string, string> {
+  return {
+    GIT_ALLOW_PROTOCOL: ALLOWED_PROTOCOLS,
+    GIT_TERMINAL_PROMPT: '0',
+    ...(process.env.GIT_SSH_COMMAND ? {} : { GIT_SSH_COMMAND: 'ssh -oBatchMode=yes' }),
+  };
+}
 
 function git(deps: GitDeps, repo: string, args: string[], opts: RunOpts = {}) {
-  return deps.exec('git', args, { cwd: repo, env: IDENTITY_ENV, ...opts });
+  const { env, ...rest } = opts;
+  return deps.exec('git', args, { cwd: repo, env: { ...IDENTITY_ENV, ...env }, ...rest });
 }
 
 async function gitOk(deps: GitDeps, repo: string, args: string[], opts: RunOpts = {}) {
@@ -56,10 +76,13 @@ async function resolveRef(deps: GitDeps, repo: string, ref: string): Promise<str
 
 interface Entry { mode: string; type: string; sha: string; name: string }
 
-/** Entries of `<treeish>`, or [] when it does not exist. */
-async function lsTree(deps: GitDeps, repo: string, treeish: string): Promise<Entry[]> {
+/** Entries of `<treeish>`. Strict callers (the write path) throw on any git error; lenient readers get []. */
+async function lsTree(deps: GitDeps, repo: string, treeish: string, strict = false): Promise<Entry[]> {
   const r = await git(deps, repo, ['ls-tree', '-z', treeish]);
-  if (r.code !== 0) return [];
+  if (r.code !== 0) {
+    if (strict) throw new Error(`git ls-tree ${treeish} failed: ${r.stderr.trim()}`);
+    return [];
+  }
   return r.stdout.split('\0').filter(Boolean).map((line) => {
     const tab = line.indexOf('\t');
     const [mode, type, sha] = line.slice(0, tab).split(' ');
@@ -91,11 +114,11 @@ async function commitOn(deps: GitDeps, repo: string, ref: string, parent: string
 /** Add or replace one file (optionally inside a subdirectory) in the log tree behind `ref`. */
 async function putFile(deps: GitDeps, repo: string, ref: string, dir: string | null, name: string, data: Buffer): Promise<void> {
   const parent = await resolveRef(deps, repo, ref);
-  const root = parent ? await lsTree(deps, repo, parent) : [];
+  const root = parent ? await lsTree(deps, repo, parent, true) : [];
   const blob = blobEntry(name, await writeBlob(deps, repo, data));
   if (!dir) return commitOn(deps, repo, ref, parent, withEntry(root, blob));
   const sub = root.find((e) => e.name === dir && e.type === 'tree');
-  const subEntries = sub ? await lsTree(deps, repo, sub.sha) : [];
+  const subEntries = sub ? await lsTree(deps, repo, sub.sha, true) : [];
   const subSha = await mktree(deps, repo, withEntry(subEntries, blob));
   const subEntry: Entry = { mode: MODE_TREE, type: 'tree', sha: subSha, name: dir };
   return commitOn(deps, repo, ref, parent, withEntry(root, subEntry));
@@ -123,28 +146,31 @@ async function readFileAt(deps: GitDeps, repo: string, ref: string, path: string
   return r.code === 0 ? (r.stdoutBuf ?? Buffer.alloc(0)) : null;
 }
 
-/** Fetched copy of meta, falling back to the locally written one. */
+/** Locally written meta wins (it is the creator's newest); otherwise the fetched copy. */
 export async function readMeta(deps: GitDeps, repo: string, teamId: string): Promise<Buffer | null> {
   assertId('team', teamId);
-  return (await readFileAt(deps, repo, fetchedMeta(teamId), META_FILE)) ?? (await readFileAt(deps, repo, localMeta(teamId), META_FILE));
+  return (await readFileAt(deps, repo, localMeta(teamId), META_FILE)) ?? (await readFileAt(deps, repo, fetchedMeta(teamId), META_FILE));
 }
 
-function failure(r: { stderr: string; stdout: string }): PushResult {
+function failure(r: { stderr: string; stdout: string; timedOut?: boolean }): PushResult {
+  if (r.timedOut) return { ok: false, error: 'timeout' };
   return { ok: false, error: r.stderr.trim() || r.stdout.trim() || 'git failed' };
 }
 
 /** Fetch every team ref into `refs/agentteams-remote/<team>/*`. Never throws on network/remote errors. */
 export async function fetchTeam(deps: GitDeps, repo: string, remote: string, teamId: string): Promise<PushResult> {
   assertId('team', teamId);
+  validateRemote(remote);
   const spec = `+refs/agentteams/${teamId}/*:refs/agentteams-remote/${teamId}/*`;
-  const r = await git(deps, repo, ['fetch', '--quiet', '--no-tags', remote, spec]);
+  const r = await git(deps, repo, ['fetch', '--quiet', '--no-tags', '--', remote, spec], { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
   return r.code === 0 ? { ok: true } : failure(r);
 }
 
 async function pushRef(deps: GitDeps, repo: string, remote: string, local: string, dest: string): Promise<PushResult> {
+  validateRemote(remote);
   if (!(await resolveRef(deps, repo, local))) return { ok: false, error: `nothing to push: ${local} does not exist` };
   // No leading '+': non-fast-forward updates are rejected.
-  const r = await git(deps, repo, ['push', '--quiet', remote, `${local}:${dest}`]);
+  const r = await git(deps, repo, ['push', '--quiet', '--', remote, `${local}:${dest}`], { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
   return r.code === 0 ? { ok: true } : failure(r);
 }
 
@@ -193,10 +219,24 @@ export async function readSegments(deps: GitDeps, repo: string, teamId: string, 
     if (m && Number(m[1]) >= fromSeq) wanted.push({ seq: Number(m[1]), sha: e.sha });
   }
   wanted.sort((x, y) => x.seq - y.seq);
-  const out: Segment[] = [];
-  for (const w of wanted) {
-    const r = await gitOk(deps, repo, ['cat-file', 'blob', w.sha], { binary: true });
-    out.push({ seq: w.seq, data: r.stdoutBuf ?? Buffer.alloc(0) });
+  if (wanted.length === 0) return [];
+  const r = await gitOk(deps, repo, ['cat-file', '--batch'], { input: `${wanted.map((w) => w.sha).join('\n')}\n`, binary: true });
+  const blobs = parseBatch(r.stdoutBuf ?? Buffer.alloc(0), wanted.length);
+  return wanted.map((w, i) => ({ seq: w.seq, data: blobs[i]! }));
+}
+
+/** Parse `cat-file --batch` output: `<sha> <type> <size>\n<bytes>\n` per object. */
+function parseBatch(buf: Buffer, count: number): Buffer[] {
+  const out: Buffer[] = [];
+  let pos = 0;
+  for (let i = 0; i < count; i++) {
+    const nl = buf.indexOf(0x0a, pos);
+    if (nl < 0) throw new Error('git cat-file --batch: truncated output');
+    const header = buf.subarray(pos, nl).toString('utf8').split(' ');
+    if (header[1] !== 'blob') throw new Error(`git cat-file --batch: unexpected "${header.join(' ')}"`);
+    const size = Number(header[2]);
+    out.push(Buffer.from(buf.subarray(nl + 1, nl + 1 + size)));
+    pos = nl + 1 + size + 1;
   }
   return out;
 }

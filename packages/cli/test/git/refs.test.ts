@@ -1,9 +1,9 @@
-import { mkdtempSync, realpathSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { realExec } from '../../src/deps.js';
+import { realExec, type Exec } from '../../src/deps.js';
 import {
   appendSegment, fetchTeam, listAgents, pushMeta, pushOwn, readMeta, readPresence, readSegments, setPresence, writeMeta,
 } from '../../src/git/refs.js';
@@ -165,5 +165,88 @@ describe('git refs layer', () => {
     await writeMeta(deps, a, TEAM, bin(1));
     await writeMeta(deps, a, TEAM, bin(2));
     expect((await readMeta(deps, a, TEAM))!.equals(bin(2))).toBe(true);
+  });
+
+  it('rejects hostile remotes without running anything', async () => {
+    await appendSegment(deps, a, TEAM, A, 1, bin(1));
+    const marker = join(tmp, 'pwned');
+    const hostile = [
+      `--upload-pack=touch ${marker}`,
+      `--receive-pack=touch ${marker}`,
+      `ext::sh -c touch% ${marker}`,
+      `fd::3`,
+      `${remote}\nx`,
+      `${remote}\0x`,
+      '',
+    ];
+    for (const h of hostile) {
+      await expect(fetchTeam(deps, a, h, TEAM)).rejects.toThrow(/invalid remote/);
+      await expect(pushOwn(deps, a, h, TEAM, A)).rejects.toThrow(/invalid remote/);
+      await expect(pushMeta(deps, a, h, TEAM)).rejects.toThrow(/invalid remote/);
+    }
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('passes -- before the remote and locks down the network environment', async () => {
+    await appendSegment(deps, a, TEAM, A, 1, bin(1));
+    const calls: { args: string[]; env?: Record<string, string>; timeoutMs?: number }[] = [];
+    const spy: Exec = (cmd, args, opts) => { calls.push({ args, env: opts?.env, timeoutMs: opts?.timeoutMs }); return realExec(cmd, args, opts); };
+    await fetchTeam({ exec: spy }, a, remote, TEAM);
+    await pushOwn({ exec: spy }, a, remote, TEAM, A);
+    const net = calls.filter((c) => c.args[0] === 'fetch' || c.args[0] === 'push');
+    expect(net).toHaveLength(2);
+    for (const c of net) {
+      expect(c.args[c.args.indexOf(remote) - 1]).toBe('--');
+      expect(c.env?.GIT_ALLOW_PROTOCOL).toBe('file:git:http:https:ssh');
+      expect(c.env?.GIT_TERMINAL_PROMPT).toBe('0');
+      expect(c.timeoutMs).toBe(20_000);
+    }
+  });
+
+  it('reports a timeout as ok:false', async () => {
+    await appendSegment(deps, a, TEAM, A, 1, bin(1));
+    const slow: Exec = async (cmd, args, opts) => (args[0] === 'push' ? { code: 1, stdout: '', stderr: '', timedOut: true } : realExec(cmd, args, opts));
+    expect(await pushOwn({ exec: slow }, a, remote, TEAM, A)).toEqual({ ok: false, error: 'timeout' });
+  });
+
+  it('keeps every segment across many appends interleaved with presence writes', async () => {
+    for (let i = 1; i <= 12; i++) {
+      await appendSegment(deps, a, TEAM, A, i, bin(i));
+      if (i % 3 === 0) await setPresence(deps, a, TEAM, A, bin(100 + i));
+      expect((await readSegments(deps, a, TEAM, A, 0)).map((s) => s.seq)).toEqual(Array.from({ length: i }, (_, k) => k + 1));
+    }
+    expect((await readPresence(deps, a, TEAM, A))!.equals(bin(112))).toBe(true);
+  });
+
+  it('refuses to write when the existing tree cannot be read', async () => {
+    await appendSegment(deps, a, TEAM, A, 1, bin(1));
+    const broken: Exec = (cmd, args, opts) => (args[0] === 'ls-tree' ? Promise.resolve({ code: 128, stdout: '', stderr: 'boom' }) : realExec(cmd, args, opts));
+    await expect(appendSegment({ exec: broken }, a, TEAM, A, 2, bin(2))).rejects.toThrow(/ls-tree/);
+    expect((await readSegments(deps, a, TEAM, A, 0)).map((s) => s.seq)).toEqual([1]);
+  });
+
+  it('prefers local meta over a stale fetched copy', async () => {
+    await writeMeta(deps, a, TEAM, bin(1));
+    await pushMeta(deps, a, remote, TEAM);
+    await fetchTeam(deps, a, remote, TEAM);
+    await writeMeta(deps, a, TEAM, bin(2));
+    expect((await readMeta(deps, a, TEAM))!.equals(bin(2))).toBe(true);
+  });
+
+  it('re-pushing identical meta is idempotent', async () => {
+    await writeMeta(deps, a, TEAM, bin(1));
+    expect((await pushMeta(deps, a, remote, TEAM)).ok).toBe(true);
+    expect((await pushMeta(deps, a, remote, TEAM)).ok).toBe(true);
+  });
+
+  it('fetchTeam updates an existing remote-tracking ref', async () => {
+    await appendSegment(deps, a, TEAM, A, 1, bin(1));
+    await pushOwn(deps, a, remote, TEAM, A);
+    await fetchTeam(deps, b, remote, TEAM);
+    expect((await readSegments(deps, b, TEAM, A, 0)).length).toBe(1);
+    await appendSegment(deps, a, TEAM, A, 2, bin(2));
+    await pushOwn(deps, a, remote, TEAM, A);
+    expect((await fetchTeam(deps, b, remote, TEAM)).ok).toBe(true);
+    expect((await readSegments(deps, b, TEAM, A, 0)).map((s) => s.seq)).toEqual([1, 2]);
   });
 });

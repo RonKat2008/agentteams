@@ -9,6 +9,8 @@ export interface ExecResult {
   stderr: string;
   /** Raw stdout bytes; set only when the call asked for `binary: true`. */
   stdoutBuf?: Buffer;
+  /** True when the child was killed because `timeoutMs` elapsed. */
+  timedOut?: boolean;
 }
 export interface ExecOpts {
   cwd?: string;
@@ -17,6 +19,8 @@ export interface ExecOpts {
   env?: Record<string, string>;
   /** Also return stdout as an unmodified Buffer in `stdoutBuf`. */
   binary?: boolean;
+  /** Kill the child after this many ms. Default: no timeout. */
+  timeoutMs?: number;
 }
 export type Exec = (cmd: string, args: string[], opts?: ExecOpts) => Promise<ExecResult>;
 
@@ -40,17 +44,19 @@ export const realExec: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
     const env = opts.env ? { ...process.env, ...opts.env } : undefined;
     const encoding = opts.binary ? 'buffer' : 'utf8';
-    const child = execFile(cmd, args, { cwd: opts.cwd, env, encoding, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFile(cmd, args, { cwd: opts.cwd, env, encoding, maxBuffer: 64 * 1024 * 1024, ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}) }, (error, stdout, stderr) => {
       if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
         resolve({ code: 127, stdout: '', stderr: `command not found: ${cmd}` });
         return;
       }
       const code = error ? (typeof error.code === 'number' ? error.code : 1) : 0;
+      const timedOut = Boolean(opts.timeoutMs && error && (error as { killed?: boolean }).killed);
       resolve({
         code,
-        stdout: String(stdout),
+        stdout: opts.binary ? '' : String(stdout),
         stderr: String(stderr),
-        ...(opts.binary ? { stdoutBuf: Buffer.from(stdout) } : {}),
+        ...(opts.binary ? { stdoutBuf: stdout as unknown as Buffer } : {}),
+        ...(timedOut ? { timedOut } : {}),
       });
     });
     // Always close stdin (so children never wait on input) and swallow EPIPE-style errors.
