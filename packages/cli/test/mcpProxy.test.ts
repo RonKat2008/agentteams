@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { startHub } from '@agentteams/hub';
 import { HubClient } from '../src/hubClient.js';
-import { createProxyServer } from '../src/mcpProxy.js';
+import { connectUpstream, createProxyServer } from '../src/mcpProxy.js';
 
 let dir: string;
 let hub: Awaited<ReturnType<typeof startHub>>;
@@ -22,7 +22,7 @@ afterEach(async () => {
 
 async function downstreamFor(upstream: Client | null, reason?: string) {
   const [a, b] = InMemoryTransport.createLinkedPair();
-  await createProxyServer(upstream, hub.url, reason).connect(a);
+  await (await createProxyServer({ connect: upstream ? async () => upstream : null, hubUrl: hub.url, reason })).connect(a);
   const downstream = new Client({ name: 'codex', version: '0' });
   await downstream.connect(b);
   return downstream;
@@ -63,6 +63,31 @@ describe('MCP proxy', () => {
     const downstream = await downstreamFor(null);
     const res = await downstream.callTool({ name: 'team_status', arguments: {} });
     expect((res.content as Array<{ text: string }>)[0]!.text).toContain('no team credentials');
+    await downstream.close();
+  });
+
+  it('serves the full tool list offline and connects lazily once the hub starts', async () => {
+    const created = await new HubClient(hub.url).createTeam({ name: 's', member: 'ronit', tool: 'codex', repo: { provider: 'local' } });
+    const port = Number(new URL(hub.url).port);
+    await hub.close();
+
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await (await createProxyServer({ connect: () => connectUpstream(hub.url, created.apiKey), hubUrl: hub.url })).connect(a);
+    const downstream = new Client({ name: 'codex', version: '0' });
+    await downstream.connect(b);
+
+    const offline = await downstream.listTools();
+    expect(offline.tools).toHaveLength(15);
+    expect(offline.tools.find((t) => t.name === 'send_message')?.inputSchema.properties).toBeDefined();
+    const down = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(down.isError).toBe(true);
+    expect((down.content as Array<{ text: string }>)[0]!.text).toBe(`agentteams hub unreachable at ${hub.url} — is it running?`);
+
+    hub = await startHub({ dbPath: join(dir, 'hub.db'), port });
+    const up = await downstream.callTool({ name: 'team_status', arguments: {} });
+    expect(up.isError).toBeFalsy();
+    expect((up.content as Array<{ text: string }>)[0]!.text).toContain('ronit-codex');
+    expect((await downstream.listTools()).tools).toHaveLength(15);
     await downstream.close();
   });
 });

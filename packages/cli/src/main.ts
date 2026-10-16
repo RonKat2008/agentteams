@@ -10,11 +10,9 @@ import { orchestratorCommand } from './commands/orchestrator.js';
 import { statusCommand } from './commands/status.js';
 import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
-import { upCommand } from './commands/up.js';
 import { realDeps, type CliDeps } from './deps.js';
 import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
-import { runMcpProxy } from './mcpProxy.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
@@ -46,7 +44,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   const sub = (name: string) => program.command(name).exitOverride();
 
   sub('up').description('Run a local hub').option('--port <n>', 'port (default 4747 or $AGENTTEAMS_PORT)')
-    .action((o: { port?: string }) => upCommand(deps, o));
+    .action(async (o: { port?: string }) => (await import('./commands/up.js')).upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
@@ -117,7 +115,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   sub('mcp').description('(internal) stdio MCP proxy')
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
-    .action((o: { tool: ToolKind }) => runMcpProxy(deps, o.tool));
+    .action(async (o: { tool: ToolKind }) => (await import('./mcpProxy.js')).runMcpProxy(deps, o.tool));
   return program;
 }
 

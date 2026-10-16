@@ -6,3 +6,4 @@ export { createDb, type Dialect, type DbHandle } from './db/index.js';
 export { migrateToLatest } from './db/migrations.js';
 export { DomainError } from './errors.js';
 export { parsePort } from './config.js';
+export { listToolDefinitions } from './mcp/server.js';

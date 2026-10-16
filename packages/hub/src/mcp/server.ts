@@ -1,5 +1,7 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import {
   ActivityQuery, AssignTaskInput, ChangesQuery, ClaimFilesInput, ClaimTaskInput, CompleteTaskInput, CreateTaskInput,
@@ -69,4 +71,19 @@ export function buildMcpServer(ctx: HubContext, actor: Actor): McpServer {
     ChangesQuery.shape, (a) => getChanges(ctx, actor, a as never));
 
   return server;
+}
+
+/** The hub's tool names, descriptions and input schemas, without a database. Lets clients list tools while the hub is down. */
+export async function listToolDefinitions(): Promise<Tool[]> {
+  const server = buildMcpServer({} as HubContext, {} as Actor);
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'agentteams-tool-lister', version: '0.1.0' });
+  await server.connect(serverSide);
+  await client.connect(clientSide);
+  try {
+    return (await client.listTools()).tools;
+  } finally {
+    await client.close();
+    await server.close();
+  }
 }
