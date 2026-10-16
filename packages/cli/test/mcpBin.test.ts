@@ -23,8 +23,7 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe.skipIf(!built)('agentteams mcp (built binary)', () => {
-  it('stays alive and serves tools/list over stdio', async () => {
+async function joinRepo() {
     const repo = join(dir, 'repo');
     const home = join(dir, 'home');
     execFileSync('mkdir', ['-p', repo, home]);
@@ -35,6 +34,12 @@ describe.skipIf(!built)('agentteams mcp (built binary)', () => {
       repoPath: repo, tool: 'codex', hubUrl: hub.url, teamName: 's', agentName: created.agentName,
       apiKey: created.apiKey, createdAt: new Date().toISOString(),
     });
+  return { repo, env };
+}
+
+describe.skipIf(!built)('agentteams mcp (built binary)', () => {
+  it('stays alive and serves tools/list over stdio', async () => {
+    const { repo, env } = await joinRepo();
 
     const child = spawn(process.execPath, [BIN, 'mcp', '--tool', 'codex'], { cwd: repo, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let exited: number | null | undefined;
@@ -67,6 +72,30 @@ describe.skipIf(!built)('agentteams mcp (built binary)', () => {
       for (let i = 0; i < 50 && exited === undefined; i++) await new Promise((r) => setTimeout(r, 100));
       expect(exited).toBe(0);
     } finally {
+      child.kill();
+    }
+  }, 30_000);
+
+  it('finishes in-flight requests when stdin ends right after they are sent', async () => {
+    const { repo, env } = await joinRepo();
+    const child = spawn(process.execPath, [BIN, 'mcp', '--tool', 'codex'], { cwd: repo, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+    const exited = new Promise<number | null>((resolve) => child.on('exit', resolve));
+    const timer = setTimeout(() => child.kill(), 20_000);
+    try {
+      child.stdin.write([
+        { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '0' } } },
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      ].map((m) => `${JSON.stringify(m)}\n`).join(''));
+      child.stdin.end();
+      expect(await exited).toBe(0);
+      const msgs = out.split('\n').filter(Boolean).map((l) => JSON.parse(l) as { id?: number; result?: { tools?: unknown[] } });
+      expect(msgs.find((m) => m.id === 1)?.result).toBeDefined();
+      expect(msgs.find((m) => m.id === 2)?.result?.tools).toHaveLength(15);
+    } finally {
+      clearTimeout(timer);
       child.kill();
     }
   }, 30_000);
