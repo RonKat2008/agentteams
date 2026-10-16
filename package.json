@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "test:pg": "HUB_TEST_DIALECT=pglite vitest run packages/hub --testTimeout=30000 --hookTimeout=30000",
-    "test:pg-live": "vitest run packages/hub/test/postgres.live.test.ts"
+    "test:pg-live": "vitest run packages/hub/test/postgres.live.test.ts",
+    "demo": "pnpm -r build && for t in create log status hook guard; do vhs docs/demo/$t.tape; done; pkill -f \"bin.js up --port 4790\" || true"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
