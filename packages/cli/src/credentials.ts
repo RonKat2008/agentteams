@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/pro
 import { dirname, sep } from 'node:path';
 import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from './deps.js';
+import { mainRepoRoot } from './git.js';
 import { credentialsPath } from './paths.js';
 
 export interface Credential {
@@ -61,4 +62,19 @@ export async function resolveCredential(deps: Deps, cwd: string, tool?: ToolKind
     .filter((c) => (tool ? c.tool === tool : true) && contains(c.repoPath, here))
     .sort((a, b) => b.repoPath.length - a.repoPath.length);
   return matches[0] ?? null;
+}
+
+/** Like resolveCredential, but from a linked git worktree falls back to the main repo's credential. */
+export async function resolveCredentialForCwd(
+  deps: Deps & Pick<CliDeps, 'exec'>,
+  cwd: string,
+  tool?: ToolKind,
+): Promise<Credential | null> {
+  const direct = await resolveCredential(deps, cwd, tool);
+  if (direct) return direct;
+  const main = await mainRepoRoot(deps, cwd);
+  if (!main) return null;
+  const here = await real(cwd);
+  if ((await real(main)) === here) return null;
+  return resolveCredential(deps, main, tool);
 }

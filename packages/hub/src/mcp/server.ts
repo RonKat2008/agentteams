@@ -3,7 +3,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 import {
   ActivityQuery, AssignTaskInput, ChangesQuery, ClaimFilesInput, ClaimTaskInput, CompleteTaskInput, CreateTaskInput,
-  ListTasksInput, ReadInboxInput, ReleaseFilesInput, SendMessageInput, UpdateTaskInput, WhoOwnsInput,
+  ListTasksInput, MarkMergedInput, ReadInboxInput, ReleaseFilesInput, SendMessageInput, UpdateTaskInput, WhoOwnsInput,
 } from '@agentteams/shared';
 import type { Actor, HubContext } from '../context.js';
 import { DomainError } from '../errors.js';
@@ -11,7 +11,7 @@ import { getActivity } from '../services/activity.js';
 import { claimFiles, releaseFiles, whoOwns } from '../services/claims.js';
 import { getChanges } from '../services/commits.js';
 import { readInbox, sendMessage } from '../services/messages.js';
-import { assignTask, claimTask, completeTask, createTask, listTasks, updateTask } from '../services/tasks.js';
+import { assignTask, claimTask, completeTask, createTask, listTasks, markMerged, updateTask } from '../services/tasks.js';
 import { getTeamStatus } from '../services/teams.js';
 
 type Args = Record<string, unknown>;
@@ -55,6 +55,8 @@ export function buildMcpServer(ctx: HubContext, actor: Actor): McpServer {
     UpdateTaskInput.shape, (a) => updateTask(ctx, actor, a as never));
   tool('complete_task', 'Mark your task done with a short summary and the branch containing the work.',
     CompleteTaskInput.shape, (a) => completeTask(ctx, actor, a as never));
+  tool('mark_merged', 'Orchestrator only: record that a done task\'s branch was merged.',
+    MarkMergedInput.shape, (a) => markMerged(ctx, actor, a as never));
   tool('claim_files', 'Claim files/globs (repo-relative) before editing them so other agents avoid them. Returns conflicts instead of granting if someone else holds them.',
     ClaimFilesInput.shape, (a) => claimFiles(ctx, actor, a as never));
   tool('release_files', 'Release your file claims (specific globs, or all if omitted).',

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTestContext, seedTeam, type TestEnv } from './helpers.js';
-import { assignTask, claimTask, completeTask, createTask, listTasks, updateTask } from '../src/services/tasks.js';
+import { assignTask, claimTask, completeTask, createTask, listTasks, markMerged, updateTask } from '../src/services/tasks.js';
 import { readInbox } from '../src/services/messages.js';
 import { getTeamStatus } from '../src/services/teams.js';
 import { getActivity } from '../src/services/activity.js';
+import { authenticate, createTeam } from '../src/services/teams.js';
 
 let env: TestEnv;
 beforeEach(async () => { env = await makeTestContext(); });
@@ -129,5 +130,65 @@ describe('assignTask and listTasks', () => {
     expect(status.agents.find((a) => a.name === 'ash-codex')!.currentTask).toEqual({ number: 1, title: 'Login', status: 'in_progress' });
     const types = (await getActivity(env.ctx, ronit)).map((e) => e.type);
     expect(types).toEqual(expect.arrayContaining(['task_created', 'task_claimed']));
+  });
+});
+
+describe('markMerged', () => {
+  async function doneTask() {
+    const team = await seedTeam(env);
+    await createTask(env.ctx, team.ronit, { title: 'Login page', assignee: 'ash-codex' });
+    await claimTask(env.ctx, team.ash, { task: 1 });
+    return team;
+  }
+
+  it('is orchestrator-only', async () => {
+    const { dylan } = await doneTask();
+    await expect(markMerged(env.ctx, dylan, { task: 1 })).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('requires the task to be done', async () => {
+    const { ronit } = await doneTask();
+    await expect(markMerged(env.ctx, ronit, { task: 1 })).rejects.toMatchObject({
+      code: 'conflict', message: 'task #1 is not done yet',
+    });
+  });
+
+  it('sets mergedAt, logs a merged event and tells the assignee', async () => {
+    const { ronit, ash } = await doneTask();
+    await completeTask(env.ctx, ash, { task: 1, summary: 'done', branch: 'at/ash-codex/1' });
+    await readInbox(env.ctx, ash);
+    const view = await markMerged(env.ctx, ronit, { task: 1, pr: 'https://github.com/o/r/pull/3' });
+    expect(view.mergedAt).toBe('2026-01-01T00:00:00.000Z');
+    const ev = (await getActivity(env.ctx, ronit)).filter((e) => e.type === 'merged');
+    expect(ev).toHaveLength(1);
+    expect(ev[0]!.data).toEqual({ task: 1, branch: 'at/ash-codex/1', pr: 'https://github.com/o/r/pull/3' });
+    const inbox = await readInbox(env.ctx, ash);
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({ kind: 'fyi' });
+    expect(inbox[0]!.body).toBe('Task #1 (Login page) was merged: https://github.com/o/r/pull/3. You can delete its worktree.');
+  });
+
+  it('refuses a second merge', async () => {
+    const { ronit, ash } = await doneTask();
+    await completeTask(env.ctx, ash, { task: 1, summary: 'done', branch: 'at/ash-codex/1' });
+    await markMerged(env.ctx, ronit, { task: 1 });
+    await expect(markMerged(env.ctx, ronit, { task: 1 })).rejects.toMatchObject({
+      code: 'conflict', message: 'task #1 is already merged',
+    });
+  });
+
+  it('exposes mergedAt as null on unmerged tasks', async () => {
+    const { ronit } = await doneTask();
+    expect((await listTasks(env.ctx, ronit))[0]!.mergedAt).toBeNull();
+  });
+});
+
+describe('markMerged isolation', () => {
+  it('returns not_found for a task number that exists only in another team', async () => {
+    const { ronit } = await seedTeam(env);
+    const t = await createTeam(env.ctx, { name: 'other', member: 'zed', tool: 'claude', repo: { provider: 'local', defaultBranch: 'main' } });
+    const zed = await authenticate(env.ctx, t.apiKey);
+    await createTask(env.ctx, zed, { title: 'Theirs' });
+    await expect(markMerged(env.ctx, ronit, { task: 1 })).rejects.toMatchObject({ code: 'not_found' });
   });
 });

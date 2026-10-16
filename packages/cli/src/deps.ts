@@ -17,7 +17,7 @@ export interface CliDeps {
   username: string;
 }
 
-const realExec: Exec = (cmd, args, opts = {}) =>
+export const realExec: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
     const child = execFile(cmd, args, { cwd: opts.cwd, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {

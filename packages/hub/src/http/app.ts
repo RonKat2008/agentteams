@@ -6,12 +6,12 @@ import { DomainError, type ErrorCode } from '../errors.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { buildMcpServer } from '../mcp/server.js';
 import { getActivity } from '../services/activity.js';
-import { whoOwns } from '../services/claims.js';
+import { checkFiles, recordClaimOverride, whoOwns } from '../services/claims.js';
 import { getChanges, recordCommit } from '../services/commits.js';
 import { readInbox } from '../services/messages.js';
-import { listTasks } from '../services/tasks.js';
+import { claimTask, completeTask, getTaskView, listTasks, markMerged } from '../services/tasks.js';
 import {
-  authenticate, createTeam, getTeamStatus, joinTeam, revokeInvite, rotateInvite, setOrchestrator,
+  authenticate, createTeam, getTeamStatus, joinTeam, previewInvite, revokeInvite, rotateInvite, setOrchestrator,
 } from '../services/teams.js';
 
 export type AppEnv = { Variables: { actor: Actor } };
@@ -19,6 +19,13 @@ export type AppEnv = { Variables: { actor: Actor } };
 const STATUS: Record<ErrorCode, ContentfulStatusCode> = {
   unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, invalid: 400,
 };
+
+function taskNumber(c: Context): number {
+  const raw = c.req.param('n') ?? '';
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || n < 1) throw new DomainError('invalid', 'task number must be a positive integer');
+  return n;
+}
 
 async function body(c: Context): Promise<unknown> {
   const text = await c.req.text();
@@ -85,6 +92,8 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   app.post('/api/teams', async (c) => c.json(await createTeam(ctx, (await body(c)) as never), 201));
   app.post('/api/join', async (c) => c.json(await joinTeam(ctx, (await body(c)) as never), 201));
 
+  app.post('/api/join/preview', async (c) => c.json(await previewInvite(ctx, (await body(c)) as never)));
+
   app.use('/api/team/*', requireAgent(ctx));
   app.post('/api/team/ping', async (c) => {
     const actor = c.get('actor');
@@ -96,6 +105,18 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
   app.get('/api/team/changes', async (c) => c.json(await getChanges(ctx, c.get('actor'), c.req.query())));
   app.post('/api/team/commits', async (c) => c.json(await recordCommit(ctx, c.get('actor'), (await body(c)) as never)));
   app.get('/api/team/who-owns', async (c) => c.json(await whoOwns(ctx, c.get('actor'), { path: c.req.query('path') ?? '' })));
+  app.post('/api/team/check-files', async (c) => c.json(await checkFiles(ctx, c.get('actor'), (await body(c)) as never)));
+  app.post('/api/team/claim-override', async (c) => c.json(await recordClaimOverride(ctx, c.get('actor'), (await body(c)) as never)));
+  app.get('/api/team/tasks/:n', async (c) => c.json(await getTaskView(ctx, c.get('actor'), taskNumber(c))));
+  app.post('/api/team/tasks/:n/claim', async (c) => c.json(await claimTask(ctx, c.get('actor'), { task: taskNumber(c) })));
+  app.post('/api/team/tasks/:n/complete', async (c) => {
+    const b = (await body(c)) as Record<string, unknown>;
+    return c.json(await completeTask(ctx, c.get('actor'), { ...b, task: taskNumber(c) } as never));
+  });
+  app.post('/api/team/tasks/:n/merged', async (c) => {
+    const b = (await body(c)) as Record<string, unknown>;
+    return c.json(await markMerged(ctx, c.get('actor'), { ...b, task: taskNumber(c) } as never));
+  });
   app.post('/api/team/orchestrator', async (c) => c.json(await setOrchestrator(ctx, c.get('actor'), (await body(c)) as never)));
   app.post('/api/team/invite/rotate', async (c) => c.json(await rotateInvite(ctx, c.get('actor'))));
   app.post('/api/team/invite/revoke', async (c) => c.json(await revokeInvite(ctx, c.get('actor'))));

@@ -54,6 +54,7 @@ export interface TasksTable {
   assignee_agent_id: string | null;
   branch: string | null;
   summary: string | null;
+  merged_at: string | null;
   created_by_agent_id: string;
   created_at: string;
   updated_at: string;

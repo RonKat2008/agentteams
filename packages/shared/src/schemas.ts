@@ -43,7 +43,11 @@ export type Recipient = z.infer<typeof Recipient>;
 export const RepoLink = z
   .object({
     provider: z.enum(['github', 'local']),
-    slug: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'slug must look like owner/name').optional(),
+    slug: z
+      .string()
+      .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/, 'slug must look like owner/name')
+      .refine((v) => !v.startsWith('-') && !v.endsWith('/.') && !v.endsWith('/..'), 'slug must look like owner/name')
+      .optional(),
     defaultBranch: z.string().min(1).max(255).refine(singleLine, `default branch ${SINGLE_LINE_MESSAGE}`).default('main'),
   })
   .refine((r) => r.provider === 'local' || r.slug !== undefined, {
@@ -62,12 +66,17 @@ export const CreateTeamInput = z.object({
 });
 export type CreateTeamInput = z.input<typeof CreateTeamInput>;
 
+const InviteCode = z.string().trim().min(1).max(64);
+
 export const JoinTeamInput = z.object({
-  inviteCode: z.string().trim().min(1).max(64),
+  inviteCode: InviteCode,
   member: MemberName,
   tool: ToolKind,
 });
 export type JoinTeamInput = z.input<typeof JoinTeamInput>;
+
+export const InvitePreviewInput = z.object({ inviteCode: InviteCode });
+export type InvitePreviewInput = z.input<typeof InvitePreviewInput>;
 
 export const SetOrchestratorInput = z.object({ agent: AgentName });
 export type SetOrchestratorInput = z.input<typeof SetOrchestratorInput>;
@@ -123,6 +132,13 @@ const RepoGlob = z
   .refine(singleLine, `paths and globs ${SINGLE_LINE_MESSAGE}`)
   .refine((g) => !g.startsWith('/') && !g.split('/').includes('..'), 'paths and globs must be relative to the repo root');
 
+/** A literal repo-relative file path (as opposed to a claim glob); allowed to be longer than a glob. */
+export const REPO_PATH_MAX = 1024;
+export const RepoPath = z
+  .string().min(1).max(REPO_PATH_MAX)
+  .refine(singleLine, `paths ${SINGLE_LINE_MESSAGE}`)
+  .refine((g) => !g.startsWith('/') && !g.split('/').includes('..'), 'paths must be relative to the repo root');
+
 export const ClaimFilesInput = z.object({
   globs: z.array(RepoGlob).min(1).max(50),
   exclusive: z.boolean().default(true),
@@ -135,6 +151,18 @@ export type ReleaseFilesInput = z.input<typeof ReleaseFilesInput>;
 
 export const WhoOwnsInput = z.object({ path: RepoGlob });
 export type WhoOwnsInput = z.input<typeof WhoOwnsInput>;
+
+export const CheckFilesInput = z.object({ paths: z.array(RepoPath).min(1).max(1000) });
+export type CheckFilesInput = z.input<typeof CheckFilesInput>;
+
+export const ClaimOverrideInput = z.object({
+  paths: z.array(RepoPath).min(1).max(1000),
+  sha: z.string().regex(/^[0-9a-f]{7,40}$/, 'sha must be 7-40 lowercase hex characters').optional(),
+});
+export type ClaimOverrideInput = z.input<typeof ClaimOverrideInput>;
+
+export const MarkMergedInput = z.object({ task: TaskNumber, pr: z.string().url().max(500).optional() });
+export type MarkMergedInput = z.input<typeof MarkMergedInput>;
 
 export const ActivityQuery = z.object({
   since: z.iso.datetime({ offset: true }).optional(),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { InboxMessage, TeamStatus } from '@agentteams/shared';
-import { formatEvent, formatMessages, formatStatus } from '../src/format.js';
+import { formatEvent, formatMessages, formatStatus, oneLine } from '../src/format.js';
 
 const msg = (over: Partial<InboxMessage>): InboxMessage => ({
   id: '01', from: 'ronit-claude', fromRole: 'orchestrator', to: 'ash-codex', kind: 'command', body: 'Build /login', createdAt: '2026-01-01T00:00:00.000Z', ...over,
@@ -73,5 +73,14 @@ describe('hostile fields', () => {
     const out = formatStatus(status, 'me');
     expect(out).not.toMatch(forgedLine);
     expect(out.split('\n')).toHaveLength(4);
+  });
+});
+
+describe('oneLine', () => {
+  it('strips invisible format characters such as bidi overrides and zero-width spaces', () => {
+    expect(oneLine('src/\u202Egnp.ts\u200B')).toBe('src/gnp.ts');
+  });
+  it('still collapses line breaks to a space', () => {
+    expect(oneLine('a\nb')).toBe('a b');
   });
 });

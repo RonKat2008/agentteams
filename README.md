@@ -72,6 +72,10 @@ If you change Node versions (nvm), re-run `agentteams install` — hooks embed t
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
 | `agentteams invite rotate\|revoke` | Rotate or revoke the invite code |
 | `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
+| `agentteams worktree <task>` | Claim a task and create its branch and worktree |
+| `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
+| `agentteams pr <task>` | Open a GitHub pull request for a finished task |
+| `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |
 
 Options:
 
@@ -79,11 +83,55 @@ Options:
   `--hub <url>` (default `$AGENTTEAMS_HUB` or the local hub), `--no-install` (skip tool setup).
 - `create` only: `--repo <owner/name>` links a GitHub repo; `--local` makes a local-only team. Without
   either, the GitHub `origin` is detected, falling back to a local-only team.
+- `create` only: `--new-repo` creates a new GitHub repo with `gh` and links the team to it (`--owner <org>` picks the owner).
+- `join` only: clones the team's GitHub repo with `gh` (into `./<repo name>`, or `--dir <path>`); `--no-clone` skips the clone and uses the current directory.
+- `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
 - `status`, `log`, `invite`, `orchestrator`: `--agent <tool>` picks which credential to use when the repo
   has more than one (e.g. both Claude and Codex).
 
 `agentteams hook` and `agentteams mcp` are internal entry points used by the installed hooks and the
 Codex proxy; you do not run them yourself.
+
+## Git workflow
+
+Each task gets its own branch and worktree, and commits are checked against file claims.
+
+1. `agentteams worktree <task>` claims the task and creates branch `at/<agent>/<task>` in a worktree at
+   `<parent of repo>/<repo>.at/<agent>-<task>`. Work and commit there.
+2. A pre-commit check asks the hub whether another agent holds an exclusive claim on a file you are
+   committing, and blocks the commit if so. Message the owner instead. As a last resort,
+   `AGENTTEAMS_ALLOW=1 git commit ...` overrides the check; the override is logged to the team.
+   If the hub is unreachable the hooks warn and never block you. A post-commit hook reports commit summaries
+   (sha, branch, message, files, line counts; no diffs) to the hub.
+3. `agentteams done <task> -m "<summary>"` pushes the branch (GitHub teams) and completes the task. It must be
+   run on the task branch, not the default branch.
+4. `agentteams pr <task>` opens a pull request with `gh` (GitHub teams only). If one exists, its URL is printed.
+5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
+
+The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). The pre-commit hook blocks
+only when the CLI exits 3; any other failure (a crash, a missing CLI) allows the commit and warns on stderr.
+Git 2.31 or newer is required.
+
+### Hook managers
+
+If `core.hooksPath` is set (husky and similar), agentteams does not write hooks; add these lines to your
+hook manager yourself. They do nothing on machines without `agentteams` installed.
+
+```sh
+# pre-commit
+if command -v agentteams >/dev/null 2>&1; then
+  agentteams git-hook pre-commit; [ $? -ne 3 ] || exit 1
+fi
+```
+
+```sh
+# post-commit
+if command -v agentteams >/dev/null 2>&1; then
+  agentteams git-hook post-commit || true
+fi
+```
+
+`create --new-repo` makes a GitHub repo for you, and `join` clones the team repo (skip with `--no-clone`).
 
 ## Teammates on other machines
 

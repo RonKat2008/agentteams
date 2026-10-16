@@ -8,11 +8,16 @@ import { findAgent } from './lookup.js';
 
 const MAX_FILES_IN_NOTICE = 10;
 
-export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitInput): Promise<{ notified: string[] }> {
+export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitInput): Promise<{ notified: string[]; duplicate: boolean }> {
   const p = parseInput(CommitInput, input);
   const subject = p.message.split('\n')[0] ?? '';
 
   return withTx(ctx, async (tx) => {
+    const existing = await tx.db.selectFrom('commits').select('id')
+      .where('team_id', '=', actor.teamId).where('sha', '=', p.sha).where('branch', '=', p.branch)
+      .executeTakeFirst();
+    if (existing) return { notified: [], duplicate: true };
+
     const touched = new Map<string, { name: string; files: string[] }>();
     for (const claim of await listActiveClaims(tx, actor.teamId)) {
       if (claim.agentId === actor.id) continue;
@@ -22,11 +27,13 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
       entry.files.push(...files.filter((f) => !entry.files.includes(f)));
       touched.set(claim.agentId, entry);
     }
-    await tx.db.insertInto('commits').values({
+    const inserted = await tx.db.insertInto('commits').values({
       id: tx.newId(), team_id: actor.teamId, agent_id: actor.id, sha: p.sha, branch: p.branch,
       message: p.message, files_json: JSON.stringify(p.files), insertions: p.insertions, deletions: p.deletions,
       created_at: tx.now().toISOString(),
-    }).execute();
+    }).onConflict((oc) => oc.columns(['team_id', 'sha', 'branch']).doNothing()).executeTakeFirst();
+    // A concurrent identical commit won the race: treat as a duplicate, with no event or messages.
+    if (Number(inserted.numInsertedOrUpdatedRows ?? 0) === 0) return { notified: [], duplicate: true };
     await logEvent(tx, actor.teamId, actor.id, 'commit', {
       sha: p.sha, branch: p.branch, subject, files: p.files.length, insertions: p.insertions, deletions: p.deletions,
     });
@@ -38,7 +45,7 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
         body: `${actor.name} committed ${p.sha.slice(0, 7)} on ${p.branch} touching files you claimed: ${shown}${more} — "${subject}"`,
       });
     }
-    return { notified: [...touched.values()].map((t) => t.name) };
+    return { notified: [...touched.values()].map((t) => t.name), duplicate: false };
   });
 }
 

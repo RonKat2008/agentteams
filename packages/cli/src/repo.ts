@@ -15,7 +15,7 @@ export async function isGitRepo(deps: ExecDeps, cwd: string): Promise<boolean> {
   return res.code === 0 && res.stdout.trim() !== '';
 }
 
-const real = (p: string): Promise<string> => realpath(p).catch(() => p);
+export const real = (p: string): Promise<string> => realpath(p).catch(() => p);
 
 /** Refuse to set up a team in the home directory or filesystem root; warn when not in a git repo. */
 export async function checkTeamDir(deps: Pick<CliDeps, 'exec' | 'homedir' | 'err'>, cwd: string): Promise<void> {

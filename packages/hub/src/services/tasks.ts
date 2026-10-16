@@ -1,5 +1,5 @@
 import {
-  AssignTaskInput, ClaimTaskInput, CompleteTaskInput, CreateTaskInput, ListTasksInput, UpdateTaskInput,
+  AssignTaskInput, ClaimTaskInput, CompleteTaskInput, CreateTaskInput, ListTasksInput, MarkMergedInput, UpdateTaskInput,
   type TaskView,
 } from '@agentteams/shared';
 import type { Selectable } from 'kysely';
@@ -21,6 +21,7 @@ function toView(row: TaskRow, names: Map<string, string>): TaskView {
     assignee: row.assignee_agent_id ? names.get(row.assignee_agent_id) ?? null : null,
     branch: row.branch,
     summary: row.summary,
+    mergedAt: row.merged_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -68,7 +69,7 @@ export async function createTask(ctx: HubContext, actor: Actor, input: CreateTas
     await tx.db.insertInto('tasks').values({
       id: tx.newId(), team_id: actor.teamId, number: n, title: p.title, description: p.description,
       status: assignee ? 'assigned' : 'open', assignee_agent_id: assignee?.id ?? null,
-      branch: null, summary: null, created_by_agent_id: actor.id, created_at: nowIso, updated_at: nowIso,
+      branch: null, summary: null, merged_at: null, created_by_agent_id: actor.id, created_at: nowIso, updated_at: nowIso,
     }).execute();
     await logEvent(tx, actor.teamId, actor.id, 'task_created', { task: n, title: p.title, assignee: assignee?.name ?? null });
     if (assignee) await notifyAssignment(tx, actor, assignee.id, n, p.title);
@@ -98,6 +99,10 @@ export async function assignTask(ctx: HubContext, actor: Actor, input: AssignTas
     }
   });
   return view(ctx, actor.teamId, p.task);
+}
+
+export async function getTaskView(ctx: HubContext, actor: Actor, number: number): Promise<TaskView> {
+  return view(ctx, actor.teamId, number);
 }
 
 export async function listTasks(ctx: HubContext, actor: Actor, input: ListTasksInput = {}): Promise<TaskView[]> {
@@ -153,6 +158,30 @@ export async function completeTask(ctx: HubContext, actor: Actor, input: Complet
       await insertMessage(tx, {
         teamId: actor.teamId, fromId: actor.id, toId: team.orchestrator_agent_id, kind: 'fyi',
         body: `Task #${task.number} done on branch ${p.branch}: ${p.summary}`,
+      });
+    }
+  });
+  return view(ctx, actor.teamId, p.task);
+}
+
+export async function markMerged(ctx: HubContext, actor: Actor, input: MarkMergedInput): Promise<TaskView> {
+  const p = parseInput(MarkMergedInput, input);
+  await requireOrchestrator(ctx, actor, 'mark tasks merged');
+  await withTx(ctx, async (tx) => {
+    const task = await getTask(tx, actor.teamId, p.task);
+    if (task.status !== 'done') throw new DomainError('conflict', `task #${task.number} is not done yet`);
+    if (task.merged_at) throw new DomainError('conflict', `task #${task.number} is already merged`);
+    const nowIso = tx.now().toISOString();
+    const updated = await tx.db.updateTable('tasks').set({ merged_at: nowIso, updated_at: nowIso })
+      .where('id', '=', task.id).where('merged_at', 'is', null).executeTakeFirst();
+    if (Number(updated.numUpdatedRows) === 0) throw new DomainError('conflict', `task #${task.number} is already merged`);
+    await logEvent(tx, actor.teamId, actor.id, 'merged', {
+      task: task.number, branch: task.branch, ...(p.pr ? { pr: p.pr } : {}),
+    });
+    if (task.assignee_agent_id && task.assignee_agent_id !== actor.id) {
+      await insertMessage(tx, {
+        teamId: actor.teamId, fromId: actor.id, toId: task.assignee_agent_id, kind: 'fyi',
+        body: `Task #${task.number} (${task.title}) was merged${p.pr ? `: ${p.pr}` : ''}. You can delete its worktree.`,
       });
     }
   });

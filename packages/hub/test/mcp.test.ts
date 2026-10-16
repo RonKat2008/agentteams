@@ -45,12 +45,12 @@ describe('MCP endpoint', () => {
     expect(res.status).toBe(405);
   });
 
-  it('exposes the 14 agentteams tools', async () => {
+  it('exposes the 15 agentteams tools', async () => {
     const client = await connect(team.keys.ronit);
     const names = (await client.listTools()).tools.map((t) => t.name).sort();
     expect(names).toEqual([
       'assign_task', 'claim_files', 'claim_task', 'complete_task', 'create_task', 'get_activity', 'get_changes',
-      'list_tasks', 'read_inbox', 'release_files', 'send_message', 'team_status', 'update_task', 'who_owns',
+      'list_tasks', 'mark_merged', 'read_inbox', 'release_files', 'send_message', 'team_status', 'update_task', 'who_owns',
     ]);
   });
 
@@ -102,5 +102,18 @@ describe('MCP endpoint', () => {
     expect(res.text).toBe('internal: internal error');
     expect(res.text).not.toContain('SQLITE_BUSY');
     expect(errSpy).toHaveBeenCalledWith('[agentteams-hub] tool error', expect.any(Error));
+  });
+
+  it('mark_merged is orchestrator-only and records the merge', async () => {
+    const ronit = await connect(team.keys.ronit);
+    const ash = await connect(team.keys.ash);
+    await call(ronit, 'create_task', { title: 'Login', assignee: 'ash-codex' });
+    await call(ash, 'claim_task', { task: 1 });
+    await call(ash, 'complete_task', { task: 1, summary: 's', branch: 'at/ash-codex/1' });
+    const denied = await call(ash, 'mark_merged', { task: 1 });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain('forbidden');
+    const ok = await call(ronit, 'mark_merged', { task: 1, pr: 'https://github.com/o/r/pull/1' });
+    expect(ok.data.mergedAt).toBeTruthy();
   });
 });

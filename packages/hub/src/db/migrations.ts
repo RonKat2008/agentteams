@@ -1,8 +1,9 @@
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import { Migrator, type Migration, type MigrationProvider } from 'kysely/migration';
 import type { Database } from './schema.js';
 
 // Only portable column types (text, integer) so the same migrations run on SQLite and Postgres.
+// Keys are sorted as strings. The next key must be `003_...`; use 3-digit prefixes from here on.
 const migrations: Record<string, Migration> = {
   '0001_init': {
     async up(db: Kysely<any>) {
@@ -104,12 +105,26 @@ const migrations: Record<string, Migration> = {
       await db.schema.createIndex('activity_team_idx').on('activity').columns(['team_id', 'id']).execute();
     },
   },
+  '002_git_layer': {
+    async up(db: Kysely<any>) {
+      await sql`DELETE FROM commits WHERE id NOT IN (SELECT MIN(id) FROM commits GROUP BY team_id, sha, branch)`.execute(db);
+      await db.schema.createIndex('commits_team_sha_branch_unique').unique().on('commits')
+        .columns(['team_id', 'sha', 'branch']).execute();
+      await db.schema.alterTable('tasks').addColumn('merged_at', 'text').execute();
+    },
+  },
 };
 
 class InCodeMigrationProvider implements MigrationProvider {
   async getMigrations(): Promise<Record<string, Migration>> {
     return migrations;
   }
+}
+
+/** Migrates up to and including the named migration (used to test upgrade paths). */
+export async function migrateTo(db: Kysely<Database>, name: string): Promise<void> {
+  const { error } = await new Migrator({ db, provider: new InCodeMigrationProvider() }).migrateTo(name);
+  if (error) throw error instanceof Error ? error : new Error(String(error));
 }
 
 export async function migrateToLatest(db: Kysely<Database>): Promise<void> {

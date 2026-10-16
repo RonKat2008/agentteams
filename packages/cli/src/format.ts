@@ -2,9 +2,9 @@ import type { ActivityEvent, InboxMessage, TeamStatus } from '@agentteams/shared
 
 const KIND_LABELS: Record<InboxMessage['kind'], string> = { command: 'Command', question: 'Question', fyi: 'FYI' };
 
-/** Collapse any run containing control chars or line breaks to one space so a field cannot forge a new line. */
+/** Drop invisible format chars (bidi overrides, zero-width), then collapse any run containing control chars or line breaks to one space so a field cannot forge a new line. */
 export function oneLine(value: string): string {
-  return value.replace(/[\s\p{Cc}\u2028\u2029]+/gu, (run) => (/[\p{Cc}\u2028\u2029]/u.test(run) ? ' ' : run));
+  return value.replace(/\p{Cf}/gu, '').replace(/[\s\p{Cc}\u2028\u2029]+/gu, (run) => (/[\p{Cc}\u2028\u2029]/u.test(run) ? ' ' : run));
 }
 
 /** Normalise every line terminator to \n and drop non-printing control chars (keeps \n and \t). */

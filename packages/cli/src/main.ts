@@ -1,19 +1,30 @@
 import { Argument, Command, CommanderError, Option } from 'commander';
 import { ToolKind } from '@agentteams/shared';
-import { createCommand } from './commands/create.js';
+import { createCommand, type CreateOpts } from './commands/create.js';
 import { installCommand } from './commands/install.js';
 import { inviteCommand } from './commands/invite.js';
 import { joinCommand } from './commands/join.js';
 import { logCommand } from './commands/log.js';
 import { orchestratorCommand } from './commands/orchestrator.js';
 import { statusCommand } from './commands/status.js';
+import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
+import { worktreeCommand } from './commands/worktree.js';
 import { upCommand } from './commands/up.js';
 import { realDeps, type CliDeps } from './deps.js';
+import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 import { runMcpProxy } from './mcpProxy.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
+
+function parsePositive(name: string) {
+  return (v: string): number => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a positive integer`);
+    return n;
+  };
+}
 
 function parseLimit(v: string): number {
   const n = Number(v);
@@ -37,10 +48,18 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((o: { port?: string }) => upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>')
-    .option('--repo <owner/name>').option('--local', 'local-only team (no GitHub link)').option('--no-install')
-    .action((name: string, o) => createCommand(deps, name, o));
+    .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
+    .addOption(new Option('--local', 'local-only team (no GitHub link)').conflicts('newRepo'))
+    .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
+    .addOption(new Option('--private', 'new repo is private (default)').conflicts('public'))
+    .addOption(new Option('--public', 'new repo is public'))
+    .option('--owner <org>', 'GitHub owner/org for --new-repo').option('--no-install')
+    .action((name: string, o: { public?: boolean } & CreateOpts) =>
+      createCommand(deps, name, { ...o, visibility: o.public ? 'public' : 'private' }));
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
     .addOption(agentOpt('claude')).option('--as <member>').option('--hub <url>').option('--no-install')
+    .option('--no-clone', 'do not clone the team repo; use the current directory')
+    .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
     .action((code: string, o) => joinCommand(deps, code, o));
   sub('install').description('(Re)configure Claude Code / Codex for this repo')
     .addOption(new Option('--agent <tool>').choices([...TOOLS, 'all']))
@@ -61,6 +80,21 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((action: 'rotate' | 'revoke', o) => inviteCommand(deps, action, o));
   sub('orchestrator').description('Make an agent the orchestrator').argument('<agent-name>').addOption(agentOpt())
     .action((target: string, o) => orchestratorCommand(deps, target, o));
+  sub('worktree').description('Claim a task and give it its own git worktree and branch')
+    .addArgument(new Argument('<task>', 'task number').argParser(parsePositive('task')))
+    .addOption(agentOpt()).option('--base <ref>', 'branch point (default: the repo default branch)')
+    .action((task: number, o: { agent?: ToolKind; base?: string }) => worktreeCommand(deps, task, o));
+  const taskArg = () => new Argument('<task>', 'task number').argParser(parsePositive('task'));
+  sub('done').description('Push this task branch and mark the task done')
+    .addArgument(taskArg()).addOption(agentOpt())
+    .addOption(new Option('-m, --message <summary>', 'what you did').makeOptionMandatory())
+    .action((task: number, o: { agent?: ToolKind; message: string }) => doneCommand(deps, task, { summary: o.message, agent: o.agent }));
+  sub('pr').description('Open a GitHub pull request for a finished task')
+    .addArgument(taskArg()).addOption(agentOpt())
+    .action((task: number, o: { agent?: ToolKind }) => prCommand(deps, task, o));
+  sub('merged').description('Record that a task branch was merged (orchestrator only)')
+    .addArgument(taskArg()).addOption(agentOpt()).option('--pr <url>', 'pull request URL')
+    .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
   sub('hook').description('(internal) agent hook entry point')
     .addArgument(new Argument('<event>').choices([...HOOK_EVENTS]))
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())
@@ -69,6 +103,12 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       const res = await runHook(event, await deps.readStdin(), o.tool, deps);
       if (res.stdout) deps.write(res.stdout);
       exit.code = 0;
+    });
+  sub('git-hook').description('(internal) git hook entry point')
+    .addArgument(new Argument('<name>').choices(['pre-commit', 'post-commit']))
+    .option('--agentteams-managed', '(marker identifying installer-managed hooks; ignored)')
+    .action(async (name: 'pre-commit' | 'post-commit') => {
+      exit.code = name === 'pre-commit' ? await runPreCommit(deps) : await runPostCommit(deps);
     });
   sub('mcp').description('(internal) stdio MCP proxy')
     .addOption(new Option('--tool <tool>').choices(TOOLS).makeOptionMandatory())

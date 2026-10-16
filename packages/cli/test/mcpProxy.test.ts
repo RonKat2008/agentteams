@@ -37,7 +37,7 @@ describe('MCP proxy', () => {
 
     const tools = (await downstream.listTools()).tools.map((t) => t.name);
     expect(tools).toContain('team_status');
-    expect(tools).toHaveLength(14);
+    expect(tools).toHaveLength(15);
     const res = await downstream.callTool({ name: 'team_status', arguments: {} });
     expect((res.content as Array<{ text: string }>)[0]!.text).toContain('ronit-codex');
 

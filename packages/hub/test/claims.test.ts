@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeTestContext, seedTeam, type TestEnv } from './helpers.js';
-import { claimFiles, globsOverlap, releaseFiles, whoOwns } from '../src/services/claims.js';
+import { checkFiles, claimFiles, globsOverlap, recordClaimOverride, releaseFiles, whoOwns } from '../src/services/claims.js';
+import { readInbox } from '../src/services/messages.js';
+import { getActivity } from '../src/services/activity.js';
+import { createTeam } from '../src/services/teams.js';
 import { getTeamStatus } from '../src/services/teams.js';
 
 let env: TestEnv;
@@ -105,5 +108,101 @@ describe('whoOwns and releaseFiles', () => {
     expect(await releaseFiles(env.ctx, ash, { globs: ['a/**'] })).toEqual({ released: 1 });
     expect(await releaseFiles(env.ctx, ash)).toEqual({ released: 1 });
     expect(await whoOwns(env.ctx, ash, { path: 'c/x.ts' })).toHaveLength(1);
+  });
+});
+
+describe('checkFiles', () => {
+  it("reports another agent's exclusive claim with agent, glob and expiry", async () => {
+    const { ash, dylan } = await seedTeam(env);
+    const claimed = await claimFiles(env.ctx, ash, { globs: ['src/**'] });
+    const res = await checkFiles(env.ctx, dylan, { paths: ['src/a.ts'] });
+    expect(res.conflicts).toEqual([
+      { path: 'src/a.ts', agent: 'ash-codex', glob: 'src/**', expiresAt: claimed.claims[0]!.expiresAt },
+    ]);
+  });
+
+  it("ignores the caller's own claims", async () => {
+    const { ash } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['src/**'] });
+    expect((await checkFiles(env.ctx, ash, { paths: ['src/a.ts'] })).conflicts).toEqual([]);
+  });
+
+  it('ignores non-exclusive claims', async () => {
+    const { ash, dylan } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['src/**'], exclusive: false });
+    expect((await checkFiles(env.ctx, dylan, { paths: ['src/a.ts'] })).conflicts).toEqual([]);
+  });
+
+  it('ignores expired claims', async () => {
+    const { ash, dylan } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['src/**'], ttlMin: 1 });
+    env.advance(60_001);
+    expect((await checkFiles(env.ctx, dylan, { paths: ['src/a.ts'] })).conflicts).toEqual([]);
+  });
+
+  it('sorts conflicts by path then agent', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['docs/**'] });
+    await claimFiles(env.ctx, dylan, { globs: ['src/**'] });
+    const res = await checkFiles(env.ctx, ronit, { paths: ['src/z.ts', 'docs/a.md'] });
+    expect(res.conflicts.map((c) => [c.path, c.agent])).toEqual([['docs/a.md', 'ash-codex'], ['src/z.ts', 'dylan-claude']]);
+  });
+
+  it('rejects parent-relative paths and control characters', async () => {
+    const { dylan } = await seedTeam(env);
+    await expect(checkFiles(env.ctx, dylan, { paths: ['../x'] })).rejects.toMatchObject({ code: 'invalid' });
+    await expect(checkFiles(env.ctx, dylan, { paths: ['src/a\u0007.ts'] })).rejects.toMatchObject({ code: 'invalid' });
+  });
+});
+
+describe('recordClaimOverride', () => {
+  it('logs one claim_overridden event and tells the owner which path', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['src/**'] });
+    const res = await recordClaimOverride(env.ctx, dylan, { paths: ['src/a.ts', 'src/b.ts', 'README.md'], sha: 'abc1234' });
+    expect(res).toEqual({ owners: ['ash-codex'] });
+    const events = (await getActivity(env.ctx, ronit)).filter((e) => e.type === 'claim_overridden');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data).toEqual({ paths: ['src/a.ts', 'src/b.ts'], owners: ['ash-codex'], sha: 'abc1234' });
+    const inbox = await readInbox(env.ctx, ash);
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({ kind: 'fyi', from: 'dylan-claude' });
+    expect(inbox[0]!.body).toBe('dylan-claude committed over your claim on src/a.ts, src/b.ts (AGENTTEAMS_ALLOW=1)');
+  });
+
+  it('does nothing when there are no conflicts', async () => {
+    const { dylan, ronit } = await seedTeam(env);
+    expect(await recordClaimOverride(env.ctx, dylan, { paths: ['src/a.ts'] })).toEqual({ owners: [] });
+    expect((await getActivity(env.ctx, ronit)).filter((e) => e.type === 'claim_overridden')).toEqual([]);
+  });
+});
+
+describe('cross-team isolation and tie-breaks', () => {
+  const otherTeam = async () => {
+    const t = await createTeam(env.ctx, { name: 'other', member: 'zed', tool: 'claude', repo: { provider: 'local', defaultBranch: 'main' } });
+    const { authenticate } = await import('../src/services/teams.js');
+    return authenticate(env.ctx, t.apiKey);
+  };
+
+  it("hides another team's claims from checkFiles and recordClaimOverride", async () => {
+    const { dylan, ronit } = await seedTeam(env);
+    const zed = await otherTeam();
+    await claimFiles(env.ctx, zed, { globs: ['src/**'] });
+    expect((await checkFiles(env.ctx, dylan, { paths: ['src/a.ts'] })).conflicts).toEqual([]);
+    expect(await recordClaimOverride(env.ctx, dylan, { paths: ['src/a.ts'] })).toEqual({ owners: [] });
+    expect((await getActivity(env.ctx, ronit)).filter((e) => e.type === 'claim_overridden')).toEqual([]);
+    expect(await readInbox(env.ctx, zed)).toEqual([]);
+  });
+
+  it('breaks ties on one path by agent name', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    await claimFiles(env.ctx, ash, { globs: ['src/**'] });
+    // two agents whose non-overlapping globs both match one path via a broad pattern
+    await env.ctx.db.insertInto('claims').values({
+      id: 'zz-claim', team_id: ronit.teamId, agent_id: dylan.id, glob: '**/a.ts', exclusive: 1,
+      expires_at: '2027-01-01T00:00:00.000Z', created_at: '2026-01-01T00:00:00.000Z',
+    }).execute();
+    const res = await checkFiles(env.ctx, ronit, { paths: ['src/a.ts'] });
+    expect(res.conflicts.map((c) => c.agent)).toEqual(['ash-codex', 'dylan-claude']);
   });
 });

@@ -1,12 +1,17 @@
 import picomatch from 'picomatch';
 import {
-  ClaimFilesInput, ReleaseFilesInput, WhoOwnsInput, type ClaimResult, type ClaimView,
+  CheckFilesInput, ClaimFilesInput, ClaimOverrideInput, ReleaseFilesInput, WhoOwnsInput,
+  type CheckFilesResult, type ClaimResult, type ClaimView, type FileConflict,
 } from '@agentteams/shared';
 import { withTx, type Actor, type HubContext } from '../context.js';
 import { parseInput } from '../errors.js';
 import { logEvent } from './activity.js';
+import { findAgent } from './lookup.js';
+import { insertMessage } from './messages.js';
 
 const MS_PER_MIN = 60_000;
+const MAX_OVERRIDE_PATHS_LOGGED = 20;
+const MAX_OVERRIDE_PATHS_IN_NOTICE = 10;
 
 export function globMatches(glob: string, path: string): boolean {
   return picomatch(glob, { dot: true })(path);
@@ -73,4 +78,46 @@ export async function releaseFiles(ctx: HubContext, actor: Actor, input: Release
 export async function whoOwns(ctx: HubContext, actor: Actor, input: WhoOwnsInput): Promise<ClaimView[]> {
   const p = parseInput(WhoOwnsInput, input);
   return (await listActiveClaims(ctx, actor.teamId)).filter((c) => globMatches(c.glob, p.path)).map(toView);
+}
+
+const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Active exclusive claims held by other agents that match any of the paths, one entry per (path, claim). */
+async function findFileConflicts(ctx: HubContext, actor: Actor, paths: string[]): Promise<FileConflict[]> {
+  const claims = (await listActiveClaims(ctx, actor.teamId)).filter((c) => c.exclusive && c.agentId !== actor.id);
+  const conflicts: FileConflict[] = [];
+  for (const path of paths) {
+    for (const c of claims) {
+      if (globMatches(c.glob, path)) conflicts.push({ path, agent: c.agent, glob: c.glob, expiresAt: c.expiresAt });
+    }
+  }
+  return conflicts.sort((a, b) => byText(a.path, b.path) || byText(a.agent, b.agent) || byText(a.glob, b.glob));
+}
+
+export async function checkFiles(ctx: HubContext, actor: Actor, input: CheckFilesInput): Promise<CheckFilesResult> {
+  const p = parseInput(CheckFilesInput, input);
+  return { conflicts: await findFileConflicts(ctx, actor, p.paths) };
+}
+
+export async function recordClaimOverride(ctx: HubContext, actor: Actor, input: ClaimOverrideInput): Promise<{ owners: string[] }> {
+  const p = parseInput(ClaimOverrideInput, input);
+  return withTx(ctx, async (tx) => {
+    const conflicts = await findFileConflicts(tx, actor, p.paths);
+    if (conflicts.length === 0) return { owners: [] };
+    const paths = [...new Set(conflicts.map((c) => c.path))];
+    const owners = [...new Set(conflicts.map((c) => c.agent))];
+    await logEvent(tx, actor.teamId, actor.id, 'claim_overridden', {
+      paths: paths.slice(0, MAX_OVERRIDE_PATHS_LOGGED), owners, ...(p.sha ? { sha: p.sha } : {}),
+    });
+    for (const owner of owners) {
+      const theirs = [...new Set(conflicts.filter((c) => c.agent === owner).map((c) => c.path))];
+      const shown = theirs.slice(0, MAX_OVERRIDE_PATHS_IN_NOTICE).join(', ');
+      const more = theirs.length > MAX_OVERRIDE_PATHS_IN_NOTICE ? ` and ${theirs.length - MAX_OVERRIDE_PATHS_IN_NOTICE} more` : '';
+      await insertMessage(tx, {
+        teamId: actor.teamId, fromId: actor.id, toId: (await findAgent(tx, actor.teamId, owner)).id, kind: 'fyi',
+        body: `${actor.name} committed over your claim on ${shown}${more} (AGENTTEAMS_ALLOW=1)`,
+      });
+    }
+    return { owners };
+  });
 }

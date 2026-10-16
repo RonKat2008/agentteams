@@ -1,7 +1,9 @@
 import {
-  CreateTeamInput, INVITE_TTL_MS, JoinTeamInput, SetOrchestratorInput, presenceOf, type TeamStatus,
+  CreateTeamInput, INVITE_TTL_MS, InvitePreviewInput, JoinTeamInput, SetOrchestratorInput, presenceOf,
+  type InvitePreview, type TeamStatus,
 } from '@agentteams/shared';
 import { withTx, type Actor, type HubContext } from '../context.js';
+import type { TeamRow } from '../db/schema.js';
 import { DomainError, parseInput } from '../errors.js';
 import { generateApiKey, generateInviteCode, hashSecret, normalizeInviteCode } from '../secrets.js';
 import { logEvent } from './activity.js';
@@ -52,15 +54,27 @@ export async function createTeam(ctx: HubContext, input: CreateTeamInput) {
   return { teamId, teamName: p.name, agentName, apiKey, inviteCode, inviteExpiresAt };
 }
 
-export async function joinTeam(ctx: HubContext, input: JoinTeamInput) {
-  const p = parseInput(JoinTeamInput, input);
+async function findInvitedTeam(ctx: HubContext, inviteCode: string): Promise<TeamRow> {
   const team = await ctx.db.selectFrom('teams').selectAll()
-    .where('invite_code_hash', '=', hashSecret(normalizeInviteCode(p.inviteCode)))
+    .where('invite_code_hash', '=', hashSecret(normalizeInviteCode(inviteCode)))
     .executeTakeFirst();
   if (!team) throw new DomainError('not_found', 'invite code not recognised');
   if (team.invite_revoked === 1 || team.invite_expires_at <= ctx.now().toISOString()) {
     throw new DomainError('forbidden', 'invite code has expired or been revoked; ask the team creator for a new one');
   }
+  return team;
+}
+
+/** Validates an invite exactly as joinTeam does, but creates nothing. Needs no auth. */
+export async function previewInvite(ctx: HubContext, input: InvitePreviewInput): Promise<InvitePreview> {
+  const p = parseInput(InvitePreviewInput, input);
+  const team = await findInvitedTeam(ctx, p.inviteCode);
+  return { teamName: team.name, repo: repoOf(team) };
+}
+
+export async function joinTeam(ctx: HubContext, input: JoinTeamInput) {
+  const p = parseInput(JoinTeamInput, input);
+  const team = await findInvitedTeam(ctx, p.inviteCode);
 
   const apiKey = generateApiKey();
   const agentId = ctx.newId();

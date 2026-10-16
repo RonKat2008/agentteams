@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Kysely } from 'kysely';
 import { createSqliteDb } from '../src/db/sqlite.js';
-import { migrateToLatest } from '../src/db/migrations.js';
+import { migrateTo, migrateToLatest } from '../src/db/migrations.js';
 import type { Database } from '../src/db/schema.js';
 import { createContext, withTx } from '../src/context.js';
 import { DomainError, parseInput } from '../src/errors.js';
@@ -34,6 +34,28 @@ describe('migrations', () => {
   it('enforces unique agent names per team', async () => {
     await db.insertInto('agents').values(agentRow('a1', 'ronit-claude')).execute();
     await expect(db.insertInto('agents').values(agentRow('a2', 'ronit-claude')).execute()).rejects.toThrow();
+  });
+});
+
+describe('migration 002_git_layer', () => {
+  it('dedupes existing commit rows (keeping the lowest id) and adds tasks.merged_at', async () => {
+    const fresh = createSqliteDb(':memory:');
+    try {
+      await migrateTo(fresh, '0001_init');
+      const row = (id: string, sha: string) => ({
+        id, team_id: 't1', agent_id: 'a1', sha, branch: 'b', message: 'm', files_json: '[]',
+        insertions: 0, deletions: 0, created_at: '2026-01-01T00:00:00.000Z',
+      });
+      await fresh.insertInto('commits').values([row('c1', 'abc1234'), row('c2', 'abc1234'), row('c3', 'def5678')]).execute();
+      await migrateToLatest(fresh);
+      const ids = (await fresh.selectFrom('commits').select('id').orderBy('id').execute()).map((r) => r.id);
+      expect(ids).toEqual(['c1', 'c3']);
+      await expect(fresh.insertInto('commits').values(row('c4', 'abc1234')).execute()).rejects.toThrow();
+      const cols = (await fresh.introspection.getTables()).find((t) => t.name === 'tasks')!.columns.map((c) => c.name);
+      expect(cols).toContain('merged_at');
+    } finally {
+      await fresh.destroy();
+    }
   });
 });
 

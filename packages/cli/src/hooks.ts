@@ -1,5 +1,5 @@
 import type { ToolKind } from '@agentteams/shared';
-import { resolveCredential } from './credentials.js';
+import { resolveCredentialForCwd } from './credentials.js';
 import type { CliDeps } from './deps.js';
 import type { InboxMessage } from '@agentteams/shared';
 import { fitMessages, formatMessages, formatStatus } from './format.js';
@@ -48,12 +48,12 @@ export async function runHook(
   event: HookEvent,
   stdinText: string,
   tool: ToolKind,
-  deps: Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch'>,
+  deps: Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec'>,
 ): Promise<HookResult> {
   try {
     const input = parseInput(stdinText);
     const cwd = typeof input.cwd === 'string' ? input.cwd : deps.cwd;
-    const cred = await resolveCredential(deps, cwd, tool);
+    const cred = await resolveCredentialForCwd(deps, cwd, tool);
     if (!cred) return EMPTY;
     const client = new HubClient(cred.hubUrl, { apiKey: cred.apiKey, timeoutMs: HOOK_TIMEOUT_MS, fetch: deps.fetch });
 
