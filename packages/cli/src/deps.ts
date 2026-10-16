@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { homedir, userInfo } from 'node:os';
+import { createInterface } from 'node:readline/promises';
 
 export interface ExecResult { code: number; stdout: string; stderr: string }
 export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; input?: string }) => Promise<ExecResult>;
@@ -15,6 +16,8 @@ export interface CliDeps {
   readStdin: () => Promise<string>;
   homedir: string;
   username: string;
+  isTTY: boolean;
+  prompt: (question: string) => Promise<string>;
 }
 
 export const realExec: Exec = (cmd, args, opts = {}) =>
@@ -39,6 +42,15 @@ async function readAllStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+async function readlinePrompt(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
+
 export function realDeps(): CliDeps {
   return {
     env: process.env,
@@ -51,5 +63,7 @@ export function realDeps(): CliDeps {
     readStdin: readAllStdin,
     homedir: homedir(),
     username: userInfo().username,
+    isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    prompt: readlinePrompt,
   };
 }

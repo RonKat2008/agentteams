@@ -84,3 +84,11 @@ describe('oneLine', () => {
     expect(oneLine('a\nb')).toBe('a b');
   });
 });
+
+describe('formatStatus github login', () => {
+  it('shows a sanitised (@login) after the agent name', () => {
+    const base = { name: 'bob-claude', member: 'bob', tool: 'claude', presence: 'online', currentTask: null, claims: [], githubLogin: 'bo\nb' };
+    const text = formatStatus({ team: { name: 't', repo: { provider: 'local', defaultBranch: 'main' }, orchestrator: null }, agents: [base] } as never, 'me');
+    expect(text).toContain('- bob-claude (@bo b) (bob, claude)');
+  });
+});

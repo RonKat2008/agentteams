@@ -4,6 +4,7 @@ import { defaultMemberName, type InvitePreview, type ToolKind } from '@agentteam
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HubClient } from '../hubClient.js';
+import { githubTokenFor } from './hostedAuth.js';
 import { hubUrlFrom } from '../paths.js';
 import { checkTeamDir, detectGithubSlug, real, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
@@ -63,10 +64,11 @@ export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): 
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const client = new HubClient(hubUrl, { fetch: deps.fetch });
   const preview = await client.previewInvite(code);
+  const githubToken = await githubTokenFor(deps, hubUrl); // before cloning anything
   const repoPath = await resolveRepoPath(deps, preview, opts);
   await checkTeamDir(deps, repoPath);
-  const member = opts.as ?? defaultMemberName(deps.username);
-  const res = await client.joinTeam({ inviteCode: code, member, tool: opts.agent });
+  const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
+  const res = await client.joinTeam({ inviteCode: code, tool: opts.agent, ...identity });
   const cred = {
     repoPath, tool: opts.agent, hubUrl, teamName: res.teamName, agentName: res.agentName,
     apiKey: res.apiKey, createdAt: new Date().toISOString(),

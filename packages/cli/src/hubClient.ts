@@ -64,6 +64,9 @@ export class HubClient {
     return s ? `?${s}` : '';
   }
 
+  health() {
+    return this.request<{ ok: true; mode: 'local' | 'hosted' }>('GET', '/health');
+  }
   createTeam(input: CreateTeamInput) {
     return this.request<{ teamId: string; teamName: string; agentName: string; apiKey: string; inviteCode: string; inviteExpiresAt: string }>('POST', '/api/teams', input);
   }

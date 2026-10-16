@@ -33,6 +33,7 @@ export function makeTestCli(over: Partial<CliDeps> = {}, table: Record<string, P
     fetch: globalThis.fetch,
     out: (l) => out.push(l), write: (s) => raw.push(s), err: (l) => err.push(l),
     readStdin: async () => '',
+    isTTY: false, prompt: async () => '',
     ...over,
   };
   return { deps, root, out, err, raw, calls, cleanup: () => rmSync(root, { recursive: true, force: true }) };
