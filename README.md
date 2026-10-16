@@ -154,7 +154,7 @@ rules file tells it to.
 
 | Agent | `--agent` | How messages arrive | Files written |
 |---|---|---|---|
-| Claude Code | `claude` | Live: session start, every prompt, after tools, stop gate | local-scope MCP entry via `claude mcp add` (in `~/.claude.json`), `.claude/settings.local.json`, `CLAUDE.md` |
+| Claude Code | `claude` | Live: session start, every prompt, after tools, stop gate | local-scope stdio-proxy MCP entry via `claude mcp add` (in `~/.claude.json`, no key stored), `.claude/settings.local.json`, `CLAUDE.md` |
 | Codex | `codex` | Live: same four events | `~/.codex/config.toml`, `~/.codex/hooks.json`, `AGENTS.md` |
 | Cursor | `cursor` | Live: session start, after tools, stop gate (no per-prompt) | `.cursor/mcp.json`, `.cursor/hooks.json`, `.cursor/rules/agentteams.mdc`, `AGENTS.md` |
 | Gemini CLI | `gemini` | Live: session start, before agent, after tools, after agent | `.gemini/settings.json`, `GEMINI.md` |
@@ -180,7 +180,7 @@ Caveats worth knowing:
 <details>
 <summary><b>What gets written, in detail</b></summary>
 
-- `claude mcp add` receives the API key as a command-line argument, so it is briefly visible in `ps` output on a shared machine.
+- `claude mcp add` registers the stdio proxy (`agentteams mcp --tool claude --repo <repo>`), so no API key appears on a command line or in `~/.claude.json`.
 - Codex ignores per-project MCP config, so the stdio proxy (`agentteams mcp --tool codex`) resolves the
   right team for the current repo at runtime. Other adapters pin the repo with `--repo`.
 - Before changing `~/.codex/config.toml`, `~/.codex/hooks.json` or any pre-existing JSON config,
@@ -303,7 +303,8 @@ hub), or host your own below.
 ## Security notes
 
 - Use HTTPS only. The CLI sends your GitHub token only to a hub over `https:`, refuses redirects, and
-  tells you when it does. Only join hubs you trust.
+  tells you when it does. The token is sent automatically only to the official public hub; for any other hosted hub the CLI
+  names the host and asks y/N (default No), or refuses unless you pass `--trust-hub` when not interactive. Only join hubs you trust.
 - `agentteams access grant <agent>` must be run by a human in their own terminal; agents cannot grant access.
 - Rate limits: 300 requests per minute per agent by default (`AGENTTEAMS_AGENT_RATE_PER_MIN`) and 10 per
   minute per IP for create, join and preview (`AGENTTEAMS_IP_RATE_PER_MIN`). They are in-memory token

@@ -9,6 +9,7 @@ import { makeTestCli, type TestCli } from './helpers.js';
 let t: TestCli;
 let repo: string;
 let cred: Credential;
+const ARGV = { command: '/usr/bin/node', args: ['/opt/x/dist/bin.js'] };
 const CLI = "'/usr/bin/node' '/opt/x/dist/bin.js'";
 
 beforeEach(() => {
@@ -49,10 +50,12 @@ describe('mergeManagedHooks', () => {
 });
 
 describe('installClaude', () => {
-  it('registers MCP via the claude CLI without leaking the key into files', async () => {
-    const report = await installClaude(t.deps, cred, { cli: CLI });
+  it('registers the stdio proxy via the claude CLI without any key on the command line or in files', async () => {
+    const report = await installClaude(t.deps, cred, { cli: CLI, argv: ARGV });
     const add = t.calls.find((c) => c.cmd === 'claude' && c.args[1] === 'add')!;
-    expect(add.args).toEqual(['mcp', 'add', '--transport', 'http', '--scope', 'local', 'agentteams', 'http://127.0.0.1:4747/mcp', '--header', 'Authorization: Bearer at_SECRET']);
+    expect(add.args).toEqual(['mcp', 'add', '--scope', 'local', 'agentteams', '--', '/usr/bin/node', '/opt/x/dist/bin.js', 'mcp', '--tool', 'claude', '--repo', repo]);
+    expect(JSON.stringify(t.calls)).not.toContain('at_SECRET');
+    expect(JSON.stringify(t.calls)).not.toContain('Bearer');
     expect(add.cwd).toBe(repo);
     expect(report.warnings).toEqual([]);
     const settings = readFileSync(join(repo, '.claude', 'settings.local.json'), 'utf8');
@@ -81,8 +84,8 @@ describe('installClaude', () => {
 
   it('warns without the key when the claude CLI is missing', async () => {
     const t2 = makeTestCli({ cwd: repo });
-    const report = await installClaude(t2.deps, cred, { cli: CLI });
-    expect(report.warnings.join('\n')).toContain('claude mcp add --transport http --scope local agentteams');
+    const report = await installClaude(t2.deps, cred, { cli: CLI, argv: ARGV });
+    expect(report.warnings.join('\n')).toContain("claude mcp add --scope local agentteams -- '/usr/bin/node' '/opt/x/dist/bin.js' 'mcp' '--tool' 'claude' '--repo'");
     expect(report.warnings.join('\n')).not.toContain('at_SECRET');
     expect(existsSync(join(repo, '.claude', 'settings.local.json'))).toBe(true);
     t2.cleanup();
