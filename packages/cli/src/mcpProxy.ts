@@ -167,8 +167,52 @@ export async function runMcpProxy(deps: CliDeps, tool: ToolKind): Promise<void> 
   });
   const { StdioServerTransport } = await import('@modelcontextprotocol/sdk/server/stdio.js');
   const transport = new StdioServerTransport();
-  // StdioServerTransport does not notice stdin ending; close explicitly so the process can exit.
-  process.stdin.once('end', () => void server.close());
+  const inflight = trackInflight(transport);
   await server.connect(transport);
+  inflight.hook();
+  // StdioServerTransport does not notice stdin ending; once it does, let in-flight requests
+  // finish and their responses get written (bounded), then close so the process can exit.
+  process.stdin.once('end', () => {
+    void inflight.drain(DRAIN_TIMEOUT_MS).finally(() => server.close());
+  });
   await closed;
+}
+
+const DRAIN_TIMEOUT_MS = 10_000;
+
+type Transport = InstanceType<typeof import('@modelcontextprotocol/sdk/server/stdio.js').StdioServerTransport>;
+
+/** Tracks JSON-RPC requests from receipt until their response has been written to the transport. */
+function trackInflight(transport: Transport) {
+  const ids = new Set<string | number>();
+  let idle: (() => void) | null = null;
+  const settle = (id: string | number) => {
+    ids.delete(id);
+    if (ids.size === 0) idle?.();
+  };
+  const send = transport.send.bind(transport);
+  transport.send = async (message) => {
+    try {
+      await send(message);
+    } finally {
+      if ('id' in message && message.id !== undefined && !('method' in message)) settle(message.id);
+    }
+  };
+  return {
+    /** Must run after server.connect, which installs transport.onmessage. */
+    hook() {
+      const onmessage = transport.onmessage;
+      transport.onmessage = (message) => {
+        if ('id' in message && message.id !== undefined && 'method' in message) ids.add(message.id);
+        onmessage?.(message);
+      };
+    },
+    drain(timeoutMs: number): Promise<void> {
+      if (ids.size === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, timeoutMs);
+        idle = () => { clearTimeout(timer); resolve(); };
+      });
+    },
+  };
 }
