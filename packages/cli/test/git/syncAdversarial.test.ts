@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitTeamClient } from '../../src/git/client.js';
-import { newAgentKeyPair } from '../../src/git/crypto.js';
+import { decrypt, encrypt, newAgentKeyPair } from '../../src/git/crypto.js';
 import { encodeMeta } from '../../src/git/meta.js';
 import { createHlc } from '../../src/git/hlc.js';
 import { captureOp } from '../../src/git/ops.js';
@@ -190,7 +190,7 @@ describe('tree guards: oversized log trees are skipped before any path lookup', 
 });
 
 describe('own-log check cost', () => {
-  it('a flood of shard directories just under the ops limit is restored without listing each of them', async () => {
+  it('a flood of non-contiguous shard directories just under the ops limit is overwritten quickly', async () => {
     const { lead, worker } = await twoAgents();
     const evil = attacker(lead.id);
     const empty = gitIn(evil, ['mktree'], '');
@@ -202,7 +202,9 @@ describe('own-log check cost', () => {
     const l = await sync(lead);
     expect(Date.now() - t0).toBeLessThan(15_000);
     expect(l.ok).toBe(true);
-    expect(l.restored).toBe(true);
+    expect(l.pushed).toBe(true);
+    expect(git(world.remote, 'rev-parse', `refs/agentteams/${TEAM}/agents/${lead.id}^{tree}`))
+      .toBe(git(lead.repo, 'rev-parse', `refs/agentteams-local/${TEAM}/agents/${lead.id}^{tree}`));
     await sync(worker);
     expect((await stateOf(worker, lead.id))!.nextSeq).toBe(ownSeqs(lead.repo, lead.id).length);
   });
@@ -429,5 +431,173 @@ describe('R4: a round is bounded whatever the number of agents and writes', () =
     expect(s.rounds).toBe(2); // one visit per round: the second agent's presence is read in the queued round
     expect((await stateOf(worker, lead.id))!.presence!.ts).toBe(later);
     expect((await stateOf(worker, cat.id))!.presence!.ts).toBe(later);
+  });
+});
+
+describe('fix round 4 (re-review 3)', () => {
+  const agentRef = (id: string) => `refs/agentteams/${TEAM}/agents/${id}`;
+
+  it('S1: a re-encrypted copy of an accepted segment is the same segment: no equivocation warning, the owner restores', async () => {
+    const { lead, worker } = await twoAgents();
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'first' });
+    await sync(lead);
+    await sync(worker);
+    const n = ownSeqs(lead.repo, lead.id).length;
+    const seq = n - 1;
+    // Any member holds the team key: decrypt the lead's last segment and encrypt the same signed bytes again.
+    const evil = attacker(lead.id);
+    const path = `ops/00000/${String(seq).padStart(8, '0')}.bin`;
+    const original = execFileSync('git', ['cat-file', 'blob', `refs/x:${path}`], { cwd: evil });
+    const ctx = Buffer.from(`agentteams-segment-v1\0${TEAM}\0${lead.id}\0${seq}\0`, 'utf8');
+    const copy = encrypt(world.teamKey, decrypt(world.teamKey, original, ctx)!, ctx);
+    expect(copy.equals(original)).toBe(false);
+    await appendSegment(deps, evil, TEAM, lead.id, seq, copy);
+    gitIn(evil, ['update-ref', `refs/agentteams-local/${TEAM}/agents/${lead.id}`, git(evil, 'rev-parse', `refs/agentteams-local/${TEAM}/agents/${lead.id}`)]);
+    git(evil, 'push', '-q', '--force', world.remote, `refs/agentteams-local/${TEAM}/agents/${lead.id}:${agentRef(lead.id)}`);
+    const w = await sync(worker);
+    expect(w.problems).toEqual([]);
+    for (let i = 0; i < 2; i++) {
+      await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: `after-${i}` });
+      const l = await sync(lead);
+      expect(l.ok).toBe(true);
+      expect(l.errors).toEqual([]);
+      expect(l.pushed).toBe(true);
+      if (i === 0) expect(l.restored).toBe(true);
+    }
+    expect((await sync(worker)).problems).toEqual([]);
+    expect(await bodies(worker)).toEqual(expect.arrayContaining(['after-0', 'after-1']));
+  });
+
+  it('S2: a deleted agent ref is pruned: replicas warn once, the owner recreates it and keeps flowing', async () => {
+    const { lead, worker } = await twoAgents();
+    gitIn(world.remote, ['update-ref', '-d', agentRef(lead.id)]);
+    const w1 = await sync(worker);
+    expect(w1.problems).toEqual([`agent ${lead.id}: its ref was deleted on the remote; keeping its accepted log`]);
+    expect((await sync(worker)).problems).toEqual([]); // once
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'after deletion' });
+    const l = await sync(lead);
+    expect(l.ok).toBe(true);
+    expect(l.pushed).toBe(true);
+    expect(l.restored).toBe(true);
+    expect(gitIn(world.remote, ['for-each-ref', agentRef(lead.id)])).not.toBe('');
+    const w2 = await sync(worker);
+    expect(w2.problems).toEqual([]);
+    expect(await bodies(worker)).toContain('after deletion');
+  });
+
+  it('S3: a directory/file conflicting ref name never breaks a fetch; the owner clears it and recreates its ref', async () => {
+    const { lead, worker } = await twoAgents();
+    const tip = remoteHead(world, lead.id);
+    gitIn(world.remote, ['update-ref', '-d', agentRef(lead.id)]);
+    gitIn(world.remote, ['update-ref', `${agentRef(lead.id)}/x`, tip]);
+    const w1 = await sync(worker);
+    expect(w1.ok).toBe(true);
+    expect(w1.fetched).toBe(true);
+    expect(w1.problems.join('\n')).toMatch(/ignored an unexpected team ref on the remote: ".*agents\/\w+\/x"/);
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'after the conflict' });
+    const l = await sync(lead);
+    expect(l.ok).toBe(true);
+    expect(l.pushed).toBe(true);
+    expect(gitIn(world.remote, ['for-each-ref', '--format=%(refname)', `refs/agentteams/${TEAM}/agents/`])).not.toMatch(/\/x$/m);
+    const w2 = await sync(worker);
+    expect(w2.ok).toBe(true);
+    expect(w2.problems).toEqual([]);
+    expect(await bodies(worker)).toContain('after the conflict');
+  });
+
+  it('S3: a ref named .../agents (blocking every agent) is ignored by fetches and cleared by the creator', async () => {
+    const { lead, worker } = await twoAgents();
+    const tip = remoteHead(world, lead.id);
+    for (const a of [lead, worker]) gitIn(world.remote, ['update-ref', '-d', agentRef(a.id)]);
+    gitIn(world.remote, ['update-ref', `refs/agentteams/${TEAM}/agents`, tip]);
+    const w1 = await sync(worker);
+    expect(w1.fetched).toBe(true);
+    const l = await sync(lead);
+    expect(l.ok).toBe(true);
+    expect(l.pushed).toBe(true);
+    await client(worker).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'worker is back' });
+    const w2 = await sync(worker);
+    expect(w2.ok).toBe(true);
+    expect(w2.pushed).toBe(true);
+    expect((await sync(lead)).ok).toBe(true);
+    expect(await bodies(lead)).toContain('worker is back');
+  });
+
+  it('L6: lowercase and case-variant agent ids are never fetched (no clobbering on case-insensitive filesystems)', async () => {
+    const { lead, worker } = await twoAgents();
+    const variant = lead.id.toLowerCase();
+    // As on a case-sensitive host: both names packed, so this (case-insensitive) test filesystem cannot merge them.
+    const junk = gitIn(world.remote, ['commit-tree', gitIn(world.remote, ['mktree'], ''), '-m', 'x']);
+    gitIn(world.remote, ['pack-refs', '--all']);
+    const packed = join(world.remote, 'packed-refs');
+    const [header, ...lines] = readFileSync(packed, 'utf8').split('\n').filter(Boolean);
+    const all = [...lines, `${junk} refs/agentteams/${TEAM}/agents/${variant}`].sort((x, y) => (x.split(' ')[1]! < y.split(' ')[1]! ? -1 : 1));
+    writeFileSync(packed, `${[header, ...all].join('\n')}\n`);
+    const w = await sync(worker);
+    expect(w.ok).toBe(true);
+    expect(w.problems).toEqual([`ignored an unexpected team ref on the remote: ${JSON.stringify(`refs/agentteams/${TEAM}/agents/${variant}`)}`]);
+    const l = await sync(lead);
+    expect(l.problems).toEqual([expect.stringMatching(/ignored an unexpected team ref/)]);
+    expect(l.restored).toBe(false);
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'unclobbered' });
+    await sync(lead);
+    const w2 = await sync(worker);
+    expect(w2.problems).toEqual([]);
+    expect(await bodies(worker)).toContain('unclobbered');
+  });
+
+  it('S4: 8000 empty shards after our real ones cost nothing: the owner checks only its expected paths', async () => {
+    const { lead, worker } = await twoAgents();
+    const evil = attacker(lead.id);
+    const empty = gitIn(evil, ['mktree'], '');
+    const real = gitIn(evil, ['ls-tree', 'refs/x:ops']);
+    const flood = Array.from({ length: 8000 }, (_, i) => `040000 tree ${empty}\t${String(i + 1).padStart(5, '0')}`).join('\n');
+    const ops = gitIn(evil, ['mktree'], `${real}\n${flood}\n`);
+    const root = gitIn(evil, ['mktree'], `040000 tree ${ops}\tops\n${gitIn(evil, ['ls-tree', 'refs/x']).split('\n').filter((l) => !l.endsWith('\tops')).join('\n')}\n`);
+    pushTo(evil, gitIn(evil, ['commit-tree', root, '-m', 'shard flood']), lead.id);
+    const t0 = Date.now();
+    const l = await sync(lead);
+    const ms = Date.now() - t0;
+    console.info(`S4: owner round over 8000 empty shards took ${ms} ms`);
+    expect(ms).toBeLessThan(2500);
+    expect(l.ok).toBe(true);
+    expect(l.restored).toBe(true);
+    expect((await sync(worker)).problems).toEqual([]);
+  });
+
+  it('S5: the round-robin offset advances by the agents served, so every backlogged agent is served within a call', async () => {
+    const { lead, worker } = await twoAgents();
+    const agents: Agent[] = [lead];
+    for (const m of ['cat', 'dan', 'eve', 'fay', 'gus']) agents.push(await bootstrap(world, world.clone(m), 'join', m));
+    for (const a of agents) {
+      await appendMany(world, a, ownSeqs(a.repo, a.id).length, 40);
+      expect((await sync(a)).ok).toBe(true);
+    }
+    const before = await Promise.all(agents.map(async (a) => (await stateOf(worker, a.id))?.nextSeq ?? 0));
+    const s = await sync(worker, { budget: { segments: 16, presence: 64 } });
+    expect(s.rounds).toBe(4); // 4 rounds x 2 agents served = 8 >= 6 agents
+    const after = await Promise.all(agents.map(async (a) => (await stateOf(worker, a.id))?.nextSeq ?? 0));
+    expect(after.every((n, i) => n > before[i]!)).toBe(true);
+  });
+
+  it('L5: a re-cloned creator pins itself from its credential, refuses a forged meta and repairs it', async () => {
+    const { lead, worker } = await twoAgents();
+    const keys = newAgentKeyPair();
+    const evil = world.clone('evil-meta');
+    await writeMeta(deps, evil, TEAM, encodeMeta({
+      teamId: TEAM, name: 'x', createdAt: new Date().toISOString(), defaultBranch: 'main', agentId: '01JZZZZZZZZZZZZZZZZZZZZZZZ', publicKey: keys.publicKey,
+    }, world.teamKey, keys.privateKey));
+    git(evil, 'push', '-q', '--force', world.remote, `refs/agentteams-local/${TEAM}/meta:refs/agentteams/${TEAM}/meta`);
+    const a2 = world.clone('a2');
+    const lead2: Agent = { ...lead, repo: a2, cred: { ...lead.cred, repoPath: a2 } };
+    const r1 = await sync(lead2);
+    expect(r1.problems.join('\n')).toMatch(/names creator 01JZZ.*not the pinned one/);
+    expect(await teamCreatorOf(await view(lead2))).toEqual({ agentId: lead.id, publicKey: lead.cred.git!.publicKey });
+    const r2 = r1.metaRestored ? r1 : await sync(lead2);
+    expect(r2.metaRestored).toBe(true);
+    const carl = await bootstrap(world, world.clone('carl'), 'join', 'carl');
+    expect((await sync(carl)).problems).toEqual([]);
+    expect(await teamCreatorOf(await view(carl))).toEqual({ agentId: lead.id, publicKey: lead.cred.git!.publicKey });
+    expect((await sync(worker)).problems).toEqual([]);
   });
 });

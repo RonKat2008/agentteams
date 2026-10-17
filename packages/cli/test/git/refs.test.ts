@@ -78,7 +78,7 @@ describe('git refs layer', () => {
     expect(await pushMeta(deps, a, remote, TEAM)).toEqual({ ok: true });
     expect(await pushOwn(deps, a, remote, TEAM, A, null)).toEqual({ ok: true });
 
-    expect(await fetchTeam(deps, b, remote, TEAM)).toEqual({ ok: true });
+    expect(await fetchTeam(deps, b, remote, TEAM)).toMatchObject({ ok: true, ignored: [], pruned: [] });
     expect(await agentsIn(b)).toEqual([A]);
     const got = segs(b, fetchedRef(A));
     expect(got.map((s) => s.seq)).toEqual([1, 2, 3]);
@@ -226,10 +226,10 @@ describe('git refs layer', () => {
     await appendSegment(deps, a, TEAM, A, 1, bin(1));
     const calls: { args: string[]; env?: Record<string, string>; timeoutMs?: number }[] = [];
     const spy: Exec = (cmd, args, opts) => { calls.push({ args, env: opts?.env, timeoutMs: opts?.timeoutMs }); return realExec(cmd, args, opts); };
-    await fetchTeam({ exec: spy }, a, remote, TEAM);
     await pushOwn({ exec: spy }, a, remote, TEAM, A, null);
-    const net = calls.filter((c) => c.args[0] === 'fetch' || c.args[0] === 'push');
-    expect(net).toHaveLength(2);
+    await fetchTeam({ exec: spy }, b, remote, TEAM);
+    const net = calls.filter((c) => ['ls-remote', 'fetch', 'push'].includes(c.args[0]!));
+    expect(net.map((c) => c.args[0])).toEqual(['push', 'ls-remote', 'fetch']);
     for (const c of net) {
       expect(c.args[c.args.indexOf(remote) - 1]).toBe('--');
       expect(c.env?.GIT_ALLOW_PROTOCOL).toBe('file:git:http:https:ssh');

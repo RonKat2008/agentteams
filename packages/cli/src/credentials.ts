@@ -18,6 +18,11 @@ export interface GitCredential {
   teamKey: string;
   publicKey: string;
   privateKey: string;
+  /**
+   * The team's creator (agent id and public key), from the invite, or this agent itself for the creator. Pinned
+   * before every round's fetch, so no clone of this credential trusts a forged team meta on first sight.
+   */
+  creator?: { agentId: string; publicKey: string };
 }
 
 export interface Credential {

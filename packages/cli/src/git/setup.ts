@@ -159,7 +159,7 @@ export async function createGitTeam(deps: Deps, input: GitCreateInput): Promise<
   });
   const cred: Credential = {
     repoPath, tool, hubUrl: '', teamName: input.name, agentName, apiKey: '', createdAt: new Date().toISOString(),
-    transport: 'git', git: { teamId, agentId, remote, teamKey, ...keys },
+    transport: 'git', git: { teamId, agentId, remote, teamKey, ...keys, creator: { agentId, publicKey: keys.publicKey } },
   };
   let summary: SyncSummary;
   try {
@@ -264,7 +264,7 @@ export async function joinGitTeam(deps: Deps, input: GitJoinInput): Promise<GitS
   // probe identity that never writes anything.
   const probe: Credential = {
     repoPath, tool, hubUrl: '', teamName: '', agentName: '', apiKey: '', createdAt: new Date().toISOString(),
-    transport: 'git', git: { teamId, agentId: mintOpId(createHlc().tick()), remote, teamKey, ...keys },
+    transport: 'git', git: { teamId, agentId: mintOpId(createHlc().tick()), remote, teamKey, ...keys, creator: { ...creator } },
   };
   const probeView = await openGitView(deps, probe);
   const keyPinsBefore = new Set((await probeView.store.ctx.db.selectFrom('agent_key_pins').select('agent_id').execute()).map((r) => r.agent_id));

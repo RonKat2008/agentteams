@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { SIGNATURE_LEN, decrypt, encrypt, isKeyString, sign, verify } from './crypto.js';
 
 export interface Op {
@@ -65,6 +66,22 @@ export function encodeSegment(
   const out = encrypt(teamKey, Buffer.concat([sig, plaintext]), ctx);
   if (out.length > MAX_SEGMENT_BYTES) throw new Error(`segment exceeds ${MAX_SEGMENT_BYTES} bytes`);
   return out;
+}
+
+/**
+ * Identity of a segment's signed content: sha256 of the decrypted bytes (signature | plaintext) at `loc`, or null
+ * when it does not decrypt there. Ed25519 signatures are deterministic, so the same signed segment has the same
+ * hash however many times it is re-encrypted (every member holds the team key and can re-encrypt). Equivocation is
+ * decided on this, never on blob or ciphertext ids. Never throws.
+ */
+export function segmentContentHash(buf: Buffer, teamKey: string, loc: SegmentLocation): string | null {
+  try {
+    if (!Buffer.isBuffer(buf) || buf.length > MAX_SEGMENT_BYTES || !AGENT_ID_RE.test(loc.agent) || !isSeq(loc.seq)) return null;
+    const inner = decrypt(teamKey, buf, contextBytes(loc));
+    return inner ? createHash('sha256').update(inner).digest('hex') : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

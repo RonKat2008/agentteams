@@ -238,12 +238,81 @@ function failure(r: { stderr: string; stdout: string; timedOut?: boolean }): Pus
   return { ok: false, error: r.stderr.trim() || r.stdout.trim() || 'git failed' };
 }
 
-/** Fetch every team ref into `refs/agentteams-remote/<team>/*`. Never throws on network/remote errors. */
-export async function fetchTeam(deps: GitDeps, repo: string, remote: string, teamId: string): Promise<PushResult> {
+/** Canonical agent ids in ref names: an uppercase Crockford ULID (26 chars). Anything else is never fetched. */
+export const AGENT_REF_ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+/** Output cap for listing the remote's team refs. */
+const LS_REMOTE_MAX_BYTES = 32 * 1024 * 1024;
+
+export interface RemoteRef { ref: string; oid: string }
+export interface FetchResult extends PushResult {
+  /** Refs under the team prefix that are not `meta` or `agents/<canonical id>`: never fetched (warn, maybe clean up). */
+  ignored?: RemoteRef[];
+  /** Fetched refs removed because the remote no longer has them (relative names, e.g. `agents/<id>`). */
+  pruned?: string[];
+}
+
+/** Our relative name for a valid team ref (`meta` or `agents/<id>`), else null. */
+function teamRefName(teamId: string, ref: string): string | null {
+  const base = `refs/agentteams/${teamId}/`;
+  if (!ref.startsWith(base)) return null;
+  const rest = ref.slice(base.length);
+  if (rest === 'meta') return rest;
+  const m = /^agents\/([^/]+)$/.exec(rest);
+  return m && AGENT_REF_ID_RE.test(m[1]!) ? rest : null;
+}
+
+/**
+ * Fetches the team's refs (never a glob): lists `refs/agentteams/<team>` on the remote, keeps the exact names
+ * `meta` and `agents/<canonical ULID>`, fetches the changed ones with explicit refspecs in one call, and deletes
+ * fetched refs the remote no longer has (prune). Other names are returned in `ignored`, never fetched, so a
+ * directory/file name conflict or a case variant can never break or clobber a fetch. Never throws on network or
+ * remote errors.
+ */
+export async function fetchTeam(deps: GitDeps, repo: string, remote: string, teamId: string): Promise<FetchResult> {
   assertId('team', teamId);
   validateRemote(remote);
-  const spec = `+refs/agentteams/${teamId}/*:refs/agentteams-remote/${teamId}/*`;
-  const r = await git(deps, repo, ['fetch', '--quiet', '--no-tags', '--', remote, spec], { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+  const base = `refs/agentteams/${teamId}`;
+  const ls = await git(deps, repo, ['ls-remote', '--', remote, base, `${base}/*`],
+    { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS, maxBytes: LS_REMOTE_MAX_BYTES });
+  if (ls.code !== 0) return failure(ls);
+  const wanted = new Map<string, string>();
+  const ignored: RemoteRef[] = [];
+  for (const line of ls.stdout.split('\n')) {
+    const [oid, ref] = line.split('\t');
+    if (!oid || !ref || !SHA_RE.test(oid)) continue;
+    if (ref !== base && !ref.startsWith(`${base}/`)) continue;
+    const name = teamRefName(teamId, ref);
+    if (name) wanted.set(name, oid);
+    else ignored.push({ ref, oid });
+  }
+  const have = await tipsUnder(deps, repo, `refs/agentteams-remote/${teamId}/`, true);
+  const changed = [...wanted].filter(([name, oid]) => have.get(name) !== oid);
+  if (changed.length > 0) {
+    const input = changed.map(([name]) => `+${base}/${name}:refs/agentteams-remote/${teamId}/${name}\n`).join('');
+    const f = await git(deps, repo, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--stdin', '--', remote],
+      { input, env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+    if (f.code !== 0) return failure(f);
+  }
+  const pruned = [...have.keys()].filter((name) => !wanted.has(name));
+  if (pruned.length > 0) {
+    await gitOk(deps, repo, ['update-ref', '--stdin'], { input: pruned.map((n) => `delete refs/agentteams-remote/${teamId}/${n}\n`).join('') });
+  }
+  return { ok: true, ignored, pruned };
+}
+
+/**
+ * Deletes refs on the remote, each leased on the object we observed (a concurrent change makes it fail). Used to
+ * clear names that block ours (directory/file conflicts): the owner clears `agents/<own id>/...`, the creator the
+ * team-level blockers.
+ */
+export async function deleteRemoteRefs(deps: GitDeps, repo: string, remote: string, refs: RemoteRef[]): Promise<PushResult> {
+  validateRemote(remote);
+  if (refs.length === 0) return { ok: true };
+  for (const r of refs) {
+    if (!SHA_RE.test(r.oid) || !r.ref.startsWith('refs/agentteams/') || /[\s\0:~^?*[\\]/.test(r.ref)) throw new Error('deleteRemoteRefs: invalid ref');
+  }
+  const r = await git(deps, repo, ['push', '--quiet', ...refs.map((x) => `--force-with-lease=${x.ref}:${x.oid}`), '--', remote, ...refs.map((x) => `:${x.ref}`)],
+    { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
   return r.code === 0 ? { ok: true } : failure(r);
 }
 
@@ -285,16 +354,18 @@ export async function restoreMeta(deps: GitDeps, repo: string, remote: string, t
 
 // ---- Reading refs and objects (used by the sync engine) ------------------------------------------------
 
-/** Tips of every agent ref under `prefix`: agent id -> object id (whatever its type; callers check). */
-async function tipsUnder(deps: GitDeps, repo: string, prefix: string): Promise<Map<string, string>> {
-  const r = await git(deps, repo, ['for-each-ref', '--format=%(objectname) %(refname)', prefix]);
+/**
+ * Refs under `prefix`: name relative to it -> object id (whatever its type; callers check). Agent ids only, or with
+ * `anyName` every relative name. A git failure throws (it must not look like "no agents").
+ */
+async function tipsUnder(deps: GitDeps, repo: string, prefix: string, anyName = false): Promise<Map<string, string>> {
+  const r = await gitOk(deps, repo, ['for-each-ref', '--format=%(objectname) %(refname)', prefix]);
   const out = new Map<string, string>();
-  if (r.code !== 0) return out;
   for (const line of r.stdout.split('\n')) {
     const sp = line.indexOf(' ');
     const oid = line.slice(0, sp);
     const id = line.slice(sp + 1 + prefix.length);
-    if (SHA_RE.test(oid) && ID_RE.test(id)) out.set(id, oid);
+    if (SHA_RE.test(oid) && (anyName ? id.length > 0 : ID_RE.test(id))) out.set(id, oid);
   }
   return out;
 }
@@ -380,6 +451,27 @@ export async function readBlobs(deps: GitDeps, repo: string, shas: string[]): Pr
   if (!shas.every((x) => SHA_RE.test(x))) throw new Error('readBlobs: invalid object id');
   const r = await gitOk(deps, repo, ['cat-file', '--batch'], { input: `${shas.join('\n')}\n`, binary: true });
   return parseBatch(r.stdoutBuf ?? Buffer.alloc(0), shas.length);
+}
+
+/** Largest cumulative size of one `cat-file --batch` read (callers know every size from objectInfo). */
+export const MAX_BATCH_READ_BYTES = 16 * 1024 * 1024;
+
+/** Reads blobs of known sizes, in batches of at most MAX_BATCH_READ_BYTES, in order. */
+export async function readSizedBlobs(deps: GitDeps, repo: string, items: Array<{ oid: string; size: number }>): Promise<Buffer[]> {
+  const out: Buffer[] = [];
+  let batch: string[] = [];
+  let bytes = 0;
+  for (const it of items) {
+    if (batch.length > 0 && bytes + it.size > MAX_BATCH_READ_BYTES) {
+      out.push(...(await readBlobs(deps, repo, batch)));
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(it.oid);
+    bytes += it.size;
+  }
+  out.push(...(await readBlobs(deps, repo, batch)));
+  return out;
 }
 
 /** Entries of a tree we already size-checked (or wrote ourselves): name -> {oid, type}. */

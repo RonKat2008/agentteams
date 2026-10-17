@@ -10,25 +10,28 @@
  *   - Accepted: per agent `nextSeq`, the blob id (content hash) of each accepted seq, and the last presence.
  *   - Refused: a blob that does not verify stops that agent at that seq for this tip, with one warning; any later
  *     tip is read again, so a valid blob at the same path is accepted.
- *   - Equivocation: when a tip changes, the last accepted seq is looked up again; different content there is logged
- *     (signed by the agent: equivocation; unsigned: vandalism) and ignored. The accepted copy stays.
+ *   - Equivocation: when a tip changes, the last accepted seq is looked up again and compared by its decrypted, signed
+ *     content (segmentContentHash), never by blob id: a re-encrypted copy is the same segment and is ignored
+ *     silently. Different signed content is equivocation; content that does not verify is vandalism. Both are
+ *     logged and ignored; the accepted copy stays.
  *   - Size guards before any lookup: the tip commit, the root tree (<= 4 KiB: `ops` and `presence.bin`), the `ops`
  *     tree (<= 4 MiB) and each shard tree (<= 64 KiB). An oversized log is skipped with a warning.
  *   - Budget: remote agents share a per-round budget of segments and of agent visits (each visit reads at most one
- *     presence), handed out round-robin from a rotating offset so no agent starves. Logs of this clone are not
- *     budgeted. Leftover work is reported as `morePending` and continues next round.
+ *     presence), handed out round-robin. The start offset advances by the number of agents served each round, so
+ *     with B agents holding backlogs every one is served within about B / 8 rounds (B / 64 for visits). Logs of
+ *     this clone are not budgeted. Leftover work is reported as `morePending` and continues next round.
  *   - A tip fully processed is cached (`doneTip`), so an unchanged agent costs nothing.
  */
 import type { CliDeps } from '../deps.js';
 import type { Op } from './ops.js';
 import { decodePresence, isNewer } from './presence.js';
 import {
-  MAX_COMMIT_BYTES, MAX_OPS_TREE_BYTES, MAX_PRESENCE_BYTES, MAX_ROOT_TREE_BYTES, MAX_SHARD_TREE_BYTES, objectInfo, readBlobs, segFile,
+  MAX_COMMIT_BYTES, MAX_OPS_TREE_BYTES, MAX_PRESENCE_BYTES, MAX_ROOT_TREE_BYTES, MAX_SHARD_TREE_BYTES, objectInfo, readSizedBlobs, segFile,
   shardOf, type ObjInfo,
 } from './refs.js';
 import type { AcceptedSegment, AgentLogState } from './replicaStore.js';
 import { getPinnedKey, pinAgentKey } from './replay.js';
-import { MAX_SEGMENT_BYTES, decodeSegment } from './segment.js';
+import { MAX_SEGMENT_BYTES, decodeSegment, segmentContentHash } from './segment.js';
 import type { SyncLock } from './syncState.js';
 import type { GitView } from './view.js';
 
@@ -140,12 +143,14 @@ interface Cursor {
   stuck: boolean;
   /** A git failure (not refused data): retried next round. */
   failed: boolean;
+  /** Received segment reads this round (for the rotation). */
+  served: boolean;
 }
 
 function newCursor(view: GitView, target: IngestTarget, prev: AgentLogState | null): Cursor {
-  const { doneTip: _d, stuck: _s, ...rest } = prev ?? { nextSeq: 0 };
+  const { doneTip: _d, stuck: _s, gone: _g, ...rest } = prev ?? { nextSeq: 0 };
   return {
-    target, prev, next: { ...rest }, shards: new Map(), accepted: [], segDone: false, presenceDone: false, stuck: false, failed: false,
+    target, prev, next: { ...rest }, shards: new Map(), accepted: [], segDone: false, presenceDone: false, stuck: false, failed: false, served: false,
     ...(target.agent === view.git.agentId ? { requireKey: view.git.publicKey } : {}),
   };
 }
@@ -166,13 +171,17 @@ async function openCursor(deps: Deps, repo: string, view: GitView, c: Cursor, pr
   const info = found[0]?.info;
   if (!info) {
     problems.push(`agent ${agent}: its log no longer has seq ${last} (rolled back or vandalised); keeping the accepted copy`);
-  } else if (info.oid !== c.next.lastBlob) {
-    const signed = info.type === 'blob' && info.size <= MAX_SEGMENT_BYTES
-      && typeof (await verifySegment(view, agent, c.requireKey, last, (await readBlobs(deps, repo, [info.oid]))[0]!)) !== 'string';
-    problems.push(signed
-      ? `agent ${agent}: equivocation: seq ${last} exists with different content signed by this agent; keeping the first copy`
-      : `agent ${agent}: seq ${last} was replaced with data that does not verify; ignored`);
+    return;
   }
+  if (info.oid === c.next.lastBlob) return;
+  const data = info.type === 'blob' && info.size <= MAX_SEGMENT_BYTES ? (await readSizedBlobs(deps, repo, [info]))[0]! : null;
+  const { teamKey, teamId } = view.git;
+  const hash = data ? segmentContentHash(data, teamKey, { teamId, agent, seq: last }) : null;
+  if (hash !== null && hash === c.next.lastHash) return; // a re-encrypted copy of the accepted segment: the same
+  const signed = data !== null && typeof (await verifySegment(view, agent, c.requireKey, last, data)) !== 'string';
+  problems.push(signed
+    ? `agent ${agent}: equivocation: seq ${last} exists with different content signed by this agent; keeping the first copy`
+    : `agent ${agent}: seq ${last} was replaced with data that does not verify; ignored`);
 }
 
 /** Reads, verifies and accepts up to `n` segments. Returns how many were read (accepted or refused). */
@@ -187,13 +196,15 @@ async function readSegments(deps: Deps, repo: string, view: GitView, c: Cursor, 
     if (f.info.size > MAX_SEGMENT_BYTES) { refused = `seq ${f.seq} is ${f.info.size} bytes, over the segment limit`; break; }
     ok.push(f);
   }
-  const blobs = await readBlobs(deps, repo, ok.map((f) => f.info.oid));
+  const blobs = await readSizedBlobs(deps, repo, ok.map((f) => f.info));
+  const { teamKey, teamId } = view.git;
   for (let i = 0; i < ok.length && !refused; i++) {
     const { seq, info } = ok[i]!;
     const v = await verifySegment(view, agent, c.requireKey, seq, blobs[i]!);
     if (typeof v === 'string') { refused = `seq ${seq} ${v}`; break; }
-    c.accepted.push({ seq, blob: info.oid, ops: v });
-    c.next = { ...c.next, nextSeq: seq + 1, lastBlob: info.oid };
+    const hash = segmentContentHash(blobs[i]!, teamKey, { teamId, agent, seq })!;
+    c.accepted.push({ seq, blob: info.oid, hash, ops: v });
+    c.next = { ...c.next, nextSeq: seq + 1, lastBlob: info.oid, lastHash: hash };
   }
   if (refused) {
     problems.push(`agent ${agent}: ${refused}; refused`);
@@ -216,7 +227,7 @@ async function readPresence(deps: Deps, repo: string, view: GitView, c: Cursor, 
   // Presence counts only for an agent whose bootstrap (seq 0) was accepted: wait for it.
   const key = c.requireKey ?? (c.next.nextSeq > 0 ? await getPinnedKey(view.store, agent) : undefined);
   if (!key) { c.presenceDone = c.segDone; return; }
-  const [buf] = await readBlobs(deps, repo, [p.oid]);
+  const [buf] = await readSizedBlobs(deps, repo, [p]);
   const dec = decodePresence(buf!, view.git.teamKey, view.git.teamId, agent, key);
   if (!dec) problems.push(`agent ${agent}: presence does not verify; ignored`);
   else if (!isNewer(dec, c.next.presence)) problems.push(`agent ${agent}: presence is not newer than the last one (replayed?); ignored`);
@@ -256,7 +267,10 @@ export async function ingestAgents(
   const state = await files.readLogState();
   const problems: string[] = [];
   let morePending = false;
-  const todo = rotate(targets.filter((t) => state.agents[t.agent]?.doneTip !== t.tip), state.rotation ?? 0);
+  // Rotate the stable (sorted) list of all agents, then skip the ones with nothing new: the offset stays meaningful
+  // while agents finish.
+  const ordered = rotate(targets, state.rotation ?? 0);
+  const todo = ordered.filter((t) => state.agents[t.agent]?.doneTip !== t.tip);
   const cursors: Cursor[] = [];
   for (const target of todo) {
     const bounded = budget !== null && !target.local;
@@ -275,6 +289,7 @@ export async function ingestAgents(
       const n = bounded ? Math.min(QUANTUM, budget.segments) : LOCAL_BATCH;
       if (n <= 0) continue;
       let used = 0;
+      c.served = true;
       await isolated(c, problems, async () => { used = await readSegments(deps, repo, view, c, n, problems); });
       if (bounded) budget.segments -= used;
       progressed = true;
@@ -297,8 +312,27 @@ export async function ingestAgents(
     ops.push(...c.accepted.flatMap((s) => s.ops));
   }
   if (budget !== null && todo.length > 0) {
+    // Advance just past the last agent served this round (the last one visited when segments were not the limit).
+    const last = [...cursors].reverse().find((c) => budget.segments > 0 || c.served) ?? cursors[0];
+    const advance = last ? ordered.indexOf(last.target) + 1 : 1;
     await lock?.assertOwned();
-    await files.setRotation((state.rotation ?? 0) + 1);
+    await files.setRotation(((state.rotation ?? 0) + Math.max(1, advance)) % Math.max(1, targets.length));
   }
   return { ops, problems, morePending };
+}
+
+/**
+ * Agents we accepted data from whose ref is gone from the remote (and not written in this clone): warned once each
+ * (`gone`), keeping everything accepted. The flag clears when the ref comes back.
+ */
+export async function noteDeletedRefs(view: GitView, lock: SyncLock | null, present: ReadonlySet<string>): Promise<string[]> {
+  const { files } = view;
+  const problems: string[] = [];
+  for (const [agent, st] of Object.entries((await files.readLogState()).agents)) {
+    if (present.has(agent) || st.gone || st.nextSeq === 0) continue;
+    problems.push(`agent ${agent}: its ref was deleted on the remote; keeping its accepted log`);
+    await lock?.assertOwned();
+    await files.setAgentState(agent, { ...st, gone: true }, st);
+  }
+  return problems;
 }

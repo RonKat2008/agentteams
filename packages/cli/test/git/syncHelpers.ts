@@ -70,7 +70,10 @@ export async function bootstrap(
   const cred: Credential = {
     repoPath: repo, tool, hubUrl: opts.remote ?? world.remote, teamName: 'alpha', agentName: name, apiKey: '',
     createdAt: '2026-10-16T00:00:00.000Z', transport: 'git',
-    git: { teamId: TEAM, agentId, remote: opts.remote ?? world.remote, teamKey: world.teamKey, ...keys },
+    git: {
+      teamId: TEAM, agentId, remote: opts.remote ?? world.remote, teamKey: world.teamKey, ...keys,
+      ...(kind === 'createTeam' ? { creator: { agentId, publicKey: keys.publicKey } } : {}),
+    },
   };
   await writeBootstrap(deps, repo, cred, op);
   return { cred, repo, name, id: agentId };
