@@ -152,4 +152,17 @@ describe('LocalTeamClient', () => {
     expect((await alice.markMerged(t.number, 'https://example.com/pr/1')).mergedAt).toBeTruthy();
     await expect(alice.getTask(999)).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
+
+  it('logs each task step once: create, assign, claim (twice), without duplicates', async () => {
+    const { openTeamStore } = await import('../src/local/store.js');
+    const { ctx, core } = await openTeamStore(gitDeps, r.repo);
+    const actor = await core.authenticate(ctx, s.alice.apiKey);
+    const { createTask, assignTask } = await import('../../hub/src/services/tasks.js');
+    const t = await createTask(ctx, actor, { title: 'Once only', description: '' });
+    await assignTask(ctx, actor, { task: t.number, assignee: s.bob.agentName });
+    await bob.claimTask(t.number);
+    await bob.claimTask(t.number); // `agentteams worktree` after the agent already claimed
+    const mine = (await alice.activity({ limit: 500 })).filter((e) => (e.data as { task?: number }).task === t.number);
+    expect(mine.map((e) => e.type)).toEqual(['task_created', 'task_assigned', 'task_claimed']);
+  });
 });

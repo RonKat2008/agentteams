@@ -121,6 +121,8 @@ export async function claimTask(ctx: HubContext, actor: Actor, input: ClaimTaskI
     const task = await getTask(tx, actor.teamId, p.task);
     assertNotDone(task);
     if (task.assignee_agent_id && task.assignee_agent_id !== actor.id) await assertAssignee(tx, actor, task, 'claim');
+    // Re-claiming one's own in-progress task (e.g. `agentteams worktree` after the MCP claim_task) changes nothing.
+    if (task.assignee_agent_id === actor.id && task.status === 'in_progress') return;
     await tx.db.updateTable('tasks')
       .set({ assignee_agent_id: actor.id, status: 'in_progress', updated_at: tx.now().toISOString() })
       .where('id', '=', task.id).execute();
