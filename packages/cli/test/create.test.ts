@@ -200,6 +200,31 @@ describe('create in an existing repo', () => {
     expect(teamBodies.at(-1)?.repo).toEqual({ provider: 'github', slug: 'me/old', defaultBranch: 'trunk' });
   });
 
+  it('makes an empty first commit in a repo without one, so task worktrees can branch', async () => {
+    const t = mk(scriptedExec(okGh, []));
+    await git(t.deps.cwd, 'init', '-q', '-b', 'main');
+    expect(await run(t, 'create', 'fresh', '--this-computer', '--no-install')).toBe(0);
+    expect(await git(t.deps.cwd, 'log', '-1', '--format=%s')).toBe('chore: start agentteams team');
+    expect(t.out.join('\n')).toContain('empty first commit');
+  });
+
+  it('leaves a repo that already has commits alone', async () => {
+    const t = mk(scriptedExec(okGh, []));
+    await git(t.deps.cwd, 'init', '-q', '-b', 'main');
+    await git(t.deps.cwd, 'commit', '-q', '--allow-empty', '-m', 'mine');
+    expect(await run(t, 'create', 'old', '--this-computer', '--no-install')).toBe(0);
+    expect(await git(t.deps.cwd, 'log', '--format=%s')).toBe('mine');
+  });
+
+  it('without a git identity, creates the team and says to commit first', async () => {
+    process.env.GIT_CONFIG_GLOBAL = emptyConfig;
+    const t = mk(scriptedExec(okGh, []));
+    await git(t.deps.cwd, 'init', '-q', '-b', 'main');
+    expect(await run(t, 'create', 'noid', '--this-computer', '--no-install')).toBe(0);
+    expect((await realExec('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: t.deps.cwd })).code).not.toBe(0);
+    expect(t.err.join('\n')).toMatch(/no commits yet.*git commit --allow-empty -m "chore: start agentteams team"/s);
+  });
+
   it('warns but continues when gh cannot verify access', async () => {
     const t = mk(scriptedExec((a) => (a[1] === 'view' ? { code: 1, stderr: 'Could not resolve\nmore' } : { code: 0 }), []));
     await setup(t);

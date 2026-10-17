@@ -273,7 +273,10 @@ Teams made with `--hub` are separate (see Advanced).
 Each task gets its own branch and worktree, and commits are checked against file claims.
 
 1. `agentteams worktree <task>` claims the task and creates branch `at/<agent>/<task>` in a worktree at
-   `<parent of repo>/<repo>.at/<agent>-<task>`. Work and commit there.
+   `<repo>/.agentteams/worktrees/<agent>/<task>`. Work and commit there. `.agentteams/` is added to
+   `.git/info/exclude` (per clone, so no tracked file changes and nothing to commit). Worktrees made by older
+   versions next to the repo (`<repo>.at/<agent>-<task>`) keep working. A repo with no commits has nothing to branch
+   from: make a first commit (`create` does this for you when your git identity is set).
 2. A pre-commit check looks at the team's file claims (as of your last sync) and blocks the commit if another agent
    holds an exclusive claim on a file you are committing. Message the owner instead. As a last resort,
    `AGENTTEAMS_ALLOW=1 git commit ...` overrides the check; the override is logged to the team.
@@ -283,6 +286,38 @@ Each task gets its own branch and worktree, and commits are checked against file
    run on the task branch, not the default branch.
 4. `agentteams pr <task>` opens a pull request with `gh` (needs `gh`). If one exists, its URL is printed.
 5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
+
+### Starting agents on their tasks (`agentteams run`)
+
+Assigning a task does not wake the assignee's tool by itself. On the computer where the assignee's agent lives,
+`agentteams run <task>` claims the task as that agent, makes its worktree and starts the tool there non-interactively
+with a prompt to work the task through the agentteams MCP tools and finish with `agentteams done` (or
+`complete_task`). It runs as the assignee: pick its credential with `--agent <tool>` when the repo has several, and a
+task assigned to someone else is refused. Output streams to the terminal and to
+`.git/agentteams/runs/<task>-<agent>.log`; `--detach` runs it in the background (output only in the log).
+`--model <m>` is passed to the tool's own `--model` flag.
+
+| Tool | Command started |
+|---|---|
+| Codex | `codex exec --sandbox workspace-write --add-dir <repo>/.git -C <worktree> "<prompt>"` |
+| Cursor | `cursor-agent -p --output-format text --trust --approve-mcps --force --workspace <worktree> --add-dir <repo>/.git "<prompt>"` |
+| Claude Code | `claude -p "<prompt>" --permission-mode acceptEdits --allowedTools mcp__agentteams "Bash(git *)"` |
+| Gemini CLI | `gemini -p "<prompt>" --yolo` (headless Gemini cannot call MCP tools otherwise) |
+
+Other tools have no non-interactive mode agentteams can drive; `run` says so. The exact command (without the prompt)
+is the first line of the log, so you can rerun it by hand with other flags.
+
+`agentteams run --all` (for the orchestrator) starts, in the background, every assigned, unfinished task whose agent
+has a credential in this repo on this computer and whose tool is installed; it skips agents that already have a run
+going and tasks that were already started once (rerun those with `agentteams run <task>`), and prints why it skipped
+each task. `agentteams run --watch [--interval <seconds>]` does the same every 30 seconds (by default) until Ctrl-C, so
+new assignments start on their own; runs it started keep going after you stop watching.
+
+**Codex sandbox.** Task worktrees are inside the repo, so Codex's `workspace-write` sandbox can edit them;
+`agentteams run` also passes `--add-dir <repo>/.git` because commits from a linked worktree write to the main
+repo's `.git`. Running Codex yourself in a worktree, use `codex --sandbox workspace-write --add-dir <repo>/.git`.
+The sandbox has no network, so `agentteams done` cannot push from inside it; the prompt then falls back to
+`complete_task`, and you push the branch (`git push -u origin at/<agent>/<task>`) from outside.
 
 The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). The pre-commit hook blocks
 only when the CLI exits 3; any other failure (a crash, a missing CLI) allows the commit and warns on stderr.
@@ -315,7 +350,7 @@ fi
 | Command | Purpose |
 |---|---|
 | `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
-| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only |
+| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only. A repo with no commits gets an empty first commit (`chore: start agentteams team`) when your git identity is set, so task worktrees have a branch point |
 | `agentteams join <invite-code>` | Join a team and install the agent integration. `at1-` codes clone the repo (or use the current clone) |
 | `agentteams sync` | Exchange team state with the git remote now. Normally runs in the background from hooks and MCP; run it to make a recording or a debugging session deterministic |
 | `agentteams invite [show]` | Print the invite code again. Git teams derive it; for local and hub teams the creator's credential file (0600) keeps it until it expires. Teams created by an older version, and joiners, do not have it: run `agentteams invite --rotate` |
@@ -325,6 +360,7 @@ fi
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
 | `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
 | `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
+| `agentteams run <task> [--agent <tool>] [--model <m>] [--detach]` | Start the assignee's tool (Codex, Cursor, Claude Code, Gemini) non-interactively on the task in its worktree; `--all` starts every assigned task, `--watch` keeps doing so for new assignments |
 | `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
 | `agentteams pr <task>` | Open a GitHub pull request for a finished task (needs `gh`) |
 | `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |

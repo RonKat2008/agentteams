@@ -124,6 +124,9 @@ export class HubClient implements TeamClient {
   getTask(n: number) {
     return this.request<TaskView>('GET', `/api/team/tasks/${n}`);
   }
+  listTasks() {
+    return this.request<TaskView[]>('GET', '/api/team/tasks');
+  }
   recordCommit(input: CommitInput) {
     return this.request<{ notified: string[]; duplicate: boolean }>('POST', '/api/team/commits', input);
   }

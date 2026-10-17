@@ -10,7 +10,7 @@ import { HubClient } from '../hubClient.js';
 import { createLocalTeam, LOCAL_TEAM_LABEL } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
-import { checkTeamDir, detectGithubSlug, isGitRepo, repoRoot, resolveMemberName } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, ensureFirstCommit, firstCommitNote, isGitRepo, repoRoot, resolveMemberName } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly, refuseExistingCredential } from './shared.js';
 
@@ -218,6 +218,8 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
   const githubToken = local ? undefined : await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env), { trustHub: opts.trustHub });
   if (!opts.newRepo) {
     const repoPath = await repoRoot(deps, deps.cwd);
+    const note = (await isGitRepo(deps, repoPath)) ? firstCommitNote(await ensureFirstCommit(deps, repoPath)) : null;
+    if (note) (note.isError ? deps.err : deps.out)(note.text);
     const repo = await resolveRepoLink(deps, opts, repoPath, local);
     const { cred, result } = await registerTeam(deps, name, opts, repoPath, repo, githubToken);
     if (opts.install) printReport(deps, await runInstallers(deps, cred));

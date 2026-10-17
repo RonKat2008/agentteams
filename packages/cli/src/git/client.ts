@@ -175,6 +175,9 @@ export class GitTeamClient implements TeamClient {
     taskNumber(n);
     return this.read<TaskView>((v, a) => v.store.core.getTaskView(v.store.ctx, a, n));
   }
+  listTasks() {
+    return this.read<TaskView[]>((v, a) => v.store.core.listTasks(v.store.ctx, a, {}));
+  }
   async recordCommit(input: CommitInput) {
     return (await this.execute('recordCommit', input as OpInput<'recordCommit'>)) as { notified: string[]; duplicate: boolean };
   }

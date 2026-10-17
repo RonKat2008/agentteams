@@ -121,7 +121,7 @@ describe('git workflow end to end', () => {
 
     // 3. worktree
     expect(await run(worker, cloneB, 'worktree', '1')).toBe(0);
-    const wt = join(tmp, 'b', 'app.at', `${w}-1`);
+    const wt = join(cloneB, '.agentteams', 'worktrees', w, '1');
     expect(existsSync(wt)).toBe(true);
     expect(await git(wt, 'symbolic-ref', '--short', 'HEAD')).toBe(`at/${w}/1`);
     expect((await workerClient.getTask(1)).status).toBe('in_progress');

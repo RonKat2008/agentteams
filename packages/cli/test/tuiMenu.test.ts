@@ -222,6 +222,30 @@ describe('guided menu', () => {
     expect(p.log).toContain('info: Made ./squad a git repo. Start your agents there: cd squad');
   });
 
+  it('makes an empty first commit in the new project folder when the git identity is set', async () => {
+    const commit = 'git -c user.useConfigOnly=true commit -q --allow-empty -m chore: start agentteams team';
+    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'folder', 'ada'], {
+      table: {
+        'git rev-parse --show-toplevel': { code: 128 }, 'git init -b main': {},
+        'git rev-parse --verify --quiet HEAD^{commit}': { code: 1 },
+        'git config user.name': { stdout: 'Ada\n' }, 'git config user.email': { stdout: 'ada@example.com\n' }, [commit]: {},
+      },
+    });
+    expect(await run()).toBe(0);
+    const dir = join(t.deps.cwd, 'squad');
+    expect(t.calls).toContainEqual({ cmd: 'git', args: commit.split(' ').slice(1, 7).concat('chore: start agentteams team'), cwd: dir });
+    expect(p.log.some((l) => l.includes('empty first commit'))).toBe(true);
+  });
+
+  it('tells the user to commit first when the new folder has no commit and no git identity', async () => {
+    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'folder', 'ada'], {
+      table: { 'git rev-parse --show-toplevel': { code: 128 }, 'git init -b main': {}, 'git rev-parse --verify --quiet HEAD^{commit}': { code: 1 } },
+    });
+    expect(await run()).toBe(0);
+    expect(t.calls.some((c) => c.args.includes('commit'))).toBe(false);
+    expect(p.log.join('\n')).toMatch(/git commit --allow-empty -m "chore: start agentteams team"/);
+  });
+
   it('never offers to git init the home folder', async () => {
     const { p, run } = setup(['create', 'squad', 'claude', 'local', 'folder', 'ada'], {
       table: { 'git rev-parse --show-toplevel': { code: 128 }, 'git init -b main': {} },

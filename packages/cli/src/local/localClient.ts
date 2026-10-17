@@ -94,6 +94,9 @@ export class LocalTeamClient implements TeamClient {
     taskNumber(n);
     return this.run<TaskView>((s, a) => s.core.getTaskView(s.ctx, a, n));
   }
+  listTasks() {
+    return this.run<TaskView[]>((s, a) => s.core.listTasks(s.ctx, a, {}));
+  }
   recordCommit(input: CommitInput) {
     return this.run<{ notified: string[]; duplicate: boolean }>((s, a) => s.core.recordCommit(s.ctx, a, input as never));
   }
