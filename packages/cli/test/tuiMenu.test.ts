@@ -223,7 +223,7 @@ describe('guided menu', () => {
   });
 
   it('makes an empty first commit in the new project folder when the git identity is set', async () => {
-    const commit = 'git -c user.useConfigOnly=true commit -q --allow-empty -m chore: start agentteams team';
+    const commit = 'git -c user.useConfigOnly=true commit -q --allow-empty --only -m chore: start agentteams team';
     const { p, run } = setup(['create', 'squad', 'claude', 'local', 'folder', 'ada'], {
       table: {
         'git rev-parse --show-toplevel': { code: 128 }, 'git init -b main': {},
@@ -233,7 +233,7 @@ describe('guided menu', () => {
     });
     expect(await run()).toBe(0);
     const dir = join(t.deps.cwd, 'squad');
-    expect(t.calls).toContainEqual({ cmd: 'git', args: commit.split(' ').slice(1, 7).concat('chore: start agentteams team'), cwd: dir });
+    expect(t.calls).toContainEqual({ cmd: 'git', args: commit.split(' ').slice(1, 8).concat('chore: start agentteams team'), cwd: dir });
     expect(p.log.some((l) => l.includes('empty first commit'))).toBe(true);
   });
 

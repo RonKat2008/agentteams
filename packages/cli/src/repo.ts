@@ -48,12 +48,13 @@ async function hasGitIdentity(deps: ExecDeps, cwd: string): Promise<boolean> {
 
 /**
  * Task worktrees branch from a commit, so a brand-new repo gets an empty first commit, but only when the user's
- * git identity is configured (never a made-up author).
+ * git identity is configured (never a made-up author). `--only` with no paths commits nothing from the index, so files
+ * the user already staged stay staged and out of this commit.
  */
 export async function ensureFirstCommit(deps: ExecDeps, cwd: string): Promise<FirstCommit> {
   if ((await deps.exec('git', ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { cwd })).code === 0) return 'exists';
   if (!(await hasGitIdentity(deps, cwd))) return 'no-identity';
-  const r = await deps.exec('git', ['-c', 'user.useConfigOnly=true', 'commit', '-q', '--allow-empty', '-m', FIRST_COMMIT_MESSAGE], { cwd });
+  const r = await deps.exec('git', ['-c', 'user.useConfigOnly=true', 'commit', '-q', '--allow-empty', '--only', '-m', FIRST_COMMIT_MESSAGE], { cwd });
   if (r.code !== 0) return { failed: (r.stderr || r.stdout).trim().split('\n')[0] || `exit ${r.code}` };
   return 'committed';
 }

@@ -381,7 +381,7 @@ fi
 | Command | Purpose |
 |---|---|
 | `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
-| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only. A repo with no commits gets an empty first commit (`chore: start agentteams team`) when your git identity is set, so task worktrees have a branch point |
+| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only. A repo with no commits gets an empty first commit (`chore: start agentteams team`) when your git identity is set, so task worktrees have a branch point; files you already staged stay staged and are not part of it |
 | `agentteams join <invite-code>` | Join a team and install the agent integration. `at1-` codes clone the repo (or use the current clone) |
 | `agentteams sync` | Exchange team state with the git remote now. Normally runs in the background from hooks and MCP; run it to make a recording or a debugging session deterministic |
 | `agentteams invite [show]` | Print the invite code again. Git teams derive it; for local and hub teams the creator's credential file (0600) keeps it until it expires. Teams created by an older version, and joiners, do not have it: run `agentteams invite --rotate` |
