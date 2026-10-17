@@ -285,7 +285,38 @@ Each task gets its own branch and worktree, and commits are checked against file
 3. `agentteams done <task> -m "<summary>"` pushes the branch and completes the task. It must be
    run on the task branch, not the default branch.
 4. `agentteams pr <task>` opens a pull request with `gh` (needs `gh`). If one exists, its URL is printed.
-5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
+5. The orchestrator runs `agentteams merge` to merge every finished task, run the tests on the combined result and
+   land it (see below). Merging some other way (a pull request, by hand), record it with
+   `agentteams merged <task> [--pr <url>]`.
+
+### Merging finished tasks (`agentteams merge`)
+
+`agentteams merge` (orchestrator only) takes every task that is done and not yet merged, in task order, and merges its
+branch (the one recorded by `done`, normally `at/<agent>/<task>`) with `git merge --no-ff` into a fresh integration
+worktree at `<repo>/.agentteams/worktrees/_merge` on branch `agentteams/merge`, started from the base branch: the branch
+checked out in the main checkout, or `--into <branch>`. When the repo has a git remote it fetches first, so branches
+pushed from other computers are found; a remote branch newer than the local one wins.
+
+- **Conflicts.** A branch that conflicts is skipped (its merge aborted) and the others still merge. The report names
+  the conflicting files and the earlier task they conflict with, and the task's agent gets a command message asking it
+  to rebase onto the base (`--no-notify` skips the message). `--stop-on-conflict` stops at the first conflict instead,
+  lands nothing and leaves the conflicted merge in the integration worktree for you to resolve.
+- **Tests.** `--test "<cmd>"` runs that command with `sh -c` in the integration worktree. Without it the command is
+  detected and printed: a `package.json` `test` script (`pnpm test`, `yarn test` or `npm test` by lockfile; the
+  dependencies are installed first when the worktree has no `node_modules`), a Makefile `test` target (`make test`),
+  `cargo test`, `go test ./...`, or `pytest` when pytest is configured. `--no-test` skips them. The last 40 lines of
+  output are shown.
+- **Landing.** When the tests pass, the base is fast-forwarded to the integration result, the merged tasks are recorded
+  as merged (the team log shows each one, and each assignee is told) and the integration worktree is removed. The base
+  is only moved when the main checkout is on it with no uncommitted changes; otherwise the result stays on branch
+  `agentteams/merge` and the exact commands to land and record it are printed. Nothing is pushed unless you pass
+  `--push`.
+- **Failures.** If the tests fail, the base is untouched, nothing is recorded, and the integration worktree is kept
+  (its path is printed) so you can look; the next `agentteams merge` replaces it.
+- `--dry-run` merges and tests but never moves the base or records anything.
+
+It exits 0 when every finished task merged and landed, and 1 when anything was skipped, conflicted, failed or was
+not landed.
 
 ### Starting agents on their tasks (`agentteams run`)
 
@@ -363,6 +394,7 @@ fi
 | `agentteams run <task> [--agent <tool>] [--model <m>] [--detach]` | Start the assignee's tool (Codex, Cursor, Claude Code, Gemini) non-interactively on the task in its worktree; `--all` starts every assigned task, `--watch` keeps doing so for new assignments |
 | `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
 | `agentteams pr <task>` | Open a GitHub pull request for a finished task (needs `gh`) |
+| `agentteams merge [--test <cmd>\|--no-test] [--into <branch>] [--dry-run] [--push]` | Merge every finished task's branch, run the tests on the result and fast-forward the base (orchestrator only); conflicting tasks are skipped and their agents asked to rebase |
 | `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |
 | `agentteams access grant <agent-or-login> [--yes]` | Invite a teammate's GitHub account to the repo with push access (needs `gh`) |
 | `agentteams up [--port <n>] [--share]` | Advanced: run a hub server (see below) |
@@ -387,6 +419,8 @@ fi
 - `join` only: for a git team, uses the current clone when one of its remotes is the team's repo, otherwise clones
   it with git (into `./<repo name>`, or `--dir <path>`). `--no-clone` skips the clone and uses the current directory.
 - `sync`: `--repo <path>` and `--tool <tool>` pick the repo and credential.
+- `merge`: `--into <branch>`, `--test <cmd>` / `--no-test`, `--no-notify`, `--stop-on-conflict`, `--dry-run`, `--push`.
+  With several agents in the repo it acts as the one that is the orchestrator; `--agent <tool>` picks one explicitly.
 - `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
 - `status`, `log`, `invite show`, `pr`, `access grant` only read team state, so they need no `--agent`: every agent in a repo sees
   the same team. `status` lists the whole team and marks all of this repo's agents "you" (if the repo's agents are on
