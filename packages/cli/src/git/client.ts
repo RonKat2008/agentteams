@@ -85,7 +85,8 @@ export class GitTeamClient implements TeamClient {
     try {
       const { result, op } = await mod.executeOp(view, name, input, this.now);
       logged = op !== null;
-      await mod.heartbeat(view.store, view.git.agentId, this.now());
+      // The write is applied and queued: a presence hiccup (e.g. SQLITE_BUSY) must not turn it into an error.
+      await mod.heartbeat(view.store, view.git.agentId, this.now()).catch(() => undefined);
       return wire(result);
     } catch (err) {
       throw toHubError(view.store.core, err);

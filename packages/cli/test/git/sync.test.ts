@@ -218,7 +218,7 @@ describe('sync round', () => {
     const acceptedHead = (await (await view(worker)).files.readLogState()).agents[lead.id]!.head;
     const forged = await forgeOnRemote(world, lead.id, ownSeqs(lead.repo, lead.id).length, Buffer.from('junk'));
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(/rejected \(decrypt\); refused/);
+    expect(s.problems.join('\n')).toMatch(/does not verify \(decrypt\); refused/);
     const state = (await (await view(worker)).files.readLogState()).agents[lead.id]!;
     expect(state.head).not.toBe(forged);
     expect(state.head).toBe(acceptedHead);
@@ -230,16 +230,20 @@ describe('sync round', () => {
     expect(await bodies(worker)).toContain('restored');
   });
 
-  it('a seq gap halts ingestion for that agent until filled', async () => {
+  it('a seq gap halts ingestion for that agent; a restored contiguous chain is accepted', async () => {
     const { lead, worker } = await twoAgents();
+    const good = git(lead.repo, 'rev-parse', `refs/agentteams-local/${TEAM}/agents/${lead.id}`);
     const n = ownSeqs(lead.repo, lead.id).length;
     await appendSegment(deps, lead.repo, TEAM, lead.id, n + 1, segmentOf(lead, n + 1, 'two'));
     expect((await pushOwn(deps, lead.repo, world.remote, TEAM, lead.id)).ok).toBe(true);
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(new RegExp(`seq ${n} is missing`));
+    expect(s.problems.join('\n')).toMatch(new RegExp(`adds seq ${n + 1} where seq ${n} was expected`));
     expect(await bodies(worker)).not.toContain('two');
+    // The real chain, contiguous, from the last good commit (as a restore would publish it).
+    git(lead.repo, 'update-ref', `refs/agentteams-local/${TEAM}/agents/${lead.id}`, good);
     await appendSegment(deps, lead.repo, TEAM, lead.id, n, segmentOf(lead, n, 'one'));
-    expect((await pushOwn(deps, lead.repo, world.remote, TEAM, lead.id)).ok).toBe(true);
+    await appendSegment(deps, lead.repo, TEAM, lead.id, n + 1, segmentOf(lead, n + 1, 'two'));
+    git(lead.repo, 'push', '-q', '--force', world.remote, `refs/agentteams-local/${TEAM}/agents/${lead.id}:refs/agentteams/${TEAM}/agents/${lead.id}`);
     const s2 = await sync(worker);
     expect(s2.problems).toEqual([]);
     expect(await bodies(worker)).toEqual(expect.arrayContaining(['one', 'two']));
@@ -250,7 +254,7 @@ describe('sync round', () => {
     const n = ownSeqs(lead.repo, lead.id).length;
     await forgeOnRemote(world, lead.id, n, Buffer.alloc(MAX_SEGMENT_BYTES + 1, 7));
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(new RegExp(`seq ${n}: \\d+ bytes exceeds the segment limit`));
+    expect(s.problems.join('\n')).toMatch(new RegExp(`seq ${n} is \\d+ bytes, over the segment limit`));
     expect((await (await view(worker)).files.readLogState()).agents[lead.id]!.nextSeq).toBe(n);
   });
 
@@ -288,7 +292,7 @@ describe('sync round', () => {
     const other = newAgentKeyPair().publicKey;
     expect(await pinAgentKey(v.store, lead.id, other)).toBe('pinned');
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(new RegExp(`agent ${lead.id} seq 0: bootstrap key differs from the pinned key`));
+    expect(s.problems.join('\n')).toMatch(new RegExp(`agent ${lead.id}: commit [0-9a-f]+: seq 0 bootstrap key differs from the pinned key`));
     expect(await getPinnedKey(v.store, lead.id)).toBe(other);
   });
 

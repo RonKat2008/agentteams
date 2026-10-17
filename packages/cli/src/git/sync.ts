@@ -1,50 +1,52 @@
 /**
  * One sync round for a git team (`agentteams sync`, normally started detached by hooks and MCP):
  *
- *   lock -> fetch -> verify own remote log (adopt only if verified; else restore it) -> verify + pin team meta
- *        -> ingest each agent's new segments -> applyOps -> presence -> publish own pending ops -> push -> unlock
+ *   lock -> fetch -> verify our own remote log (adopt only if it verifies under our key, else restore it)
+ *        -> verify + pin the team meta (the creator restores a vandalised meta) -> ingest each agent (chain.ts)
+ *        -> applyOps -> presence -> publish own pending ops (CAS) -> push only a verified own chain -> unlock
  *
- * Ingestion rules (per agent ref; one agent's failure never stops the round):
- *   - fast-forward only from the commit of the agent's last ACCEPTED segment (refs `merge-base --is-ancestor`);
- *     a rewrite is refused, and a later restore of the real chain is accepted because it fast-forwards from there;
- *   - the first-parent chain is walked; every commit may only add one `ops/<seq>.bin` or rewrite presence.bin;
- *   - contiguous seqs (a gap halts that agent until filled), at most MAX_SEGMENTS_PER_AGENT per round, blob sizes
- *     checked before reading, reads in batches of READ_BATCH;
- *   - every segment is decrypted and verified against the agent's pinned key; seq 0 is the TOFU bootstrap and its
- *     key is pinned forever (pinAgentKey; a mismatch is refused).
+ * Every per-agent phase is isolated: a failure becomes a refusal for that agent, never a failed round.
  * Refusals are logged and shown once in a hook as a security warning (ruling C4).
- * The lock is owned by a token; ownership is checked before every write phase (LostLockError aborts).
+ * The lock is owned by a token; ownership is checked before every write phase, and every local ref write is a
+ * compare-and-swap (`update-ref <ref> <new> <old>`), so a round paused past its lease cannot corrupt the log.
+ *
+ * Trust boundary: everything under `.git/agentteams`, `.git/refs/agentteams-*` and `~/.agentteams` belongs to the
+ * OS user running agentteams. Logs of other agents of this clone (refs/agentteams-local) are trusted to be
+ * fast-forward only (their segments are still verified against pinned keys), because anyone who can write those
+ * refs can edit team.db and credentials.json directly. The boundary against teammates is the git remote.
  */
 import type { CliDeps } from '../deps.js';
 import type { Credential } from '../credentials.js';
-import { decrypt, encrypt, sign, verify } from './crypto.js';
+import { encodePresence, ingestAgent, short, walkChain } from './chain.js';
 import { decodeMeta, encodeMeta, MAX_META_BYTES, metaPin } from './meta.js';
 import type { Op } from './ops.js';
 import {
-  appendSegment, fetchTeam, fetchedAgentHead, hasFetchedMeta, hasLocalMeta, isAncestor, listFetchedAgents, listLocalAgents,
-  localAgentHead, logCommits, pushMeta, pushOwn, readBlobs, readFetchedMeta, readLocalMeta, readPresenceAt, restoreOwn,
-  segmentSeqsAt, setFetchedAgentHead, setLocalAgentHead, setPresence, setSeenAgentHead, sizesOf, writeMeta, type LogCommit,
+  appendSegment, countCommits, fetchTeam, fetchedAgentHead, fetchedMetaObject, isAncestor, listFetchedAgents,
+  listLocalAgents, localAgentHead, pushMeta, pushOwn, readFetchedMeta, readLocalMeta, restoreMeta, restoreOwn,
+  setFetchedAgentHead, setLocalAgentHead, setPresence, writeMeta,
 } from './refs.js';
-import { dropLegacy, insertPending, listPending, opKey, removePending, type AcceptedSegment } from './replicaStore.js';
-import { deferFutureOps, getPinnedKey, pinAgentKey, pinTeamMeta, rebuildView, type TeamCreator } from './replay.js';
-import { MAX_OPS_PER_SEGMENT, MAX_SEGMENT_BYTES, decodeSegment, encodeSegment } from './segment.js';
+import { dropLegacy, insertPending, listPending, opKey, removePending } from './replicaStore.js';
+import { deferFutureOps, pinAgentKey, pinTeamMeta, rebuildView, type PinResult, type ReplayStore, type TeamCreator } from './replay.js';
+import { MAX_OPS_PER_SEGMENT, encodeSegment } from './segment.js';
 import {
-  acquireLock, clearErrorWarning, fromGit, logSyncError, markSyncWanted, readStatus, syncPaths, takeSyncWanted,
+  acquireLock, clearErrorWarning, fromGit, logSyncError, markSyncWanted, oneLine, readStatus, syncPaths, takeSyncWanted,
   withRefusals, writeStatus, type SyncLock, type SyncStatus,
 } from './syncState.js';
 import { applyToView, openGitView, replayTarget, teamCreatorOf, type GitView } from './view.js';
 
+export { decodePresence, encodePresence } from './chain.js';
+
 type Deps = Pick<CliDeps, 'exec'>;
 
 export const PRESENCE_INTERVAL_MS = 60_000;
-/** Segments read per remote agent per round (a backlog drains over several rounds). */
-export const MAX_SEGMENTS_PER_AGENT = 32;
-/** Blobs per `cat-file --batch` call (32 x 1 MiB would approach the exec buffer). */
-const READ_BATCH = 8;
 /** Ops per own segment (a segment that still exceeds the byte limit is split). */
 const OPS_PER_SEGMENT = 100;
 /** Extra rounds run for detached syncs that found the lock held (ruling C7). */
 const MAX_EXTRA_ROUNDS = 3;
+/** Our own remote log can only ever be ahead of our local one by vandalism: more than this is refused unread. */
+const OWN_REMOTE_MAX_EXTRA = 64;
+/** Fresh clone: commits of our own remote log adopted per round (the rest next round). */
+const OWN_ADOPT_PER_ROUND = 512;
 
 export interface SyncSummary {
   ok: boolean;
@@ -62,11 +64,16 @@ export interface SyncSummary {
   rebuilt: boolean;
   /** Our remote log was vandalised and restored this round. */
   restored: boolean;
+  /** We (the creator) put the team meta back on the remote this round. */
+  metaRestored: boolean;
   /** Refused remote data (security): logged, warned once, never fatal. */
   problems: string[];
   /** Failures of the round itself (network, push, internal). */
   errors: string[];
 }
+
+/** Test hook: phases after their ownership check, before their writes. */
+export type SyncPhase = 'publish';
 
 export interface SyncOptions {
   now?: () => number;
@@ -74,169 +81,27 @@ export interface SyncOptions {
   waitMs?: number;
   /** Detached syncs: if a round is running, leave sync.pending for it and exit (ruling C7). */
   coalesce?: boolean;
+  /** Tests only: called right after a phase's assertOwned(). */
+  onPhase?: (phase: SyncPhase) => Promise<void>;
 }
 
 const emptySummary = (): SyncSummary => ({
   ok: true, fetched: false, pushed: false, ingested: 0, published: 0, applied: 0, rejected: 0, backdated: 0, rebuilt: false,
-  restored: false, problems: [], errors: [],
+  restored: false, metaRestored: false, problems: [], errors: [],
 });
 
-const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-const short = (sha: string) => sha.slice(0, 12);
-
-// ---- Presence (encrypted and signed like segments, bound to team and agent) -----------------------
-
-const presenceContext = (teamId: string, agent: string) => Buffer.from(`agentteams-presence-v1\0${teamId}\0${agent}\0`, 'utf8');
-
-export function encodePresence(view: Pick<GitView, 'git'>, atMs: number): Buffer {
-  const { teamId, agentId, teamKey, privateKey } = view.git;
-  const ctx = presenceContext(teamId, agentId);
-  const plaintext = Buffer.from(JSON.stringify({ v: 1, agent: agentId, at: new Date(atMs).toISOString() }), 'utf8');
-  return encrypt(teamKey, Buffer.concat([sign(privateKey, Buffer.concat([ctx, plaintext])), plaintext]), ctx);
+/** Error text for logs and status: one line, control characters stripped, git output labelled. */
+export function cleanError(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  const g = /^git ([a-z-]+) failed: ([\s\S]*)$/.exec(m);
+  return g ? fromGit(g[1]!, g[2]) : oneLine(m);
 }
 
-/** The presence time in ms, or null if it does not decrypt, verify or parse. Never throws. */
-export function decodePresence(buf: Buffer, teamKey: string, teamId: string, agent: string, publicKey: string): number | null {
-  try {
-    const ctx = presenceContext(teamId, agent);
-    const inner = decrypt(teamKey, buf, ctx);
-    if (!inner || inner.length <= 64) return null;
-    const plaintext = inner.subarray(64);
-    if (!verify(publicKey, Buffer.concat([ctx, plaintext]), inner.subarray(0, 64))) return null;
-    const p = JSON.parse(plaintext.toString('utf8')) as { v?: unknown; agent?: unknown; at?: unknown };
-    if (p.v !== 1 || p.agent !== agent || typeof p.at !== 'string') return null;
-    const at = Date.parse(p.at);
-    return Number.isNaN(at) ? null : at;
-  } catch {
-    return null;
-  }
-}
-
-// ---- Chain walk (shared by ingestion and own-log verification) ----------------------------------------
-
-interface WalkResult {
-  accepted: AcceptedSegment[];
-  /** Commit of the last fully accepted state of the chain (null/undefined: nothing new accepted). */
-  head: string | undefined;
-  nextSeq: number;
-  problems: string[];
-  /** Everything up to the tip was accepted. */
-  complete: boolean;
-}
-
-interface WalkOpts {
-  agent: string;
-  from: string | undefined;
-  tip: string;
-  nextSeq: number;
-  limit: number;
-  /** For our own log: every segment must verify under this key (seq 0's bootstrap key included). */
-  requireKey?: string;
-}
-
-const OPS_FILE_RE = /^ops\/(\d{8})\.bin$/;
-
-/** Walks `from..tip` (first parent), verifying segments in seq order from `nextSeq`. Throws only on git failures. */
-async function walkChain(deps: Deps, repo: string, view: GitView, o: WalkOpts): Promise<WalkResult> {
-  const problems: string[] = [];
-  const who = `agent ${o.agent}`;
-  const commits: LogCommit[] = await logCommits(deps, repo, o.from ?? null, o.tip);
-  // 1. Which commit adds which seq; stop at the first commit that does anything else.
-  const adds = new Map<number, { blob: string; commit: number }>();
-  let usable = commits.length;
-  scan: for (let i = 0; i < commits.length; i++) {
-    for (const ch of commits[i]!.changes) {
-      if (ch.path === 'presence.bin' && (ch.status === 'A' || ch.status === 'M')) continue;
-      const m = OPS_FILE_RE.exec(ch.path);
-      const seq = m ? Number(m[1]) : -1;
-      if (!m || ch.status !== 'A' || seq < o.nextSeq || adds.has(seq)) {
-        problems.push(`${who}: commit ${short(commits[i]!.sha)} ${ch.status === 'A' ? 'adds' : 'changes'} ${ch.path.slice(0, 80)}; refused`);
-        usable = i;
-        break scan;
-      }
-      adds.set(seq, { blob: ch.blob, commit: i });
-    }
-  }
-  // 2. The contiguous run from nextSeq, bounded, verified in order.
-  const run: number[] = [];
-  for (let s = o.nextSeq; adds.has(s) && run.length < o.limit; s++) run.push(s);
-  const accepted: AcceptedSegment[] = [];
-  let failed = false;
-  for (let i = 0; i < run.length && !failed; i += READ_BATCH) {
-    const batch = run.slice(i, i + READ_BATCH);
-    const blobs = batch.map((s) => adds.get(s)!.blob);
-    const sizes = await sizesOf(deps, repo, blobs);
-    const okCount = sizes.findIndex((n) => n > MAX_SEGMENT_BYTES);
-    const readable = okCount === -1 ? batch : batch.slice(0, okCount);
-    const data = await readBlobs(deps, repo, readable.map((s) => adds.get(s)!.blob));
-    for (let j = 0; j < readable.length; j++) {
-      const seq = readable[j]!;
-      const v = await verifySegment(view, o, seq, data[j]!);
-      if (typeof v === 'string') { problems.push(`${who} seq ${seq}: ${v}; refused`); failed = true; break; }
-      accepted.push({ seq, ops: v });
-    }
-    if (!failed && okCount !== -1) {
-      problems.push(`${who} seq ${batch[okCount]}: ${sizes[okCount]} bytes exceeds the segment limit; refused`);
-      failed = true;
-    }
-  }
-  const nextSeq = o.nextSeq + accepted.length;
-  if (!failed && accepted.length < o.limit && adds.size > 0 && [...adds.keys()].some((s) => s >= nextSeq) && !adds.has(nextSeq)) {
-    problems.push(`${who}: seq ${nextSeq} is missing; ingestion halted until it arrives`);
-  }
-  // 3. The newest commit whose additions (and all before it) are all accepted.
-  let head: string | undefined;
-  for (let i = 0; i < usable; i++) {
-    if ([...adds.entries()].every(([seq, a]) => a.commit > i || seq < nextSeq)) head = commits[i]!.sha;
-  }
-  const complete = problems.length === 0 && usable === commits.length && head === (commits.length ? commits[commits.length - 1]!.sha : undefined);
-  return { accepted, head, nextSeq, problems, complete };
-}
-
-/** The segment's ops when it verifies (pinning the key at seq 0), else the refusal reason. */
-async function verifySegment(view: GitView, o: WalkOpts, seq: number, data: Buffer): Promise<Op[] | string> {
-  const { git, store } = view;
-  const pinned = seq === 0 ? undefined : (o.requireKey ?? (await getPinnedKey(store, o.agent)));
-  if (seq > 0 && pinned === undefined) return 'no pinned key for this agent';
-  const r = decodeSegment(data, git.teamKey, { teamId: git.teamId, agent: o.agent, seq }, (id) => (id === o.agent ? pinned : undefined));
-  if (!r.ok) return `rejected (${r.reason})`;
-  if (seq === 0) {
-    if (!r.bootstrapKey) return 'not a bootstrap segment';
-    if (o.requireKey !== undefined && r.bootstrapKey !== o.requireKey) return 'bootstrap key is not ours';
-    if ((await pinAgentKey(store, o.agent, r.bootstrapKey)) === 'mismatch') return 'bootstrap key differs from the pinned key';
-  } else if (o.requireKey !== undefined) {
-    const p = await getPinnedKey(store, o.agent);
-    if (p !== undefined && p !== o.requireKey) return 'pinned key is not ours';
-  }
-  return r.segment.ops;
-}
+const isFatal = (err: unknown) => err instanceof Error && (err.name === 'LostLockError' || err.name === 'RefMovedError');
 
 // ---- Ingestion ---------------------------------------------------------------------------------------
 
-/** Verifies and stores an agent's new segments up to `tip`. `local`: the log was written in this clone. */
-async function ingestAgent(deps: Deps, repo: string, view: GitView, lock: SyncLock | null, agent: string, tip: string, local: boolean): Promise<{ ops: Op[]; problems: string[] }> {
-  const { files } = view;
-  const prev = (await files.readLogState()).agents[agent] ?? { nextSeq: 0 };
-  if (prev.head === tip) return { ops: [], problems: [] };
-  if (prev.head && !(await isAncestor(deps, repo, prev.head, tip))) {
-    return { ops: [], problems: [`agent ${agent}: non-fast-forward rewrite (${short(prev.head)} -> ${short(tip)}) refused; keeping the accepted chain`] };
-  }
-  const own = agent === view.git.agentId;
-  const r = await walkChain(deps, repo, view, {
-    agent, from: prev.head, tip, nextSeq: prev.nextSeq, limit: local ? Number.MAX_SAFE_INTEGER : MAX_SEGMENTS_PER_AGENT,
-    ...(own ? { requireKey: view.git.publicKey } : {}),
-  });
-  await lock?.assertOwned();
-  // Crash order: ops first, then the keep-alive ref, then the state that points past them.
-  await files.appendAccepted(agent, r.accepted);
-  if (r.head && r.head !== prev.head) {
-    await setSeenAgentHead(deps, repo, view.git.teamId, agent, r.head);
-    await files.setAgentState(agent, { head: r.head, nextSeq: r.nextSeq });
-  }
-  return { ops: r.accepted.flatMap((s) => s.ops), problems: r.problems };
-}
-
-/** All agents: other clones' logs from fetched refs, this clone's agents from their local refs (finding 7). */
+/** All agents: other clones' logs from fetched refs, this clone's agents from their local refs. */
 async function ingestAll(deps: Deps, repo: string, view: GitView, lock: SyncLock, summary: SyncSummary): Promise<Op[]> {
   const { teamId } = view.git;
   const local = new Set(await listLocalAgents(deps, repo, teamId));
@@ -250,8 +115,8 @@ async function ingestAll(deps: Deps, repo: string, view: GitView, lock: SyncLock
       ops.push(...r.ops);
       summary.problems.push(...r.problems);
     } catch (err) {
-      if (err instanceof Error && err.name === 'LostLockError') throw err;
-      summary.problems.push(`agent ${agent}: unreadable log (${message(err).split('\n')[0]!.slice(0, 160)}); skipped this round`);
+      if (isFatal(err)) throw err;
+      summary.problems.push(`agent ${agent}: unreadable log (${cleanError(err).slice(0, 160)}); skipped this round`);
     }
   }
   summary.ingested += ops.length;
@@ -259,48 +124,110 @@ async function ingestAll(deps: Deps, repo: string, view: GitView, lock: SyncLock
 }
 
 /**
- * Our own log on the remote (finding 1, ruling C5): adopt remote commits only when every new segment verifies
- * under OUR key with contiguous seqs. Anything else is vandalism: keep (or re-seed from) the verified part and
- * return the observed remote tip so the push phase restores our chain with --force-with-lease.
+ * Our own log on the remote (ruling C5, review N1/N2): remote commits are adopted only when every one of them
+ * verifies under OUR key with contiguous seqs and newer presence, within bounds. Anything else (including a range
+ * too large to inspect, or any failure) is vandalism: the local chain is kept and the observed remote tip is
+ * returned so the push phase restores our chain with --force-with-lease. Never throws (except a lost lock).
  */
 async function checkOwnRemote(deps: Deps, repo: string, view: GitView, lock: SyncLock, summary: SyncSummary): Promise<string | null> {
   const { teamId, agentId } = view.git;
-  const [local, fetched] = await Promise.all([localAgentHead(deps, repo, teamId, agentId), fetchedAgentHead(deps, repo, teamId, agentId)]);
-  if (!fetched || local === fetched) return null;
-  if (local && (await isAncestor(deps, repo, fetched, local))) return null; // we are ahead (unpushed)
-  const extends_ = !local || (await isAncestor(deps, repo, local, fetched));
-  if (extends_) {
+  let fetched: string | null = null;
+  try {
+    const local = await localAgentHead(deps, repo, teamId, agentId);
+    fetched = await fetchedAgentHead(deps, repo, teamId, agentId);
+    if (!fetched || local === fetched) return null;
+    if (local && (await isAncestor(deps, repo, fetched, local))) return null; // we are ahead (unpushed)
     const state = (await view.files.readLogState()).agents[agentId];
-    const from = local ?? undefined;
-    const nextSeq = local ? (state?.head === local ? state.nextSeq : (await segmentSeqsAt(deps, repo, local)).length) : 0;
-    const r = await walkChain(deps, repo, view, { agent: agentId, from, tip: fetched, nextSeq, limit: Number.MAX_SAFE_INTEGER, requireKey: view.git.publicKey });
-    await lock.assertOwned();
-    if (r.complete) {
-      await setLocalAgentHead(deps, repo, teamId, agentId, fetched);
-      return null;
+    const base = { agent: agentId, tip: fetched, requireKey: view.git.publicKey, maxSegments: Number.MAX_SAFE_INTEGER };
+    if (local && (await isAncestor(deps, repo, local, fetched))) {
+      // One agent per clone: nothing beyond our local log can be ours. Bounded by construction.
+      const extra = await countCommits(deps, repo, local, fetched);
+      if (extra <= OWN_REMOTE_MAX_EXTRA && state?.head === local) {
+        const r = await walkChain(deps, repo, view, {
+          ...base, from: local, nextSeq: state.nextSeq, presenceMs: state.presenceMs ?? 0, maxCommits: OWN_REMOTE_MAX_EXTRA,
+        });
+        await lock.assertOwned();
+        if (r.complete) {
+          await setLocalAgentHead(deps, repo, teamId, agentId, fetched, local);
+          return null;
+        }
+      }
+    } else if (!local) {
+      // Fresh clone: adopt the verified prefix, a bounded number of commits per round.
+      const r = await walkChain(deps, repo, view, { ...base, from: undefined, nextSeq: 0, presenceMs: 0, maxCommits: OWN_ADOPT_PER_ROUND });
+      await lock.assertOwned();
+      if (r.head) await setLocalAgentHead(deps, repo, teamId, agentId, r.head, null);
+      if (r.problems.length === 0) return null; // complete, or capped: continue next round
     }
-    if (!local && r.head) await setLocalAgentHead(deps, repo, teamId, agentId, r.head);
+  } catch (err) {
+    if (isFatal(err)) throw err;
+    summary.problems.push(`our own log on the remote could not be checked (${cleanError(err).slice(0, 160)})`);
   }
+  if (!fetched) return null;
   summary.problems.push(`our own log on the remote was altered (tip ${short(fetched)} is not our verified chain); restoring it`);
   return fetched;
 }
 
 // ---- Team meta ---------------------------------------------------------------------------------------
 
-/** Verifies the local and fetched meta, pins it on first sight; returns the pinned creator and whether it was new. */
-async function checkMeta(deps: Deps, repo: string, view: GitView, summary: SyncSummary): Promise<{ creator: TeamCreator | null; firstPin: boolean }> {
+/**
+ * Pins the creator from the invite (Task 8): the joiner trusts the invite, not the first meta it sees. A meta
+ * whose creator differs from this pin is refused by every round.
+ */
+export function pinTeamMetaFromInvite(store: ReplayStore, teamId: string, creator: TeamCreator): Promise<PinResult> {
+  return pinTeamMeta(store, teamId, { agentId: creator.agentId, publicKey: creator.publicKey });
+}
+
+interface MetaCheck {
+  creator: TeamCreator | null;
+  firstPin: boolean;
+  /** Creator only: the remote meta object to replace (vandalised), or 'missing' when the remote has none. */
+  repair: string | 'missing' | null;
+}
+
+/**
+ * Verifies our local meta (we are the creator) and the remote meta, pinning on first sight. A remote meta that is
+ * not a valid meta of this team, or names another creator than the pin, is refused; if we are the creator we
+ * restore it (the meta is write-once, so a restore is always correct).
+ */
+async function checkMeta(deps: Deps, repo: string, view: GitView, summary: SyncSummary): Promise<MetaCheck> {
   const { teamId, teamKey } = view.git;
   let firstPin = false;
-  for (const [where, read] of [['local', readLocalMeta], ['remote', readFetchedMeta]] as const) {
-    const buf = await read(deps, repo, teamId, MAX_META_BYTES);
-    if (!buf) continue;
-    const meta = decodeMeta(buf, teamKey, teamId);
-    if (!meta) { summary.problems.push(`team meta (${where}) does not verify; refused`); continue; }
-    const r = await pinTeamMeta(view.store, teamId, metaPin(meta));
-    if (r === 'mismatch') summary.problems.push(`team meta (${where}) names creator ${meta.agentId}, not the pinned one; refused`);
-    if (r === 'pinned') firstPin = true;
+  let creatorHere = false;
+  let repair: MetaCheck['repair'] = null;
+  try {
+    const localBuf = await readLocalMeta(deps, repo, teamId, MAX_META_BYTES);
+    const localMeta = localBuf ? decodeMeta(localBuf, teamKey, teamId) : null;
+    if (localMeta) {
+      const r = await pinTeamMeta(view.store, teamId, metaPin(localMeta));
+      if (r === 'pinned') firstPin = true;
+      creatorHere = r !== 'mismatch';
+      if (r === 'mismatch') summary.problems.push('team meta (local) names another creator than the pinned one; refused');
+    }
+    const remoteObj = await fetchedMetaObject(deps, repo, teamId);
+    if (!remoteObj) {
+      if (creatorHere) repair = 'missing';
+    } else {
+      const buf = await readFetchedMeta(deps, repo, teamId, MAX_META_BYTES);
+      const meta = buf ? decodeMeta(buf, teamKey, teamId) : null;
+      let bad = false;
+      if (!meta) {
+        summary.problems.push('team meta (remote) does not verify; refused');
+        bad = true;
+      } else {
+        const r = await pinTeamMeta(view.store, teamId, metaPin(meta));
+        if (r === 'pinned') firstPin = true;
+        if (r === 'mismatch') {
+          summary.problems.push(`team meta (remote) names creator ${meta.agentId}, not the pinned one; refused`);
+          bad = true;
+        }
+      }
+      if (bad && creatorHere) repair = remoteObj;
+    }
+  } catch (err) {
+    summary.problems.push(`team meta could not be checked (${cleanError(err).slice(0, 160)})`);
   }
-  return { creator: await teamCreatorOf(view), firstPin };
+  return { creator: await teamCreatorOf(view), firstPin, repair };
 }
 
 // ---- Apply and presence ------------------------------------------------------------------------------
@@ -324,19 +251,12 @@ async function applyIngested(view: GitView, incoming: Op[], creator: TeamCreator
   summary.rebuilt ||= r.rebuilt;
 }
 
-/** Sets last_seen_at from every accepted agent's presence.bin (never backwards, never in the future). */
-async function applyPresence(deps: Deps, repo: string, view: GitView, now: number): Promise<void> {
-  const { git, files, store } = view;
-  const local = new Set(await listLocalAgents(deps, repo, git.teamId));
-  for (const [agent, st] of Object.entries((await files.readLogState()).agents)) {
-    const head = local.has(agent) ? await localAgentHead(deps, repo, git.teamId, agent) : st.head;
-    const key = await getPinnedKey(store, agent);
-    if (!head || !key) continue;
-    const blob = await readPresenceAt(deps, repo, head);
-    const at = blob ? decodePresence(blob, git.teamKey, git.teamId, agent, key) : null;
-    if (at === null) continue;
-    const iso = new Date(Math.min(at, now)).toISOString();
-    await store.ctx.db.updateTable('agents').set({ last_seen_at: iso }).where('id', '=', agent)
+/** Sets last_seen_at from each agent's last verified presence (never backwards, never in the future). */
+async function applyPresence(view: GitView, now: number): Promise<void> {
+  for (const [agent, st] of Object.entries((await view.files.readLogState()).agents)) {
+    if (!st.presenceMs) continue;
+    const iso = new Date(Math.min(st.presenceMs, now)).toISOString();
+    await view.store.ctx.db.updateTable('agents').set({ last_seen_at: iso }).where('id', '=', agent)
       .where((eb) => eb.or([eb('last_seen_at', 'is', null), eb('last_seen_at', '<', iso)])).execute();
   }
 }
@@ -361,49 +281,67 @@ function encodeChunked(view: GitView, firstSeq: number, ops: Op[]): Array<{ seq:
   return out;
 }
 
+/** Our local log tip, if (and only if) it is fully verified (the recorded head is the tip). */
+async function verifiedOwnTip(deps: Deps, repo: string, view: GitView, lock: SyncLock, summary: SyncSummary): Promise<string | null> {
+  const { teamId, agentId } = view.git;
+  const tip = await localAgentHead(deps, repo, teamId, agentId);
+  if (!tip) return null;
+  summary.problems.push(...(await ingestAgent(deps, repo, view, lock, agentId, tip, true)).problems);
+  const state = (await view.files.readLogState()).agents[agentId];
+  return state?.head === tip ? tip : null;
+}
+
 /**
- * Appends our pending ops that are not already in our log as new segments. The log is checked first (it was
- * ingested this round): a crash after an append and before the pending cleanup never publishes an op twice.
+ * Appends our pending ops that are not already in our log as new segments, each a CAS on the verified tip.
+ * A crash after an append and before the pending cleanup never publishes an op twice (the log is checked first).
  */
-async function publishPending(deps: Deps, repo: string, view: GitView, lock: SyncLock, summary: SyncSummary): Promise<number> {
+async function publishPending(deps: Deps, repo: string, view: GitView, lock: SyncLock, opts: SyncOptions, summary: SyncSummary): Promise<number> {
   const { files, git } = view;
   const db = view.store.ctx.db;
   const pending = await listPending(db, git.agentId);
   if (pending.length === 0) return 0;
-  // Our log as committed locally (presence commits move the tip): verified before anything is appended.
-  const tip = await localAgentHead(deps, repo, git.teamId, git.agentId);
-  if (tip) summary.problems.push(...(await ingestAgent(deps, repo, view, lock, git.agentId, tip, true)).problems);
+  const tip = await verifiedOwnTip(deps, repo, view, lock, summary);
+  if (!tip) throw new Error('this agent\'s own log is not fully verified locally; not publishing (see sync.log)');
   const inLog = new Set((await files.readAccepted(git.agentId)).flatMap((s) => s.ops.map(opKey)));
-  const already = pending.filter((o) => inLog.has(opKey(o)));
-  await removePending(db, already.map((o) => ({ agent: o.agent, id: o.id })));
+  await removePending(db, pending.filter((o) => inLog.has(opKey(o))).map((o) => ({ agent: o.agent, id: o.id })));
   const todo = pending.filter((o) => !inLog.has(opKey(o)));
   if (todo.length === 0) return 0;
-  const head = await localAgentHead(deps, repo, git.teamId, git.agentId);
-  const state = (await files.readLogState()).agents[git.agentId];
-  const seqs = head ? await segmentSeqsAt(deps, repo, head) : [];
-  if (seqs[0] !== 0 || !state || state.head !== head || state.nextSeq !== seqs.length || seqs[seqs.length - 1] !== seqs.length - 1) {
-    throw new Error('this agent\'s own log is not fully verified locally; not publishing (see sync.log)');
-  }
+  const state = (await files.readLogState()).agents[git.agentId]!;
   await lock.assertOwned();
+  await opts.onPhase?.('publish');
+  let expected = tip;
   for (const seg of encodeChunked(view, state.nextSeq, todo)) {
-    await appendSegment(deps, repo, git.teamId, git.agentId, seg.seq, seg.data);
+    await appendSegment(deps, repo, git.teamId, git.agentId, seg.seq, seg.data, expected);
+    expected = (await localAgentHead(deps, repo, git.teamId, git.agentId))!;
   }
-  // Committed to the local log: no longer pending, whatever happens next (finding 1).
+  // Committed to the local log: no longer pending, whatever happens next.
   await removePending(db, todo.map((o) => ({ agent: o.agent, id: o.id })));
-  const r = await ingestAgent(deps, repo, view, lock, git.agentId, (await localAgentHead(deps, repo, git.teamId, git.agentId))!, true);
+  const r = await ingestAgent(deps, repo, view, lock, git.agentId, expected, true);
   summary.problems.push(...r.problems);
   summary.ingested += r.ops.length;
   return todo.length;
 }
 
-async function pushAll(deps: Deps, repo: string, view: GitView, status: SyncStatus, restoreFrom: string | null, now: number, summary: SyncSummary): Promise<void> {
+async function pushAll(
+  deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, restoreFrom: string | null,
+  meta: MetaCheck, now: number, summary: SyncSummary,
+): Promise<void> {
   const { teamId, agentId, remote } = view.git;
-  if ((await hasLocalMeta(deps, repo, teamId)) && !(await hasFetchedMeta(deps, repo, teamId))) {
+  if (meta.repair === 'missing') {
     const m = await pushMeta(deps, repo, remote, teamId);
     if (!m.ok) summary.errors.push(fromGit('push meta', m.error));
+  } else if (meta.repair) {
+    const m = await restoreMeta(deps, repo, remote, teamId, meta.repair);
+    if (m.ok) summary.metaRestored = true;
+    else summary.errors.push(fromGit('restore meta', m.error));
   }
-  const local = await localAgentHead(deps, repo, teamId, agentId);
-  if (!local) return;
+  meta.repair = null;
+  const local = await verifiedOwnTip(deps, repo, view, lock, summary);
+  if (!local) {
+    if (await localAgentHead(deps, repo, teamId, agentId)) summary.errors.push('own log does not verify locally; not pushing it');
+    return;
+  }
+  await lock.assertOwned();
   if (restoreFrom) {
     const r = await restoreOwn(deps, repo, remote, teamId, agentId, restoreFrom);
     if (!r.ok) { summary.errors.push(fromGit('restore', r.error)); return; }
@@ -416,6 +354,16 @@ async function pushAll(deps: Deps, repo: string, view: GitView, status: SyncStat
   await setFetchedAgentHead(deps, repo, teamId, agentId, local);
   status.lastPushAt = new Date(now).toISOString();
   summary.pushed = true;
+}
+
+async function writePresence(deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, now: number, summary: SyncSummary): Promise<void> {
+  const due = !status.lastPresenceAt || now - Date.parse(status.lastPresenceAt) >= PRESENCE_INTERVAL_MS;
+  if (!due) return;
+  const tip = await verifiedOwnTip(deps, repo, view, lock, summary);
+  if (!tip) return;
+  await lock.assertOwned();
+  await setPresence(deps, repo, view.git.teamId, view.git.agentId, encodePresence(view, now), tip);
+  status.lastPresenceAt = new Date(now).toISOString();
 }
 
 // ---- Migration from the first Task 7 layout -----------------------------------------------------------
@@ -431,7 +379,9 @@ async function migrateLegacy(view: GitView): Promise<void> {
 
 // ---- The round ---------------------------------------------------------------------------------------
 
-async function runRound(deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, now: () => number, summary: SyncSummary): Promise<void> {
+async function runRound(
+  deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, now: () => number, opts: SyncOptions, summary: SyncSummary,
+): Promise<void> {
   const { teamId, remote, agentId } = view.git;
   await migrateLegacy(view);
   const f = await fetchTeam(deps, repo, remote, teamId);
@@ -443,20 +393,17 @@ async function runRound(deps: Deps, repo: string, view: GitView, lock: SyncLock,
   } else {
     summary.errors.push(fromGit('fetch', f.error));
   }
-  const { creator, firstPin } = await checkMeta(deps, repo, view, summary);
+  const meta = await checkMeta(deps, repo, view, summary);
+  if (!f.ok) meta.repair = null; // decide repairs only on fresh remote state
   const ingested = await ingestAll(deps, repo, view, lock, summary);
   await lock.assertOwned();
-  if (creator) await applyIngested(view, ingested, creator, firstPin, now, summary);
-  await applyPresence(deps, repo, view, now());
+  if (meta.creator) await applyIngested(view, ingested, meta.creator, meta.firstPin, now, summary);
+  await applyPresence(view, now());
   for (;;) {
-    summary.published += await publishPending(deps, repo, view, lock, summary);
-    const due = !status.lastPresenceAt || now() - Date.parse(status.lastPresenceAt) >= PRESENCE_INTERVAL_MS;
-    await lock.assertOwned();
-    if (due && (await localAgentHead(deps, repo, teamId, agentId))) {
-      await setPresence(deps, repo, teamId, agentId, encodePresence(view, now()));
-      status.lastPresenceAt = new Date(now()).toISOString();
-    }
-    await pushAll(deps, repo, view, status, restoreFrom, now(), summary);
+    summary.published += await publishPending(deps, repo, view, lock, opts, summary);
+    await writePresence(deps, repo, view, lock, status, now(), summary);
+    if (!f.ok) break; // nothing can be pushed; everything stays queued locally
+    await pushAll(deps, repo, view, lock, status, restoreFrom, meta, now(), summary);
     restoreFrom = null;
     // Stop as soon as nothing of ours is pending (writes during the round are picked up here) or a push failed.
     if (summary.errors.length > 0 || (await listPending(view.store.ctx.db, agentId)).length === 0) break;
@@ -464,26 +411,30 @@ async function runRound(deps: Deps, repo: string, view: GitView, lock: SyncLock,
 }
 
 /** One locked round: always logs and records its outcome, always releases the lock. */
-async function lockedRound(deps: Deps, repo: string, view: GitView, lock: SyncLock, now: () => number): Promise<SyncSummary> {
+async function lockedRound(deps: Deps, repo: string, view: GitView, lock: SyncLock, now: () => number, opts: SyncOptions): Promise<SyncSummary> {
   const summary = emptySummary();
   const status: SyncStatus = { ...(await readStatus(view.paths).catch(() => ({}))), lastAttemptAt: new Date(now()).toISOString() };
+  let lost = false;
   try {
     await writeStatus(view.paths, status);
-    await runRound(deps, repo, view, lock, status, now, summary);
+    await runRound(deps, repo, view, lock, status, now, opts, summary);
   } catch (err) {
-    summary.errors.push(message(err).split('\n')[0]!);
+    lost = err instanceof Error && err.name === 'LostLockError';
+    summary.errors.push(cleanError(err));
   } finally {
     try {
-      for (const p of summary.problems) await logSyncError(view.paths, `refused: ${p}`, now());
-      for (const e of summary.errors) await logSyncError(view.paths, e, now());
+      for (const p of summary.problems) await logSyncError(view.paths, `refused: ${oneLine(p, 400)}`, now());
+      for (const e of summary.errors) await logSyncError(view.paths, oneLine(e, 400), now());
       if (summary.backdated > 0) await logSyncError(view.paths, `${summary.backdated} op(s) arrived late or backdated (view rebuilt)`, now());
       summary.ok = summary.errors.length === 0;
-      const base = withRefusals(status, summary.problems);
-      const next: SyncStatus = summary.ok
-        ? { ...base, lastError: null }
-        : { ...base, lastError: summary.errors[0]!, lastErrorAt: new Date(now()).toISOString() };
-      await writeStatus(view.paths, next);
-      if (summary.ok) await clearErrorWarning(view.paths);
+      if (!lost) {
+        const base = withRefusals(status, summary.problems.map((p) => oneLine(p)));
+        const next: SyncStatus = summary.ok
+          ? { ...base, lastError: null }
+          : { ...base, lastError: oneLine(summary.errors[0]!), lastErrorAt: new Date(now()).toISOString() };
+        await writeStatus(view.paths, next);
+        if (summary.ok) await clearErrorWarning(view.paths);
+      }
     } catch { /* recording must never mask the round's outcome */ } finally {
       await lock.release();
     }
@@ -495,6 +446,7 @@ function merge(a: SyncSummary, b: SyncSummary): SyncSummary {
   return {
     ...b,
     fetched: a.fetched || b.fetched, pushed: a.pushed || b.pushed, restored: a.restored || b.restored, rebuilt: a.rebuilt || b.rebuilt,
+    metaRestored: a.metaRestored || b.metaRestored,
     ingested: a.ingested + b.ingested, published: a.published + b.published, applied: a.applied + b.applied,
     rejected: a.rejected + b.rejected, backdated: a.backdated + b.backdated,
     problems: [...a.problems, ...b.problems],
@@ -503,7 +455,7 @@ function merge(a: SyncSummary, b: SyncSummary): SyncSummary {
 
 /** A failure before the lock (bad credential, unreadable repo): still logged and recorded when possible. */
 async function recordEarly(deps: Deps, repo: string, err: unknown, now: number): Promise<SyncSummary> {
-  const summary = { ...emptySummary(), ok: false, errors: [message(err).split('\n')[0]!] };
+  const summary = { ...emptySummary(), ok: false, errors: [cleanError(err)] };
   try {
     const paths = await syncPaths(deps, repo);
     await logSyncError(paths, summary.errors[0]!, now);
@@ -528,12 +480,12 @@ export async function syncRound(deps: Deps, repo: string, cred: Credential, opts
       if (!lock) return { ...emptySummary(), skipped: 'queued' };
       await takeSyncWanted(view.paths);
     }
-    let summary = await lockedRound(deps, repo, view, lock, now);
+    let summary = await lockedRound(deps, repo, view, lock, now, opts);
     for (let extra = 0; extra < MAX_EXTRA_ROUNDS; extra++) {
       if (!(await takeSyncWanted(view.paths))) break;
       const again = await acquireLock(view.paths.lock, { waitMs: 0 });
       if (!again) break; // a newer round holds it and covers the request
-      summary = merge(summary, await lockedRound(deps, repo, view, again, now));
+      summary = merge(summary, await lockedRound(deps, repo, view, again, now, opts));
     }
     return summary;
   } catch (err) {
@@ -544,7 +496,7 @@ export async function syncRound(deps: Deps, repo: string, cred: Credential, opts
 /**
  * Writes this agent's seq-0 bootstrap segment (a createTeam or join op from captureBootstrapOp, alone) to its local
  * log, under the sync lock. A createTeam also writes and pins the signed team meta. The op is applied when the team
- * meta is pinned (always for createTeam; for a join once a round has fetched the meta). For create/join (Task 8).
+ * meta is pinned (always for createTeam; for a join once the meta is pinned, from the invite or a round). Task 8.
  */
 export async function writeBootstrap(deps: Deps, repo: string, cred: Credential, op: Op, opts: SyncOptions = {}): Promise<SyncSummary> {
   const now = opts.now ?? Date.now;
@@ -566,7 +518,7 @@ export async function writeBootstrap(deps: Deps, repo: string, cred: Credential,
       await pinTeamMeta(view.store, teamId, metaPin({ v: 1, ...meta }));
     }
     await lock.assertOwned();
-    await appendSegment(deps, repo, teamId, agentId, 0, encodeSegment({ teamId, agent: agentId, seq: 0, ops: [op] }, teamKey, privateKey));
+    await appendSegment(deps, repo, teamId, agentId, 0, encodeSegment({ teamId, agent: agentId, seq: 0, ops: [op] }, teamKey, privateKey), null);
     const r = await ingestAgent(deps, repo, view, lock, agentId, (await localAgentHead(deps, repo, teamId, agentId))!, true);
     if (r.problems.length > 0) throw new Error(r.problems.join('; '));
     summary.ingested = r.ops.length;
@@ -588,6 +540,7 @@ export function formatSyncSummary(s: SyncSummary): string {
     `${s.published} sent`,
     s.pushed ? 'pushed' : null,
     s.restored ? 'own log restored' : null,
+    s.metaRestored ? 'team meta restored' : null,
     s.rebuilt ? 'view rebuilt' : null,
     s.problems.length ? `${s.problems.length} refused (see .git/agentteams/sync.log)` : null,
   ].filter(Boolean);

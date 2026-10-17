@@ -21,6 +21,8 @@ export interface ExecOpts {
   binary?: boolean;
   /** Kill the child after this many ms. Default: no timeout. */
   timeoutMs?: number;
+  /** Fail (code != 0) when stdout or stderr exceeds this many bytes. Default 64 MiB. */
+  maxBytes?: number;
 }
 export type Exec = (cmd: string, args: string[], opts?: ExecOpts) => Promise<ExecResult>;
 
@@ -44,7 +46,7 @@ export const realExec: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
     const env = opts.env ? { ...process.env, ...opts.env } : undefined;
     const encoding = opts.binary ? 'buffer' : 'utf8';
-    const child = execFile(cmd, args, { cwd: opts.cwd, env, encoding, maxBuffer: 64 * 1024 * 1024, ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}) }, (error, stdout, stderr) => {
+    const child = execFile(cmd, args, { cwd: opts.cwd, env, encoding, maxBuffer: opts.maxBytes ?? 64 * 1024 * 1024, ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}) }, (error, stdout, stderr) => {
       if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
         resolve({ code: 127, stdout: '', stderr: `command not found: ${cmd}` });
         return;
