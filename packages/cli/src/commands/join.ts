@@ -1,6 +1,6 @@
 import { rm, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import { defaultMemberName, MemberName, type InvitePreview, type ToolKind } from '@agentteams/shared';
+import { MemberName, type InvitePreview, type ToolKind } from '@agentteams/shared';
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { decodeInvite, INVITE_PREFIX, InviteError } from '../git/invite.js';
@@ -10,7 +10,7 @@ import { HubClient } from '../hubClient.js';
 import { joinLocalTeam, LOCAL_TEAM_LABEL, localInviteMatches } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
-import { checkTeamDir, detectGithubSlug, isGitRepo, real, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, isGitRepo, real, repoRoot, resolveMemberName } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { refuseExistingCredential } from './shared.js';
 
@@ -71,7 +71,7 @@ async function joinLocally(deps: CliDeps, code: string, opts: JoinOpts): Promise
   const repoPath = await repoRoot(deps, deps.cwd);
   await checkTeamDir(deps, repoPath);
   await refuseExistingCredential(deps, repoPath, opts.agent);
-  const member = opts.as ?? defaultMemberName(deps.username);
+  const member = opts.as ?? await resolveMemberName(deps, repoPath);
   const res = await joinLocalTeam(deps, repoPath, { inviteCode: code, tool: opts.agent, member });
   const cred = {
     repoPath, tool: opts.agent, hubUrl: '', teamName: res.teamName, agentName: res.agentName,
@@ -152,7 +152,7 @@ async function joinGit(deps: CliDeps, code: string, opts: JoinOpts): Promise<voi
   }
   // Everything that can be checked without touching the disk, before any clone.
   assertGitTeamId(invite.teamId);
-  const member = MemberName.parse(opts.as ?? defaultMemberName(deps.username));
+  const member = MemberName.parse(opts.as ?? await resolveMemberName(deps, deps.cwd));
   const { repoPath, remote, cloned } = await gitRepoFor(deps, invite.remote, opts);
   let res;
   try {
@@ -185,7 +185,7 @@ export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): 
   const repoPath = await resolveRepoPath(deps, preview, opts);
   await checkTeamDir(deps, repoPath);
   await refuseExistingCredential(deps, repoPath, opts.agent);
-  const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
+  const identity = githubToken ? { githubToken } : { member: opts.as ?? await resolveMemberName(deps, repoPath) };
   const res = await client.joinTeam({ inviteCode: code, tool: opts.agent, ...identity });
   const cred = {
     repoPath, tool: opts.agent, hubUrl, teamName: res.teamName, agentName: res.agentName,
