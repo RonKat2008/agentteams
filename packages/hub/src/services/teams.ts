@@ -14,7 +14,7 @@ function inviteExpiry(ctx: HubContext): string {
   return new Date(ctx.now().getTime() + INVITE_TTL_MS).toISOString();
 }
 
-export async function uniqueAgentName(ctx: HubContext, teamId: string, base: string): Promise<string> {
+async function uniqueAgentName(ctx: HubContext, teamId: string, base: string): Promise<string> {
   const rows = await ctx.db.selectFrom('agents').select('name')
     .where('team_id', '=', teamId)
     .where((eb) => eb.or([eb('name', '=', base), eb('name', 'like', `${base}-%`)]))

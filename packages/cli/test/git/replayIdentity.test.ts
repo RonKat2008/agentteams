@@ -2,9 +2,11 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { newAgentKeyPair } from '../../src/git/crypto.js';
 import { createHlc, parseHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp } from '../../src/git/ops.js';
-import { getPinnedTeamMeta, loadAgentDirectory, pinAgentKey, pinTeamMeta, takeNotices } from '../../src/git/replay.js';
+import {
+  getPinnedTeamMeta, loadAgentDirectory, pinAgentKey, pinTeamMeta, rebuildView, takeNotices,
+} from '../../src/git/replay.js';
 import type { Op } from '../../src/git/segment.js';
-import { TEAM_ID, buildLog, openReplica, type Built, type Replica } from './replayHelpers.js';
+import { TEAM_ID, TEST_NOW, buildLog, openReplica, type Built, type Replica } from './replayHelpers.js';
 
 const open: Replica[] = [];
 async function replica(source: () => unknown[], localAgentId?: string): Promise<Replica> {
@@ -153,5 +155,99 @@ describe('upgraded views', () => {
     await r.store.ctx.db.insertInto('replica_state').values({ key: 'needs_rebuild', value: '1' }).execute();
     expect(await r.apply([])).toMatchObject({ rebuilt: true });
     expect(await r.apply([])).toMatchObject({ rebuilt: false });
+  });
+});
+
+describe('competing createTeam variants', () => {
+  it('prefer the variant whose key matches the pinned creator, whatever the hashes', async () => {
+    const real = log.ops[0]!;
+    const forgedKeys = Array.from({ length: 12 }, () => newAgentKeyPair().publicKey); // some hash above, some below
+    for (const key of forgedKeys) {
+      const forged: Op = { ...real, input: { ...(real.input as object), publicKey: key } };
+      const r = await replica(() => [...log.ops, forged]);
+      await r.apply([forged, ...log.ops]);
+      expect(await r.store.ctx.db.selectFrom('teams').select('creator_agent_id').execute()).toEqual([{ creator_agent_id: log.ronit.id }]);
+      const rows = await r.store.ctx.db.selectFrom('applied_ops').select(['hash', 'status', 'error'])
+        .where('agent', '=', real.agent).where('op_id', '=', real.id).execute();
+      expect(rows.map((x) => x.error).sort()).toEqual(['equivocation', null].sort());
+    }
+  });
+});
+
+describe('task targets', () => {
+  it('a late or backdated createTask cannot redirect task ops captured earlier (decoy probe)', async () => {
+    const handover = log.ops.find((o) => o.op === 'setOrchestrator')!;
+    // Ronit, still orchestrator 1 ms before the handover, publishes a decoy late (offline or backdated).
+    const decoy = captureOp(createHlc(() => msOf(handover) - 1), log.ronit.id, 'createTask', { title: 'DECOY' }, { idOf: () => undefined });
+    const all = [...log.ops, decoy];
+    const r = await replica(() => all);
+    await r.apply(log.ops);
+    expect(await r.apply([decoy])).toMatchObject({ rebuilt: true });
+    expect(await rowFor(r, decoy)).toMatchObject({ status: 'applied' });
+
+    const tasks = await r.store.ctx.db.selectFrom('tasks').selectAll().orderBy('number').execute();
+    const byTitle = new Map(tasks.map((t) => [t.title, t]));
+    expect(byTitle.get('DECOY')).toMatchObject({ number: 3, status: 'open', assignee_agent_id: null });
+    // Dylan claimed "Fix the flaky test" by its row id: the claim still lands there, now as task #4.
+    expect(byTitle.get('Fix the flaky test')).toMatchObject({ number: 4, status: 'in_progress', assignee_agent_id: log.dylan.id });
+    expect(await rowFor(r, log.claimByKai)).toMatchObject({ status: 'rejected', error: 'forbidden' });
+    expect((log.claimByDylan.input as { task: unknown }).task).toBe(byTitle.get('Fix the flaky test')!.id);
+  });
+});
+
+describe('rename notices', () => {
+  it('tells the local agent when a rebuild renames a teammate and reuses the name', async () => {
+    const squat = backdatedJoin(msOf(log.ops[1]!) - 500, 'dylan');
+    const all = [...log.ops, squat];
+    const r = await replica(() => all, log.ash.id);
+    await r.apply(log.ops);
+    await takeNotices(r.store, log.ash.id); // drop the claim-refusal notice
+    await r.apply([squat]);
+    const bodies = (await takeNotices(r.store, log.ash.id)).map((n) => n.body);
+    expect(bodies).toEqual([
+      `Team change: agent "dylan-claude" (${log.dylan.id}) is now called "dylan-claude-2"; `
+        + `the name "dylan-claude" now refers to another agent (${squat.agent}).`,
+    ]);
+    // Re-applying (another rebuild with the same outcome) adds nothing.
+    await rebuildView(r.store, {
+      source: { allOps: async () => all }, teamId: TEAM_ID, teamCreator: log.creator, localAgentId: log.ash.id, nowMs: TEST_NOW,
+    });
+    expect(await takeNotices(r.store, log.ash.id)).toEqual([]);
+  });
+});
+
+describe('long names', () => {
+  it('truncates a suffixed name so it stays a valid, addressable agent name', async () => {
+    const T = Date.UTC(2026, 9, 16, 8);
+    const ronitKey = newAgentKeyPair().publicKey;
+    const { agentId: ronit, op: create } = captureBootstrapOp(createHlc(() => T), 'createTeam', {
+      teamId: TEAM_ID, name: 'alpha', repo: { provider: 'local', defaultBranch: 'main' }, member: 'ronit', tool: 'claude',
+      agentName: 'ronit-claude', publicKey: ronitKey,
+    });
+    const longName = `dylan-${'c'.repeat(30)}`;
+    const victim = backdatedJoin(T + 2000, 'dylan', longName);
+    const ops: Op[] = [create, victim];
+    const r = await openReplica(() => ops, undefined, () => ({ agentId: ronit, publicKey: ronitKey }));
+    open.push(r);
+    await r.apply(ops);
+    const dm = captureOp(createHlc(() => T + 3000), ronit, 'sendMessage', { to: longName, body: 'for the long one' },
+      await loadAgentDirectory(r.store, TEAM_ID));
+    ops.push(dm);
+    await r.apply([dm]);
+
+    const squat = backdatedJoin(T + 1000, 'dylan', longName);
+    ops.push(squat);
+    expect(await r.apply([squat])).toMatchObject({ rebuilt: true });
+    const renamed = (await r.actor(victim.agent)).name;
+    expect(renamed).toBe(`dylan-${'c'.repeat(28)}-2`);
+    expect(renamed).toMatch(/^[a-z0-9_]{1,24}-[a-z0-9-]{1,30}$/);
+    expect(await rowFor(r, dm)).toMatchObject({ status: 'applied' });
+    const toVictim = await r.store.ctx.db.selectFrom('messages').select('body').where('to_agent_id', '=', victim.agent).execute();
+    expect(toVictim.map((m) => m.body)).toEqual(['for the long one']);
+
+    const again = captureOp(createHlc(() => T + 4000), ronit, 'sendMessage', { to: renamed, body: 'by new name' },
+      await loadAgentDirectory(r.store, TEAM_ID));
+    ops.push(again);
+    expect(await r.apply([again])).toMatchObject({ applied: 1, rejected: 0 });
   });
 });

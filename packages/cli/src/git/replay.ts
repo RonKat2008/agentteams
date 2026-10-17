@@ -153,7 +153,7 @@ function hashOf(raw: unknown): string {
 }
 
 /** Envelope checks. Null when the op has no usable (agent, id): it cannot even be recorded. */
-function classify(raw: unknown, pins: ReadonlyMap<string, string>): Candidate | null {
+function classify(raw: unknown, pins: ReadonlyMap<string, string>, creator?: TeamCreator): Candidate | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== 'string' || r.id.length === 0 || r.id.length > MAX_OP_ID_LENGTH) return null;
@@ -166,13 +166,14 @@ function classify(raw: unknown, pins: ReadonlyMap<string, string>): Candidate | 
   if (typeof r.op !== 'string') return invalid('malformed op name');
   const pin = pins.get(r.agent);
   const key = (r.input as { publicKey?: unknown } | null)?.publicKey;
-  const pinned = BOOTSTRAP_OP_NAMES.has(r.op) && pin !== undefined && pin === key;
+  const creatorMatch = r.op === 'createTeam' && creator !== undefined && r.agent === creator.agentId && key === creator.publicKey;
+  const pinned = BOOTSTRAP_OP_NAMES.has(r.op) && ((pin !== undefined && pin === key) || creatorMatch);
   return { valid: true, ...base, op: { v: 1, id: r.id, ts: r.ts as string, agent: r.agent, op: r.op, input: r.input }, pinned };
 }
 
 /**
  * Equivocation order among contents of one (agent, id): valid envelope first, then (bootstrap ops) the
- * variant whose key matches this replica's pin, then lowest hash.
+ * variant whose key matches this replica's pin (or, for createTeam, the pinned team creator), then lowest hash.
  */
 function rank(
   a: { valid: boolean; hash: string; pinned: boolean }, b: { valid: boolean; hash: string; pinned: boolean },
@@ -183,13 +184,13 @@ function rank(
 }
 
 function groupCandidates(
-  raws: readonly unknown[], pins: ReadonlyMap<string, string>,
+  raws: readonly unknown[], pins: ReadonlyMap<string, string>, creator?: TeamCreator,
 ): { groups: Map<string, Group>; unrecordable: number; copies: number } {
   const byKey = new Map<string, Map<string, Candidate>>();
   let unrecordable = 0;
   let copies = 0;
   for (const raw of raws) {
-    const c = classify(raw, pins);
+    const c = classify(raw, pins, creator);
     if (!c) {
       unrecordable++;
       continue;
@@ -408,7 +409,7 @@ export async function applyOps(store: ReplayStore, ops: unknown[], opts: ApplyOp
   const { ready, deferred } = deferFutureOps(ops, nowMs);
   const trx = await store.ctx.db.startTransaction().execute();
   try {
-    const { groups, unrecordable, copies } = groupCandidates(ready, await loadPins(trx));
+    const { groups, unrecordable, copies } = groupCandidates(ready, await loadPins(trx), opts.teamCreator);
     const known = await knownRows(trx, groups);
     const last = await lastEvaluated(trx);
     const fresh: Candidate[] = [];
@@ -472,18 +473,48 @@ export async function rebuildView(store: ReplayStore, opts: ApplyOptions): Promi
   }
 }
 
+async function agentNamesById(trx: Trx): Promise<Map<string, string>> {
+  const rows = await trx.selectFrom('agents').select(['id', 'name']).execute();
+  return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+/**
+ * A rebuild can rename agents (a late, earlier join takes a name and pushes the other to `-2`) or drop
+ * them. Names are what people and agents type, so tell this replica's agent about every change.
+ */
+async function noticeRenames(
+  trx: Trx, before: Map<string, string>, after: Map<string, string>, opts: ApplyOptions & { nowMs: number },
+): Promise<void> {
+  if (opts.localAgentId === undefined) return;
+  const holderAfter = new Map([...after].map(([id, name]) => [name, id]));
+  const createdAt = new Date(opts.nowMs).toISOString();
+  for (const [id, oldName] of before) {
+    const newName = after.get(id);
+    if (newName === oldName) continue;
+    const taker = holderAfter.get(oldName);
+    const now = newName === undefined ? 'is no longer in the team view' : `is now called "${newName}"`;
+    const reused = taker !== undefined && taker !== id ? `; the name "${oldName}" now refers to another agent (${taker})` : '';
+    await trx.insertInto('replica_notices').values({
+      agent_id: opts.localAgentId, op_id: `rename:${id}:${newName ?? '-'}`,
+      body: `Team change: agent "${oldName}" (${id}) ${now}${reused}.`, created_at: createdAt, delivered_at: null,
+    }).onConflict((oc) => oc.columns(['agent_id', 'op_id']).doNothing()).execute();
+  }
+}
+
 async function replayAll(
   store: ReplayStore, trx: Trx, raws: unknown[], opts: ApplyOptions & { nowMs: number },
 ): Promise<ApplySummary> {
   const { ready, deferred } = deferFutureOps(raws, opts.nowMs);
-  const { groups, unrecordable } = groupCandidates(ready, await loadPins(trx));
+  const { groups, unrecordable } = groupCandidates(ready, await loadPins(trx), opts.teamCreator);
   await takeRebuildFlag(trx);
+  const namesBefore = await agentNamesById(trx);
   await wipe(trx);
   await bumpRebuilds(trx);
   const replayer = new Replayer(store, trx, opts);
   const all = [...groups.values()];
   for (const c of sortForReplay(all.map((g) => g.winner))) await replayer.evaluate(c);
   for (const g of all) for (const c of g.losers) await replayer.recordLoser(c);
+  await noticeRenames(trx, namesBefore, await agentNamesById(trx), opts);
   return {
     applied: replayer.applied, rejected: replayer.rejected + unrecordable, duplicates: 0, deferred: deferred.length, backdated: 0,
     rebuilt: true,
@@ -548,12 +579,15 @@ export async function getPinnedTeamMeta(store: ReplayStore, teamId: string): Pro
   return row ? (JSON.parse(row.meta_json) as TeamMetaPin) : undefined;
 }
 
-/** Agent name -> id over the current view, for captureOp (ops address agents by id). */
+/** Agent name -> id and task number -> row id over the current view, for captureOp (ops carry ids). */
 export async function loadAgentDirectory(store: ReplayStore, teamId?: string): Promise<AgentDirectory> {
-  let query = store.ctx.db.selectFrom('agents').select(['id', 'name']);
-  if (teamId !== undefined) query = query.where('team_id', '=', teamId);
-  const byName = new Map((await query.execute()).map((r) => [r.name, r.id]));
-  return { idOf: (name) => byName.get(name) };
+  let agents = store.ctx.db.selectFrom('agents').select(['id', 'name']);
+  if (teamId !== undefined) agents = agents.where('team_id', '=', teamId);
+  let tasks = store.ctx.db.selectFrom('tasks').select(['id', 'number']);
+  if (teamId !== undefined) tasks = tasks.where('team_id', '=', teamId);
+  const byName = new Map((await agents.execute()).map((r) => [r.name, r.id]));
+  const byNumber = new Map((await tasks.execute()).map((r) => [Number(r.number), r.id]));
+  return { idOf: (name) => byName.get(name), taskIdOf: (number) => byNumber.get(number) };
 }
 
 /** Returns this agent's undelivered notices, oldest first, and marks them delivered. */
