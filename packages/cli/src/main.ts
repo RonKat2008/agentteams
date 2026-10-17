@@ -136,8 +136,9 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
   sub('merge').description('Merge finished task branches, run the tests and land the result (orchestrator only)')
     .addOption(agentOpt()).option('--into <branch>', 'branch to merge into (default: the branch checked out in the main checkout)')
-    .option('--test <cmd>', 'test command, run with sh -c (default: detected from package.json, Makefile, Cargo, Go or pytest)')
+    .option('--test <cmd>', 'test command, run with sh -c (default: detected from the base branch\'s package.json, Makefile, Cargo, Go or pytest, after asking)')
     .option('--no-test', 'do not run tests')
+    .option('--yes', 'run the auto-detected test command without asking (needed without a terminal)')
     .option('--no-notify', "do not ask a conflicting task's agent to rebase")
     .option('--stop-on-conflict', 'stop at the first conflict and leave it in the integration worktree')
     .option('--dry-run', 'merge and test without updating the branch or recording merges')

@@ -2,13 +2,20 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readTextIfExists } from '../tools/jsonConfig.js';
 
-/** A project's test command, found from its files. `install` runs first when dependencies are not installed. */
-export interface DetectedTest { test: string; install?: string; source: string }
+/**
+ * A project's test command, found from its files. `install` runs first when dependencies are not installed.
+ * `definition` is the text that decides what the command does (the package.json test script, the Makefile), so a
+ * caller can tell whether merged branches changed it.
+ */
+export interface DetectedTest { test: string; install?: string; source: string; definition?: string }
 
 /** What `npm init` writes as the test script: not a real test suite. */
 const NPM_PLACEHOLDER = /no test specified/;
 
 const exists = (p: string): Promise<boolean> => stat(p).then(() => true, () => false);
+
+/** Installs never run lifecycle scripts (postinstall and friends): they would be code from the merged branches. */
+const NO_SCRIPTS = '--ignore-scripts';
 
 function testScript(text: string | null): string | null {
   if (text === null) return null;
@@ -21,17 +28,18 @@ function testScript(text: string | null): string | null {
 }
 
 async function node(dir: string): Promise<DetectedTest | null> {
-  if (testScript(await readTextIfExists(join(dir, 'package.json'))) === null) return null;
+  const script = testScript(await readTextIfExists(join(dir, 'package.json')));
+  if (script === null) return null;
   const [pm, install] = (await exists(join(dir, 'pnpm-lock.yaml'))) ? ['pnpm', 'pnpm install --frozen-lockfile']
     : (await exists(join(dir, 'yarn.lock'))) ? ['yarn', 'yarn install --frozen-lockfile']
       : (await exists(join(dir, 'package-lock.json'))) ? ['npm', 'npm ci'] : ['npm', 'npm install'];
   const installed = await exists(join(dir, 'node_modules'));
-  return { test: `${pm} test`, ...(installed ? {} : { install }), source: 'package.json' };
+  return { test: `${pm} test`, ...(installed ? {} : { install: `${install} ${NO_SCRIPTS}` }), source: 'package.json', definition: script };
 }
 
 async function make(dir: string): Promise<DetectedTest | null> {
   const text = await readTextIfExists(join(dir, 'Makefile'));
-  return text !== null && /^test\s*:/m.test(text) ? { test: 'make test', source: 'Makefile' } : null;
+  return text !== null && /^test\s*:/m.test(text) ? { test: 'make test', source: 'Makefile', definition: text } : null;
 }
 
 async function pytest(dir: string): Promise<DetectedTest | null> {

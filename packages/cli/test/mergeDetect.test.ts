@@ -18,17 +18,17 @@ describe('detectTestCommand', () => {
 
   it('package.json test script: npm by default, with npm ci when there is a lockfile and no node_modules', async () => {
     pkg({ test: 'vitest run' });
-    expect(await detectTestCommand(dir)).toEqual({ test: 'npm test', install: 'npm install', source: 'package.json' });
+    expect(await detectTestCommand(dir)).toEqual({ test: 'npm test', install: 'npm install --ignore-scripts', source: 'package.json', definition: 'vitest run' });
     put('package-lock.json', '{}');
-    expect(await detectTestCommand(dir)).toEqual({ test: 'npm test', install: 'npm ci', source: 'package.json' });
+    expect(await detectTestCommand(dir)).toEqual({ test: 'npm test', install: 'npm ci --ignore-scripts', source: 'package.json', definition: 'vitest run' });
     mkdirSync(join(dir, 'node_modules'));
-    expect(await detectTestCommand(dir)).toEqual({ test: 'npm test', source: 'package.json' });
+    expect(await detectTestCommand(dir)).toEqual({ test: 'npm test', source: 'package.json', definition: 'vitest run' });
   });
 
   it('picks pnpm or yarn from the lockfile', async () => {
     pkg({ test: 'vitest run' });
     put('pnpm-lock.yaml');
-    expect(await detectTestCommand(dir)).toEqual({ test: 'pnpm test', install: 'pnpm install --frozen-lockfile', source: 'package.json' });
+    expect(await detectTestCommand(dir)).toEqual({ test: 'pnpm test', install: 'pnpm install --frozen-lockfile --ignore-scripts', source: 'package.json', definition: 'vitest run' });
     rmSync(join(dir, 'pnpm-lock.yaml'));
     put('yarn.lock');
     expect(await detectTestCommand(dir)).toMatchObject({ test: 'yarn test' });
@@ -43,7 +43,7 @@ describe('detectTestCommand', () => {
 
   it('Makefile with a test target', async () => {
     put('Makefile', 'build:\n\tcc x.c\n\ntest: build\n\t./run-tests\n');
-    expect(await detectTestCommand(dir)).toEqual({ test: 'make test', source: 'Makefile' });
+    expect(await detectTestCommand(dir)).toMatchObject({ test: 'make test', source: 'Makefile' });
     put('Makefile', 'build:\n\tcc x.c\n');
     expect(await detectTestCommand(dir)).toBeNull();
   });
