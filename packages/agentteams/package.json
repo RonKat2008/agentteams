@@ -20,6 +20,7 @@
     "@clack/prompts": "1.8.1",
     "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "better-sqlite3": "^13.0.3",
     "commander": "^15.0.0",
     "hono": "^4.13.13",
     "kysely": "^0.29.6",
@@ -29,7 +30,6 @@
     "zod": "^4.6.7"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^13.0.3",
     "cloudflared": "^0.7.1"
   },
   "devDependencies": {

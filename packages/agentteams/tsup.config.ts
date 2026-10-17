@@ -1,10 +1,10 @@
 import { defineConfig } from 'tsup';
 import type { Plugin } from 'esbuild';
 
-// better-sqlite3 is an optionalDependency (native addon). The hub imports it
-// statically in a module that is only reached lazily, but bundling hoists that
-// import to the top of dist/bin.js, which would crash the whole CLI when the
-// addon failed to install. Swap it for a shim that requires it on first use.
+// better-sqlite3 is a native addon, needed by local and git teams (the default). The hub imports it
+// statically in a module that is only reached lazily, but bundling hoists that import to the top of
+// dist/bin.js, which would crash every command (hub teams included) if the addon failed to build.
+// Swap it for a shim that requires it on first use and explains a failed load.
 const lazyBetterSqlite3: Plugin = {
   name: 'lazy-better-sqlite3',
   setup(build) {
@@ -14,7 +14,14 @@ const lazyBetterSqlite3: Plugin = {
       contents: [
         "import { createRequire } from 'node:module';",
         'const load = createRequire(import.meta.url);',
-        'export default function Database(...args) { const Real = load("better-sqlite3"); return new Real(...args); }',
+        'function real() {',
+        '  try { return load("better-sqlite3"); } catch (err) {',
+        '    throw new Error("agentteams: the better-sqlite3 native module could not be loaded (" + (err && err.message ? err.message.split("\\n")[0] : err) + "). " +',
+        '      "Local and git teams need it: reinstall with `npm i -g agentteams-cli` where a C++ build toolchain is available, " +',
+        '      "or use a hub team (--hub).", { cause: err });',
+        '  }',
+        '}',
+        'export default function Database(...args) { const Real = real(); return new Real(...args); }',
       ].join('\n'),
     }));
   },
@@ -30,7 +37,8 @@ export default defineConfig({
   target: 'node22',
   splitting: true,
   clean: true,
-  noExternal: [/^@agentteams\//],
+  // better-sqlite3 is a dependency, which tsup would leave as a plain import: route it through the shim instead.
+  noExternal: [/^@agentteams\//, 'better-sqlite3'],
   external: ['cloudflared'],
   esbuildPlugins: [lazyBetterSqlite3],
 });
