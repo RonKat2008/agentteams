@@ -9,7 +9,7 @@ import {
 import { planTests, runTests, type TestPlan } from '../merge/tests.js';
 import type { TeamClient } from '../teamClient.js';
 import { assertSafeBranch, clientFor, readableTeams, teamKey } from './shared.js';
-import { repoRootOf } from './worktree.js';
+import { hasTaskWorktree, repoRootOf } from './worktree.js';
 
 export interface MergeOpts {
   agent?: ToolKind;
@@ -162,12 +162,27 @@ async function land(deps: CliDeps, root: string, base: string): Promise<{ reason
   return r.code === 0 ? null : { reason: gitFailure(['merge', '--ff-only', INTEGRATION_BRANCH], r).message, command: ff };
 }
 
+/** Names the merged tasks' worktrees still on this computer. Only a hint: an agent may still be working in one. */
+async function worktreeHint(run: Run, merged: Merged[]): Promise<void> {
+  const { deps, root } = run;
+  const creds = (await loadCredentials(deps)).filter((c) => c.repoPath === run.cred.repoPath && teamKey(c) === teamKey(run.cred));
+  const commands: string[] = [];
+  for (const { task } of merged) {
+    const cred = creds.find((c) => c.agentName === task.assignee);
+    if (cred && (await hasTaskWorktree(deps, root, cred.agentName, task.number))) {
+      commands.push(`agentteams worktree ${task.number} --remove --agent ${cred.tool}`);
+    }
+  }
+  if (commands.length > 0) deps.out(`The merged tasks' worktrees are no longer needed; remove them with: ${commands.join(' && ')}`);
+}
+
 async function record(run: Run, merged: Merged[], remote: string | null): Promise<void> {
   const { deps, client, root, base, opts } = run;
   for (const { task } of merged) {
     try { await client.markMerged(task.number); } catch (e) { deps.err(`agentteams: warning: could not record task #${task.number} as merged: ${message(e)}`); }
   }
   deps.out(`Recorded ${merged.map((m) => `#${m.task.number}`).join(', ')} as merged.`);
+  await worktreeHint(run, merged);
   if (!opts.push) return;
   if (!remote) { deps.err('agentteams: warning: --push: this repo has no git remote'); return; }
   const r = await deps.exec('git', ['push', remote, base], { cwd: root });

@@ -358,7 +358,8 @@ pushed from other computers are found; a remote branch newer than the local one 
   as merged (the team log shows each one, and each assignee is told) and the integration worktree and branch are
   removed. The base is only moved when the main checkout is on it with no uncommitted changes; otherwise the result stays on branch
   `agentteams/merge` and the exact commands to land and record it are printed. Nothing is pushed unless you pass
-  `--push`.
+  `--push`. The merged tasks' worktrees on this computer are kept (an agent may still be in one); merge prints the
+  `agentteams worktree <task> --remove` commands that remove them.
 - **Failures.** If the tests fail, the base is untouched, nothing is recorded, and the integration worktree is kept
   (its path is printed) so you can look; the next `agentteams merge` replaces it.
 - `--dry-run` merges and tests but never moves the base, records anything or messages agents.

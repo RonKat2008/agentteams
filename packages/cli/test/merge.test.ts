@@ -128,6 +128,17 @@ describe('agentteams merge', () => {
     expect(asks[0]!.body).toContain(`Task #${t1} conflicts with changes on main. Rebase`);
   });
 
+  it('after landing, says how to remove the merged tasks\' worktrees left on this computer', async () => {
+    const t1 = await finishedTask('Login', { 'login.txt': 'login\n' });
+    const t2 = await finishedTask('Signup', { 'signup.txt': 'signup\n' });
+    const wt = join(r.repo, '.agentteams', 'worktrees', s.bob.agentName, String(t1));
+    git(r.repo, 'worktree', 'add', '-q', wt, `at/${s.bob.agentName}/${t1}`);
+    expect(await run('merge', '--test', 'exit 0')).toBe(0);
+    expect(out()).toContain(`agentteams worktree ${t1} --remove --agent codex`);
+    expect(out()).not.toContain(`agentteams worktree ${t2} --remove`);
+    expect(existsSync(wt)).toBe(true); // a hint only: someone may still be working in it
+  });
+
   it('removes the integration branch once the base has landed', async () => {
     await finishedTask('Login', { 'login.txt': 'login\n' });
     expect(await run('merge', '--test', 'exit 0')).toBe(0);

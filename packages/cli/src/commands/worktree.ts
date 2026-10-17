@@ -42,6 +42,13 @@ async function taskWorktreePath(deps: CliDeps, root: string, agent: string, task
   return (await exists(legacy)) && (await isWorktreeOn(deps, legacy, branch)) ? legacy : newPath(root, agent, task);
 }
 
+/** Whether `agent` has a worktree for `task` on its task branch in this clone. */
+export async function hasTaskWorktree(deps: CliDeps, root: string, agent: string, task: number): Promise<boolean> {
+  const branch = `at/${agent}/${task}`;
+  const path = await taskWorktreePath(deps, root, agent, task, branch);
+  return (await exists(path)) && isWorktreeOn(deps, path, branch);
+}
+
 async function pickBase(deps: CliDeps, client: TeamClient, root: string, base: string | undefined): Promise<string> {
   if (base) return base;
   const { branch: d, provider } = await teamDefaultBranch(deps, client, root);
