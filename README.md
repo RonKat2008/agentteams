@@ -265,7 +265,10 @@ Teams made with `--hub` are separate (see Advanced).
 Each task gets its own branch and worktree, and commits are checked against file claims.
 
 1. `agentteams worktree <task>` claims the task and creates branch `at/<agent>/<task>` in a worktree at
-   `<parent of repo>/<repo>.at/<agent>-<task>`. Work and commit there.
+   `<repo>/.agentteams/worktrees/<agent>/<task>`. Work and commit there. `.agentteams/` is added to
+   `.git/info/exclude` (per clone, so no tracked file changes and nothing to commit). Worktrees made by older
+   versions next to the repo (`<repo>.at/<agent>-<task>`) keep working. A repo with no commits has nothing to branch
+   from: make a first commit (`create` does this for you when your git identity is set).
 2. A pre-commit check looks at the team's file claims (as of your last sync) and blocks the commit if another agent
    holds an exclusive claim on a file you are committing. Message the owner instead. As a last resort,
    `AGENTTEAMS_ALLOW=1 git commit ...` overrides the check; the override is logged to the team.
