@@ -3,8 +3,9 @@
 </p>
 
 <h3 align="center">one team, every coding agent</h3>
-<p align="center">Put Claude Code, Codex, Cursor, Gemini, Copilot and friends in one team, across people and machines,<br>
-with a shared task board, inbox, file claims and one orchestrator in charge.</p>
+<p align="center">Put Claude Code, Codex, Cursor, Gemini, Copilot and friends in one team, with a shared task board, inbox,<br>
+file claims and one orchestrator in charge. <b>No server and no accounts:</b> your agents coordinate through a file in <code>.git/</code>,<br>
+and your teammates through the git remote you already share.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/agentteams-cli"><img src="https://img.shields.io/npm/v/agentteams-cli?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
@@ -17,30 +18,36 @@ npm i -g agentteams-cli
 ```
 
 Prefer a guided setup? Just run `agentteams`. In a terminal it opens a menu that detects your installed
-agents and walks you through creating or joining a team. (The npm package is `agentteams-cli`; the command
-it installs is `agentteams`.)
+agents and asks who will be on the team. (The npm package is `agentteams-cli`; the command it installs is
+`agentteams`.)
 
 ## See it run
 
+### Your agents on one computer
+
+No git remote, no setup. `create` makes a team stored in the repo's `.git/`; a second agent joins with the code. All of your agents in that repo coordinate instantly and offline.
+
+<p align="center"><img src="assets/local.gif" alt="agentteams create in a repo with no remote, a second agent joining, then agentteams status" width="100%"></p>
+
+### With teammates on other computers
+
+Alice creates a team in her clone. The repo has a git remote, so the team is shared through it and she gets an invite code (`at1-...`). Jamie runs `agentteams join` on his laptop with Codex. Each agent is configured in place: MCP server, hooks, rules file and git hooks.
+
+<p align="center"><img src="assets/create.gif" alt="agentteams create in a repo with a remote prints an at1- invite code, then jamie joins with Codex from his own clone, then agentteams status shows both" width="100%"></p>
+
 ### Guided setup: just run `agentteams`
 
-The menu finds the agents you have installed, links the one you pick and hands you an invite code to share.
+The menu finds the agents you have installed, asks "Who will be on this team?" (the repo's git remote is the default when there is one), links the agent you pick and hands you an invite code to share.
 
-<p align="center"><img src="assets/tui-create.gif" alt="the agentteams menu creating a team: name, detected agent, repo, hub, then an invite box" width="100%"></p>
+<p align="center"><img src="assets/tui-create.gif" alt="the agentteams menu creating a team: name, detected agent, who will be on the team, then an invite box" width="100%"></p>
 
 A teammate pastes the code into the same menu, picks their agent, and sees the whole team.
 
-<p align="center"><img src="assets/tui-join.gif" alt="the agentteams menu joining with an invite code as Codex, then showing team status" width="100%"></p>
-
-### Or use the commands directly
-
-Alice creates a team for her Claude Code. Jamie joins from his laptop with Codex, using the invite code. Each agent is configured in place: MCP server, hooks, rules file and git hooks.
-
-<p align="center"><img src="assets/create.gif" alt="agentteams create, then a second person joins with Codex, then agentteams status" width="100%"></p>
+<p align="center"><img src="assets/tui-join.gif" alt="the agentteams menu joining with an at1- invite code as Codex, then showing team status" width="100%"></p>
 
 ### The orchestrator runs the board
 
-`agentteams log -f` while the team works: the orchestrator creates and assigns tasks, workers claim them and their files, a question gets an answer, a commit lands and a task is finished.
+`agentteams log -f` on Alice's machine while the team works from three other clones: the orchestrator creates and assigns tasks, workers claim them and their files, a question gets an answer, a commit lands and a task is finished.
 
 <p align="center"><img src="assets/log.gif" alt="agentteams log -f streaming team activity" width="100%"></p>
 
@@ -56,42 +63,47 @@ When an agent tries to stop with an unread orchestrator command, its Stop hook b
 
 ### Nobody commits over someone else's claim
 
-Kai's Cursor claimed `src/auth/login.ts`. Jamie's commit to it is blocked until they talk, or he overrides it and Kai is notified.
+Kai's Cursor claimed `src/auth/login.ts` on his machine. After a sync, Jamie's commit to it is blocked until they talk, or he overrides it and Kai is notified.
 
-<p align="center"><img src="assets/guard.gif" alt="git commit blocked by another agent's file claim, then overridden" width="100%"></p>
+<p align="center"><img src="assets/guard.gif" alt="agentteams sync, then git commit blocked by another agent's file claim, then overridden" width="100%"></p>
 
-<sub>Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> against a local hub (<code>agentteams up</code>), where <code>--as</code> names you; on the public hub your GitHub login does. Re-record with <code>pnpm demo</code>.</sub>
+<sub>Recorded with <a href="https://github.com/charmbracelet/vhs">vhs</a> in a scratch directory: a bare repo standing in for the GitHub repo and a clone each for alice, jamie, kai and sam, with <code>agentteams sync</code> called explicitly so the recordings are repeatable. Re-record with <code>pnpm demo</code>.</sub>
 
 
 ## Quick start
 
+### Your agents on one computer
+
 ```bash
-# 1. In your repo: create a team (you become the orchestrator).
-#    Uses the public hub; needs the GitHub CLI logged in (gh auth login).
-cd ~/code/my-repo
-agentteams create my-team --agent claude        # prints an invite code
-
-# 2. Add another agent on this machine, or let a teammate run this on theirs
-agentteams join <invite-code> --agent codex     # clones the team repo with gh unless --no-clone
-
-# 3. Open the agents in the repo. In Codex, run /hooks once and approve the agentteams hooks.
+cd ~/code/my-repo                                # a repo with no git remote (or add --this-computer)
+agentteams create my-team --agent claude         # prints a short invite code
+agentteams join <invite-code> --agent codex      # in the same repo: a second agent joins
 ```
+
+The team lives in `.git/agentteams/team.db`. Every agent working in that repo (and its worktrees) shares it, instantly
+and offline. Nothing leaves your machine.
+
+### With teammates on other computers
+
+```bash
+cd ~/code/my-repo                                # a clone with a git remote, e.g. a GitHub repo
+agentteams create my-team --agent claude         # prints an invite code starting with at1-
+
+# a teammate, on their own computer (clones the repo for them; use --no-clone or --dir to choose):
+agentteams join at1-... --agent codex
+```
+
+Send the code over a private channel: **it is a password** (see Security). Teammates need push access to the repo
+the way they already do, and nothing else: no account with us, no GitHub login, any git host works. State travels
+through hidden refs in your remote; a background `agentteams sync` runs from the agents' hooks and MCP servers. A
+hook that finds the view stale starts that fetch, so a new message usually reaches the receiver at its next hook
+after that one.
+
+Then open the agents in the repo. In Codex, run `/hooks` once and approve the agentteams hooks.
 
 `create` and `join` install everything (MCP server, hooks, instruction block). Run `agentteams install`
 to redo that, for example after updating the CLI or switching Node versions (hooks embed the node path).
-
-Pick where the hub runs:
-
-| You want | Run | Then |
-|---|---|---|
-| Zero setup, agents anywhere | nothing (the public hub is the default) | `agentteams create` / `join` |
-| Same machine only, no network | `agentteams up` (local SQLite, port 4747) | add `--hub local` to `create` / `join` |
-| Private team across machines | `agentteams up --share` | send teammates the printed `join` command |
-
-`up --share` starts the hub in hosted mode on loopback behind a free Cloudflare quick tunnel
-(`*.trycloudflare.com`), keeps its data in SQLite under `~/.agentteams`, and prints the URL plus the exact
-`create` and `join` commands. Ctrl-C stops the hub and the tunnel. The `cloudflared` binary is fetched on
-first use.
+`agentteams invite show` prints a git team's code again.
 
 <details>
 <summary><b>Install from source (not on npm yet)</b></summary>
@@ -149,61 +161,104 @@ Caveats worth knowing:
   Config files that are not valid JSON are left untouched with a warning.
 - API keys live only in `~/.agentteams/credentials.json` (mode 0600) and in Claude Code's own
   `~/.claude.json` entry. They are never written into the repo.
-- Credentials are keyed by the repo's absolute path: after moving a repo, run `agentteams join` again.
+- Credentials are keyed by the repo's absolute path: after moving a repo, move it back or update its `repoPath` in
+  `~/.agentteams/credentials.json`. Joining again would register a new agent and leave the old one (and, for a git
+  team, its key) behind.
 
 </details>
 
 ## How it works
 
-- A **hub** holds teams, agents, messages, tasks, file claims, commit summaries and an activity log.
-- Each agent gets an **MCP server** (`agentteams mcp`) exposing: `team_status`, `send_message`,
-  `read_inbox`, `create_task`, `assign_task`, `list_tasks`, `claim_task`, `update_task`, `complete_task`,
-  `mark_merged`, `claim_files`, `release_files`, `who_owns`, `get_activity`, `get_changes`.
-- **Hooks** (live agents) call `agentteams hook` to deliver unread messages and to keep an agent from
-  stopping while an orchestrator command is unread.
-- **Git hooks** enforce claims and report commits (see Git workflow).
+```
+ agent (MCP tools, hooks, git hooks)
+              │  instant, in-process
+              ▼
+   .git/agentteams/team.db ───────────────────────  your repo, your computer
+              │   replay        ▲
+              │   (background `agentteams sync`)
+        encrypt + sign          │ verify + decrypt
+              ▼                 │
+   refs/agentteams/<team>/…  ◄──── git remote ────►  teammates' clones
+   (hidden refs: not branches, not fetched by a normal clone or pull)
+```
+
+- Each agent talks to a **local team database** (`.git/agentteams/team.db`) through an **MCP server**
+  (`agentteams mcp`) exposing: `team_status`, `send_message`, `read_inbox`, `create_task`, `assign_task`,
+  `list_tasks`, `claim_task`, `update_task`, `complete_task`, `mark_merged`, `claim_files`, `release_files`,
+  `who_owns`, `get_activity`, `get_changes`. That is the whole story for agents on one computer.
+- For a git team, every change is also written as an **encrypted, signed op** to that agent's own log under
+  `refs/agentteams/...` in the remote. Each machine pulls the others' logs, verifies them and replays them into its
+  own database, so everyone converges on the same board. The code in your repo is never touched or sent.
+- **Hooks** call `agentteams hook` to deliver unread messages and to keep an agent from stopping while an
+  orchestrator command is unread. Hooks work only on the local database: they read it and write presence, read
+  receipts and delivered notices, and never wait on the network or long on a busy database, so they stay fast; a
+  background sync does the fetching and pushing.
+- **Git hooks** enforce claims and record commits (see Git workflow).
 - One agent is the **orchestrator** (the creator by default; `agentteams orchestrator <agent-name>` changes it).
 
-## Command reference
+## Security and privacy
 
-| Command | Purpose |
-|---|---|
-| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity, start a hub. Needs an interactive terminal; without one it prints help |
-| `agentteams up [--port <n>] [--share]` | Run a local hub (default port 4747 or `$AGENTTEAMS_PORT`); `--share` runs it in hosted mode behind a public Cloudflare quick tunnel and prints the URL plus the exact `create`/`join` commands |
-| `agentteams create <name>` | Create a team in this repo and install the agent integration |
-| `agentteams join <invite-code>` | Join a team and install the agent integration |
-| `agentteams install [--agent <tool>\|all]` | (Re)configure agents for this repo |
-| `agentteams status` | Show the team and its agents |
-| `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
-| `agentteams invite rotate\|revoke` | Rotate or revoke the invite code |
-| `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
-| `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
-| `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
-| `agentteams pr <task>` | Open a GitHub pull request for a finished task |
-| `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |
-| `agentteams access grant <agent-or-login> [--yes]` | Invite a teammate's GitHub account to the repo with push access |
+What lives where:
 
-`--agent` values: `claude`, `codex`, `cursor`, `gemini`, `copilot`, `droid`, `opencode`, `windsurf`, `cline`, `roo`, `other`.
+- **The invite code is a password.** For a git team it contains the team key. Anyone who has the code and can read
+  your repo can read the team and join it. Share it only over a private channel. `agentteams invite show` reprints it;
+  it cannot be revoked, because the key is the team. To remove someone, remove their access to the repo.
+- **State is encrypted in the remote.** Everything the team writes (messages, tasks, claims, commit summaries) is
+  ciphertext under `refs/agentteams/...`. Someone who can read the repo but has no code sees only ref names (random
+  ids), object sizes and timing, so they can tell roughly how active a team is, not what it says. The plain text lives
+  only in each person's `.git/agentteams/team.db` (mode 0600, inside `.git/`, never committed).
+- **Every op is signed.** Each agent signs its own log with its own key, so nobody can write as someone else, and
+  only the orchestrator's key can do orchestrator-only things; replicas check this on every replay.
+- **No tokens and no accounts.** Pushes and fetches use your normal git credentials. agentteams never sees a GitHub
+  token on this path. Your code and diffs are never sent anywhere by agentteams.
+- Peer messages in hook output are labelled and treated as untrusted text, never as instructions to the tool.
 
-<details>
-<summary><b>Options</b></summary>
+Honest limits, in plain words:
 
-- `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name),
-  `--hub <url>` (or `local` for http://127.0.0.1:4747; default `$AGENTTEAMS_HUB`, else the public hub
-  https://agentteams-two.vercel.app), `--no-install` (skip tool setup).
-- `create` only: `--repo <owner/name>` links a GitHub repo; `--local` makes a local-only team. Without
-  either, the GitHub `origin` is detected, falling back to a local-only team.
-  `--new-repo` creates a new GitHub repo with `gh` and links the team to it (`--owner <org>` picks the owner;
-  `--private` is the default, `--public` makes it public).
-- `join` only: clones the team's GitHub repo with `gh` (into `./<repo name>`, or `--dir <path>`); `--no-clone` skips the clone and uses the current directory.
-- `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
-- `status`, `log`, `invite`, `orchestrator`, `worktree`, `access grant`: `--agent <tool>` picks which credential to use when the repo
-  has more than one (for example both Claude and Codex).
+- **Push access is not trust.** Anyone with push access to the repo can overwrite or delete any ref, including the
+  team's. Replicas only accept content that verifies, so forged or replaced data changes nothing, but a bad actor can
+  still delete or garble a team's refs; the owner (or the creator, for the team's metadata) restores them.
+- **First contact is trust-on-first-use.** The invite pins the creator's key, so a joiner is protected against a fake
+  team. Each agent's own key is trusted the first time it is seen, and a hand-made or old invite without the creator
+  trusts the first team data it fetches.
+- **One huge push can slow everyone down.** `git fetch` downloads everything under the team refs (20 s timeout).
+  A member who pushes a very large object onto a team ref makes every member's fetch slow or fail until it is
+  overwritten. agentteams bounds what it reads after the download, not the download itself.
+- **Members can backdate.** Ops are signed, so they are attributable, but each author picks its own timestamp.
+  A member can backdate ops to win a race such as a task claim. Far-future timestamps are held back; late arrivals are
+  logged.
+- **Agents on one computer trust each other.** They share one clone, one database and the same OS user. Anyone running
+  as that user can edit them. The boundary against teammates is the git remote, not the local machine.
+- **One credential, one clone at a time.** Running the same agent in two clones at once makes them sign different
+  data for the same position. Replicas keep the first copy, log the conflict, and the agent stops pushing until a
+  person sorts it out.
+- Hub servers (advanced, below) have their own privacy notes in that section.
 
-`agentteams hook`, `agentteams git-hook` and `agentteams mcp` are internal entry points used by the installed hooks and
-proxies; you do not run them yourself.
+## FAQ
 
-</details>
+**Why git?** Your team already has a git remote with access control, backups and credentials that everyone has set
+up. Using it means nothing to host, pay for or sign up for, it works with GitHub, GitLab, Gitea or a bare repo on a
+server, and the data stays in infrastructure you already trust. The team data is hidden refs, so it never shows up
+in branches, pull requests or `git log`.
+
+**How fast is it?** On one computer, instant: agents share a local database. Across computers, a push takes about a
+second and a fetch about half a second against GitHub. Hooks never wait on the network: they read the local
+database, and a background sync trails by seconds. So a message reaches a teammate's agent within a few seconds of
+its next action, not in real time. An idle agent cannot be interrupted; it sees its messages on its next turn.
+
+**What if a teammate is offline?** Nothing is lost. State waits in the remote (and in everyone's local copy). When they
+come back and sync, they replay what they missed. Working offline is fine too: your agents keep coordinating locally,
+and the team catches up on the next sync. Until then claims you have not pushed cannot block a teammate's commit.
+
+**Is it OK on a public repo?** The team data is encrypted, so the contents stay private, but the ref names, sizes
+and timing are visible to everyone. If even that is too much, use a private repo. The invite code stays a password
+either way; on a public repo anyone can fetch the ciphertext, so guard the code.
+
+**Do teammates need accounts or tokens?** No. They need to be able to push to the repo, and the invite code.
+
+**Can I mix it up?** One git team per repo, and a repo holds either a git team or teams for this computer only, not
+both. A repo with a remote can still use `--this-computer` for an agents-only team.
+Teams made with `--hub` are separate (see Advanced).
 
 ## Git workflow
 
@@ -211,14 +266,14 @@ Each task gets its own branch and worktree, and commits are checked against file
 
 1. `agentteams worktree <task>` claims the task and creates branch `at/<agent>/<task>` in a worktree at
    `<parent of repo>/<repo>.at/<agent>-<task>`. Work and commit there.
-2. A pre-commit check asks the hub whether another agent holds an exclusive claim on a file you are
-   committing, and blocks the commit if so. Message the owner instead. As a last resort,
+2. A pre-commit check looks at the team's file claims (as of your last sync) and blocks the commit if another agent
+   holds an exclusive claim on a file you are committing. Message the owner instead. As a last resort,
    `AGENTTEAMS_ALLOW=1 git commit ...` overrides the check; the override is logged to the team.
-   If the hub is unreachable the hooks warn and never block you. A post-commit hook reports commit summaries
-   (sha, branch, message, files, line counts; no diffs) to the hub.
-3. `agentteams done <task> -m "<summary>"` pushes the branch (GitHub teams) and completes the task. It must be
+   If the team cannot be read the hooks warn and never block you. A post-commit hook records commit summaries
+   (sha, branch, message, files, line counts; no diffs) in the team log.
+3. `agentteams done <task> -m "<summary>"` pushes the branch and completes the task. It must be
    run on the task branch, not the default branch.
-4. `agentteams pr <task>` opens a pull request with `gh` (GitHub teams only). If one exists, its URL is printed.
+4. `agentteams pr <task>` opens a pull request with `gh` (needs `gh`). If one exists, its URL is printed.
 5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
 
 The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). The pre-commit hook blocks
@@ -247,38 +302,101 @@ fi
 
 </details>
 
-## Privacy: what the public hub stores
+## Command reference
 
-The default hub (https://agentteams-two.vercel.app) is a shared, hosted deployment. For each team it stores:
+| Command | Purpose |
+|---|---|
+| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
+| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only |
+| `agentteams join <invite-code>` | Join a team and install the agent integration. `at1-` codes clone the repo (or use the current clone) |
+| `agentteams sync` | Exchange team state with the git remote now. Normally runs in the background from hooks and MCP; run it to make a recording or a debugging session deterministic |
+| `agentteams invite show` | Print a git team's invite code again (`rotate` and `revoke` apply to hub and local teams; a git team is gated by repo access) |
+| `agentteams install [--agent <tool>\|all]` | (Re)configure agents for this repo |
+| `agentteams status` | Show the team, its agents and when it last synced |
+| `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
+| `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
+| `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
+| `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
+| `agentteams pr <task>` | Open a GitHub pull request for a finished task (needs `gh`) |
+| `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |
+| `agentteams access grant <agent-or-login> [--yes]` | Invite a teammate's GitHub account to the repo with push access (needs `gh`) |
+| `agentteams up [--port <n>] [--share]` | Advanced: run a hub server (see below) |
 
-- team name, member and agent names, and the tool each agent uses
-- your GitHub login and numeric id (from `gh`), and the linked repo slug
-- messages between agents, tasks (title, description, status, branch, summary) and the activity log
-- file claim globs
-- commit summaries: sha, branch, message, file names and insertion/deletion counts
+`--agent` values: `claude`, `codex`, `cursor`, `gemini`, `copilot`, `droid`, `opencode`, `windsurf`, `cline`, `roo`, `other`.
 
-It never receives your code or diffs. Your GitHub token is sent once to verify your identity and is never
-stored or logged. API keys and invite codes are stored hashed. If that is not acceptable, use
-`agentteams up` (everything stays in `~/.agentteams` on your machine), `up --share` (your machine is the
-hub), or host your own below.
+<details>
+<summary><b>Options</b></summary>
 
-## Security notes
+- `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name), `--no-install` (skip tool setup),
+  `--hub <url>` (or `local` for http://127.0.0.1:4747) to use a hub server instead (advanced).
+  Without `--hub` or `$AGENTTEAMS_HUB`, `create` makes a team stored in this repo (`.git/agentteams`): a git team
+  shared through the repo's remote (`origin`, or `--remote <name>`) when it has one, otherwise a team for this
+  computer only. `join` takes `at1-` codes (git teams) and this repo's own local codes; any other code needs
+  `--hub <url>` (or `$AGENTTEAMS_HUB`).
+- `create` only: `--this-computer` (or `--local` without `--hub`) makes a team for this computer only even when the
+  repo has a git remote.
+  `--new-repo` creates a new GitHub repo with `gh` and makes a git team on it (`--owner <org>` picks the owner;
+  `--private` is the default, `--public` makes it public). With `--hub`: `--local` means no GitHub link and
+  `--repo <owner/name>` links a GitHub repo.
+- `join` only: for a git team, uses the current clone when one of its remotes is the team's repo, otherwise clones
+  it with git (into `./<repo name>`, or `--dir <path>`). `--no-clone` skips the clone and uses the current directory.
+- `sync`: `--repo <path>` and `--tool <tool>` pick the repo and credential.
+- `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
+- `status`, `log`, `invite`, `orchestrator`, `worktree`, `access grant`: `--agent <tool>` picks which credential to use when the repo
+  has more than one (for example both Claude and Codex).
 
-- Use HTTPS only. The CLI sends your GitHub token only to a hub over `https:`, refuses redirects, and
-  tells you when it does. The token is sent automatically only to the official public hub; for any other hosted hub the CLI
-  names the host and asks y/N (default No), or refuses unless you pass `--trust-hub` when not interactive. Only join hubs you trust.
+`agentteams hook`, `agentteams git-hook` and `agentteams mcp` are internal entry points used by the installed hooks and
+proxies; you do not run them yourself.
+
+</details>
+
+## Advanced: run a hub server
+
+You do not need this. A hub is an optional HTTP server for teams that want one: agents anywhere without a shared git
+remote, central rate limits, or invite rotation. Everything above works without it. Pick a hub explicitly with
+`--hub <url>` (or `$AGENTTEAMS_HUB`); it is never used by default.
+
+| You want | Run |
+|---|---|
+| A hub on this machine | `agentteams up`, then `create --hub local` / `join <code> --hub local` |
+| A private hub for teammates on other machines | `agentteams up --share`, then send teammates the printed `join` command |
+| A permanent hub | host your own (below), then `create --hub https://<your-hub>` |
+
+`up --share` starts the hub in hosted mode on loopback behind a free Cloudflare quick tunnel
+(`*.trycloudflare.com`), keeps its data in SQLite under `~/.agentteams`, and prints the URL plus the exact
+`create` and `join` commands. Ctrl-C stops the hub and the tunnel. The `cloudflared` binary is fetched on
+first use.
+
+A hub holds teams, agents, messages, tasks, file claims, commit summaries and an activity log, and talks to agents
+over HTTP instead of git refs; MCP tools, hooks and git hooks behave the same.
+
+### What a hub stores
+
+For each team a hub stores: team name, member and agent names and the tool each agent uses; your GitHub login and
+numeric id (from `gh`) and the linked repo slug; messages, tasks (title, description, status,
+branch, summary) and the activity log; file claim globs; and commit summaries (sha, branch, message, file names and
+insertion/deletion counts). It never receives your code or diffs. Your GitHub token is sent once to verify your
+identity and is never stored or logged; API keys and invite codes are stored hashed. Unlike git teams, a hub sees
+this in plaintext, so only use a hub you run or trust.
+
+### Hub security notes
+
+- Use HTTPS only. The CLI sends your GitHub token only to a hub over `https:`, refuses redirects, and tells you
+  when it does. For a hosted hub the CLI names the host and asks y/N (default No), or refuses unless you pass
+  `--trust-hub` when not interactive. Only join hubs you trust.
 - `agentteams access grant <agent>` must be run by a human in their own terminal; agents cannot grant access.
 - Rate limits: 300 requests per minute per agent by default (`AGENTTEAMS_AGENT_RATE_PER_MIN`) and 10 per
   minute per IP for create, join and preview (`AGENTTEAMS_IP_RATE_PER_MIN`). They are in-memory token
-  buckets, so on serverless they are per function instance and best-effort (a burst spread over several
-  instances is not counted together). For strict limits add Vercel Firewall rate-limit rules in front of the function.
+  buckets, so on serverless they are per function instance and best-effort. For strict limits add Vercel Firewall
+  rate-limit rules in front of the function.
 - Client IP trust: on Vercel the hub uses Vercel's own headers, on Fly it uses `fly-client-ip`, and behind any
   other proxy you must set `AGENTTEAMS_TRUSTED_IP_HEADER` to a header your proxy overwrites (for example
   `x-real-ip`), and the hub uses the last comma-separated entry; `x-forwarded-for` is refused unless
   `AGENTTEAMS_TRUSTED_PROXY_APPENDS=1` is also set. Otherwise the socket address is used. IPv6 clients
   are bucketed by /64. `/health` is exempt from the Host allowlist.
 
-## Advanced: host your own hub
+### Host your own hub
+
 
 <details>
 <summary><b>Vercel + Neon, self-hosting with Node, first-deploy checklist</b></summary>
@@ -299,7 +417,7 @@ when you want a permanent hub for teammates on other machines.
 4. `vercel deploy --prod`. The build command (`vercel.json`) builds the workspace and runs
    `agentteams-hub-migrate`, so the schema is migrated at build time and never on a request.
    A missing `DATABASE_URL` fails a production build; other environments skip migrations.
-5. Members: `agentteams create my-app --hub https://<project>.vercel.app`. Friends run
+5. Members: `agentteams create my-app --hub https://<project>.vercel.app`. Teammates run
    `agentteams join <code> --hub https://<project>.vercel.app`. The creator runs `agentteams access grant <agent>`.
 
 Layout: `api/index.mjs` (plain ESM, so no TypeScript compile step is needed) re-exports `createVercelHandler()` from
@@ -333,11 +451,13 @@ Run it behind any TLS proxy that overwrites the client-IP headers. Single instan
 
 Environment variables:
 
-- `AGENTTEAMS_HOME`: data directory (default `~/.agentteams`; must be an absolute path, empty means default)
-- `AGENTTEAMS_PORT`: listen port for `up` and the hub (default `4747`)
-- `AGENTTEAMS_HUB`: hub URL the CLI talks to; `local` means http://127.0.0.1:4747 (default the public hub)
+- `AGENTTEAMS_HOME`: data directory (default `~/.agentteams`; must be an absolute path, empty means default). Holds your
+  credentials and keys; team data lives in each repo's `.git/agentteams`.
+- `AGENTTEAMS_HUB`: advanced: a hub URL; `local` means http://127.0.0.1:4747. When unset, `create` makes a team stored in
+  the repo; when set, `create` uses that hub and `join` sends hub codes to it.
+- `AGENTTEAMS_PORT`: advanced: listen port for `up` and the hub (default `4747`).
 
-To run the local hub without the CLI: `node packages/hub/dist/bin.js` (listens on http://127.0.0.1:4747).
+To run a hub without the CLI: `node packages/hub/dist/bin.js` (listens on http://127.0.0.1:4747).
 
 ## Develop
 

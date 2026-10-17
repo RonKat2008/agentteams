@@ -1,8 +1,9 @@
 Source docs/demo/common.tape
 Output assets/tui-join.gif
-Set Height 760
+Set Width 1480
+Set Height 900
 Hide
-Type "export PORT=4747 && source docs/demo/prelude.zsh && unfunction agentteams && as jamie && cd $R/jamie/shop-api && clear" Enter
+Type "source docs/demo/prelude.zsh && unfunction agentteams && as jamie && cd $R/jamie/shop-api && clear" Enter
 Sleep 1.5s
 Show
 Sleep 500ms
@@ -10,17 +11,13 @@ Type "agentteams" Sleep 300ms Enter
 Sleep 1.8s
 # Join a team with an invite code
 Down Sleep 400ms Enter Sleep 1s
-Type "__INVITE__" Sleep 500ms Enter
+Type@4ms "__INVITE__" Sleep 800ms Enter
 Sleep 1.2s
 # Agent: Codex
 Down Sleep 500ms Enter Sleep 1.2s
-# Hub: local
-Down Sleep 500ms Enter Sleep 1.4s
-# Name prefilled: jamie
-Enter Sleep 1.2s
-# Use the current directory
-Down Sleep 500ms Enter
-Sleep 4s
+# Name prefilled: jamie. This directory already is a clone of the team's repo, so nothing is cloned.
+Sleep 800ms Enter
+Sleep 7s
 Type "agentteams" Sleep 300ms Enter
 Sleep 1.8s
 # Team status is preselected once you are on a team

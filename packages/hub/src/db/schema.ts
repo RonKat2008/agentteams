@@ -94,6 +94,68 @@ export interface ActivityTable {
   created_at: string;
 }
 
+// ---- Replication bookkeeping (git transport). Unused by the HTTP hub. ----
+
+/** Registered agent signing keys; first registration wins. Part of the replicated view. */
+export interface AgentKeysTable {
+  agent_id: string;
+  team_id: string;
+  public_key: string;
+  registered_op_id: string;
+}
+
+/**
+ * Every op this replica has evaluated. Part of the replicated view (identical on every replica).
+ * Identity is (agent, op_id); `hash` (sha256 of the canonical op JSON) separates equivocating variants.
+ */
+export interface AppliedOpsTable {
+  agent: string;
+  op_id: string;
+  hash: string;
+  /** HLC time; null for malformed envelopes and equivocation losers (they take no part in the total order). */
+  ts: string | null;
+  status: 'applied' | 'rejected';
+  /** A stable code (DomainError code or a fixed category), never free text. */
+  error: string | null;
+}
+
+/** Local key/value state of this replica; never wiped by a rebuild, never replicated. */
+export interface ReplicaStateTable {
+  key: string;
+  value: string;
+}
+
+/** Local-only notices for this replica's own agent (e.g. "your op was rejected"); survive rebuilds. */
+export interface ReplicaNoticesTable {
+  agent_id: string;
+  op_id: string;
+  body: string;
+  created_at: string;
+  delivered_at: string | null;
+}
+
+/** Local trust-on-first-use pins of agent signing keys; never wiped, never replaced. */
+export interface ReplicaPendingTable {
+  agent_id: string;
+  op_id: string;
+  ts: string;
+  op_json: string;
+  created_at: string;
+}
+
+export interface AgentKeyPinsTable {
+  agent_id: string;
+  public_key: string;
+  pinned_at: string;
+}
+
+/** Local trust-on-first-use pin of a team's meta (creator id and key); never wiped, never replaced. */
+export interface TeamMetaPinsTable {
+  team_id: string;
+  meta_json: string;
+  pinned_at: string;
+}
+
 export interface Database {
   teams: TeamsTable;
   agents: AgentsTable;
@@ -103,6 +165,13 @@ export interface Database {
   claims: ClaimsTable;
   commits: CommitsTable;
   activity: ActivityTable;
+  agent_keys: AgentKeysTable;
+  applied_ops: AppliedOpsTable;
+  replica_state: ReplicaStateTable;
+  replica_notices: ReplicaNoticesTable;
+  agent_key_pins: AgentKeyPinsTable;
+  team_meta_pins: TeamMetaPinsTable;
+  replica_pending: ReplicaPendingTable;
 }
 
 export type TeamRow = Selectable<TeamsTable>;

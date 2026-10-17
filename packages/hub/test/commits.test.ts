@@ -99,6 +99,15 @@ describe('recordCommit dedupe', () => {
     expect(await getChanges(env.ctx, ronit)).toHaveLength(1);
   });
 
+  it('keeps each agent record of the same sha and branch (credit cannot be taken over)', async () => {
+    const { ash, dylan, ronit } = await seedTeam(env);
+    expect((await recordCommit(env.ctx, dylan, commit({ message: 'decoy' }))).duplicate).toBe(false);
+    expect((await recordCommit(env.ctx, ash, commit())).duplicate).toBe(false);
+    expect((await recordCommit(env.ctx, ash, commit())).duplicate).toBe(true);
+    expect((await getChanges(env.ctx, ronit)).map((c) => [c.agent, c.message]).sort())
+      .toEqual([['ash-codex', commit().message], ['dylan-claude', 'decoy']].sort());
+  });
+
   it('records the same sha on a different branch', async () => {
     const { ash } = await seedTeam(env);
     await recordCommit(env.ctx, ash, commit());

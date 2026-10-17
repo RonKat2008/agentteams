@@ -149,3 +149,36 @@ describe('migration 005_github_id_bigint', () => {
     expect(res.rows[0]?.data_type).toBe('bigint');
   });
 });
+
+describe('migration 006_replication', () => {
+  it('keys applied_ops by (agent, op_id, hash), adds the pins and pending tables, and scopes commits per agent', async () => {
+    const freshHandle = makeTestDb();
+    const fresh = freshHandle.db as unknown as Kysely<any>;
+    try {
+      await migrateToLatest(freshHandle.db);
+      const row = (k: string, agent: string, hash: string) => ({ agent, op_id: k, hash, ts: null, status: 'rejected', error: 'x' });
+      await fresh.insertInto('applied_ops')
+        .values([row('op1', 'agentA0000', 'h'), row('op1', 'agentB0000', 'h'), row('op1', 'agentA0000', 'h2')]).execute();
+      await expect(fresh.insertInto('applied_ops').values(row('op1', 'agentA0000', 'h')).execute()).rejects.toThrow();
+      const notice = (agent: string) => ({ op_id: 'op9', agent_id: agent, body: 'hello', created_at: 'now', delivered_at: null });
+      await fresh.insertInto('replica_notices').values([notice('agentA0000'), notice('agentB0000')]).execute();
+      await expect(fresh.insertInto('replica_notices').values(notice('agentA0000')).execute()).rejects.toThrow();
+      await fresh.insertInto('agent_key_pins').values({ agent_id: 'agentA0000', public_key: 'k', pinned_at: 'now' }).execute();
+      await fresh.insertInto('team_meta_pins').values({ team_id: 't1', meta_json: '{}', pinned_at: 'now' }).execute();
+      const pending = { agent_id: 'agentA0000', op_id: 'op1', ts: 't', op_json: '{}', created_at: 'now' };
+      await fresh.insertInto('replica_pending').values(pending).execute();
+      await expect(fresh.insertInto('replica_pending').values(pending).execute()).rejects.toThrow();
+
+      const commit = (id: string, agent: string) => ({
+        id, team_id: 't1', agent_id: agent, sha: 'abc1234', branch: 'b', message: 'm', files_json: '[]',
+        insertions: 0, deletions: 0, created_at: '2026-01-01T00:00:00.000Z',
+      });
+      await fresh.insertInto('commits').values(commit('c1', 'a1')).execute();
+      await fresh.insertInto('commits').values(commit('c2', 'a2')).execute(); // same sha+branch, another agent: allowed
+      await expect(fresh.insertInto('commits').values(commit('c3', 'a1')).execute()).rejects.toThrow(); // same agent: not
+      expect(await fresh.selectFrom('replica_state').selectAll().execute()).toEqual([]);
+    } finally {
+      await freshHandle.close();
+    }
+  });
+});

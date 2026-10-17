@@ -13,8 +13,9 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
   const subject = p.message.split('\n')[0] ?? '';
 
   return withTx(ctx, async (tx) => {
+    // Dedupe per agent: each agent's record of a commit stands on its own (a forged record cannot erase the author's).
     const existing = await tx.db.selectFrom('commits').select('id')
-      .where('team_id', '=', actor.teamId).where('sha', '=', p.sha).where('branch', '=', p.branch)
+      .where('team_id', '=', actor.teamId).where('agent_id', '=', actor.id).where('sha', '=', p.sha).where('branch', '=', p.branch)
       .executeTakeFirst();
     if (existing) return { notified: [], duplicate: true };
 
@@ -31,7 +32,7 @@ export async function recordCommit(ctx: HubContext, actor: Actor, input: CommitI
       id: tx.newId(), team_id: actor.teamId, agent_id: actor.id, sha: p.sha, branch: p.branch,
       message: p.message, files_json: JSON.stringify(p.files), insertions: p.insertions, deletions: p.deletions,
       created_at: tx.now().toISOString(),
-    }).onConflict((oc) => oc.columns(['team_id', 'sha', 'branch']).doNothing()).executeTakeFirst();
+    }).onConflict((oc) => oc.columns(['team_id', 'agent_id', 'sha', 'branch']).doNothing()).executeTakeFirst();
     // A concurrent identical commit won the race: treat as a duplicate, with no event or messages.
     if (Number(inserted.numInsertedOrUpdatedRows ?? 0) === 0) return { notified: [], duplicate: true };
     await logEvent(tx, actor.teamId, actor.id, 'commit', {

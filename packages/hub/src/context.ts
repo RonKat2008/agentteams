@@ -14,6 +14,11 @@ export interface HubContext {
   mode: 'local' | 'hosted';
   /** Hosted mode only; performs network I/O, so call it outside withTx. */
   verifyGithub?: GithubVerifier;
+  /**
+   * Set only by op-log replay: `db` is already a transaction (a savepoint the replayer owns and rolls back on
+   * failure), so withTx runs its body directly inside it instead of refusing to nest.
+   */
+  joinOuterTx?: boolean;
 }
 
 /** The authenticated agent making a request. */
@@ -52,7 +57,10 @@ function isRetryable(err: unknown): boolean {
  * serialization failures / deadlocks, so fn must be safe to re-run. SQLite serialises writers itself.
  */
 export async function withTx<T>(ctx: HubContext, fn: (tx: HubContext) => Promise<T>): Promise<T> {
-  if (ctx.db.isTransaction) throw new Error('withTx must not be nested');
+  if (ctx.db.isTransaction) {
+    if (ctx.joinOuterTx) return fn(ctx);
+    throw new Error('withTx must not be nested');
+  }
   if (ctx.dialect !== 'postgres') return ctx.db.transaction().execute((trx) => fn({ ...ctx, db: trx }));
   for (let attempt = 1; ; attempt++) {
     try {

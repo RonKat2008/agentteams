@@ -2,8 +2,9 @@ import { resolve } from 'node:path';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolKind } from '@agentteams/shared';
-import { resolveCredentialForCwd } from './credentials.js';
+import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
+import type { GitClientOptions } from './git/client.js';
 
 const errorResult = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
 
@@ -78,6 +79,8 @@ export interface ProxyOptions {
   /** Opens a connection to the hub; null when this directory has no credentials. */
   connect: (() => Promise<Client>) | null;
   hubUrl?: string;
+  /** Overrides the texts for local credentials, where there is no hub to reject or be unreachable. */
+  messages?: { authRejected: string; unavailable: string };
   /** Tool list served while the hub is unreachable. Defaults to the hub package's definitions. */
   tools?: () => Promise<Tool[]>;
 }
@@ -141,26 +144,108 @@ export async function createProxyServer(opts: ProxyOptions) {
         drop();
         lastError = e;
         if (isRetryableCallError(e)) continue;
-        return errorResult(isAuthRejection(e) ? AUTH_REJECTED : AMBIGUOUS);
+        return errorResult(isAuthRejection(e) ? (opts.messages?.authRejected ?? AUTH_REJECTED) : AMBIGUOUS);
       }
     }
     return errorResult(
-      isAuthRejection(lastError) ? AUTH_REJECTED : `agentteams hub unreachable at ${opts.hubUrl} — is it running?`,
+      isAuthRejection(lastError)
+        ? (opts.messages?.authRejected ?? AUTH_REJECTED)
+        : (opts.messages?.unavailable ?? `agentteams hub unreachable at ${opts.hubUrl} — is it running?`),
     );
   });
   server.onclose = () => drop();
   return server;
 }
 
+type StdioServer = Awaited<ReturnType<typeof createProxyServer>>;
+
+/** For a local credential: the team's tools in-process over this repo's database (no hub, no proxy retries). */
+async function localServer(deps: CliDeps, cred: Credential): Promise<StdioServer> {
+  try {
+    return await (await import('./local/mcp.js')).createLocalMcpServer(deps, cred);
+  } catch (e) {
+    // Stay up like the proxy does, so the agent sees why each call fails instead of a dead server.
+    const why = e instanceof Error ? e.message : String(e);
+    deps.err(`agentteams: cannot open the local team for ${cred.repoPath}: ${why}`);
+    const rejected = (e as { code?: unknown } | null)?.code === 'unauthorized';
+    return createProxyServer({
+      connect: () => Promise.reject(Object.assign(new Error(why), rejected ? { code: 401 } : {})),
+      messages: {
+        authRejected: "this agent's local team credential was rejected (re-run agentteams join)",
+        unavailable: `the local team for ${cred.repoPath} is unavailable: ${why}`,
+      },
+    });
+  }
+}
+
+/** An MCP client for `server`, linked in-process. */
+async function connectInProcess(server: import('@modelcontextprotocol/sdk/server/index.js').Server): Promise<Client> {
+  const [{ Client }, { InMemoryTransport }] = await Promise.all([
+    import('@modelcontextprotocol/sdk/client/index.js'),
+    import('@modelcontextprotocol/sdk/inMemory.js'),
+  ]);
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: 'agentteams-git', version: '0.1.0' });
+  await client.connect(clientSide);
+  return client;
+}
+
+/**
+ * For a git credential: the team's tools in-process over the local view; writes become ops and sync in the
+ * background. When the team cannot be opened yet (typically: this agent is not in the local view before a sync
+ * filled it), the server stays up, starts a background sync, and retries opening the team on every call.
+ */
+export async function gitServer(deps: CliDeps, cred: Credential, opts: GitClientOptions = {}): Promise<StdioServer> {
+  try {
+    return await (await import('./git/mcp.js')).createGitMcpServer(deps, cred, opts);
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    deps.err(`agentteams: cannot open the git team for ${cred.repoPath}: ${why}`);
+    const { shouldSyncForRead, spawnDetachedSync } = await import('./git/syncState.js');
+    const trigger = opts.trigger ?? (() => spawnDetachedSync(cred.repoPath, cred.tool));
+    trigger();
+    return createProxyServer({
+      connect: async () => {
+        try {
+          return await connectInProcess(await (await import('./git/mcp.js')).createGitMcpServer(deps, cred, opts));
+        } catch (err) {
+          if (await shouldSyncForRead(deps, cred.repoPath).catch(() => false)) trigger();
+          throw err;
+        }
+      },
+      messages: {
+        authRejected: "this agent's git team credential was rejected (re-run agentteams join)",
+        unavailable: `the team for ${cred.repoPath} is unavailable (a background sync was started; retry shortly): ${why}`,
+      },
+    });
+  }
+}
+
+async function serverFor(deps: CliDeps, cwd: string, cred: Credential | null): Promise<StdioServer> {
+  if (!cred) {
+    deps.err(`agentteams: no team credentials for ${cwd}`);
+    return createProxyServer({ connect: null });
+  }
+  const transport = cred.transport ?? 'http';
+  if (transport === 'local') return localServer(deps, cred);
+  if (transport === 'git') return gitServer(deps, cred);
+  if (transport !== 'http') {
+    deps.err(`agentteams: the ${transport} transport is not supported by this version`);
+    return createProxyServer({ connect: null });
+  }
+  return createProxyServer({ connect: () => connectUpstream(cred.hubUrl, cred.apiKey), hubUrl: cred.hubUrl });
+}
+
 /** `repo` overrides the cwd used to find credentials (for configs whose process does not start in the repo). */
 export async function runMcpProxy(deps: CliDeps, tool: ToolKind, opts: { repo?: string } = {}): Promise<void> {
   const cwd = opts.repo ? resolve(deps.cwd, opts.repo) : deps.cwd;
   const cred = await resolveCredentialForCwd(deps, cwd, tool);
-  if (!cred) deps.err(`agentteams: no team credentials for ${cwd}`);
-  const server = await createProxyServer({
-    connect: cred ? () => connectUpstream(cred.hubUrl, cred.apiKey) : null,
-    hubUrl: cred?.hubUrl,
-  });
+  await serveStdio(await serverFor(deps, cwd, cred));
+}
+
+/** Serves `server` on stdin/stdout until stdin ends (after in-flight requests are answered) or the server closes. */
+async function serveStdio(server: StdioServer): Promise<void> {
   const closed = new Promise<void>((resolve) => {
     const prev = server.onclose;
     server.onclose = () => {

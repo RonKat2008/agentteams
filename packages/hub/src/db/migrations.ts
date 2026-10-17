@@ -132,6 +132,74 @@ const migrations: Record<string, Migration> = {
       }
     },
   },
+  '006_replication': {
+    // Bookkeeping for the git transport's op-log replay. Created on both dialects (portable types) but only the CLI's
+    // SQLite replicas write to the replica tables.
+    // - applied_ops: one row per evaluated op, keyed by (agent, op_id, hash): op identity is (agent, id), and an
+    //   equivocation loser gets its own row.
+    // - agent_key_pins / team_meta_pins: local trust-on-first-use pins that rebuilds never touch.
+    // - replica_pending: this agent's ops not yet in its published log, local like the pins; written in the same
+    //   transaction as the op's local apply, so an op is either applied and queued, or neither.
+    // - commits are unique per (team, agent, sha, branch): each agent's record stands on its own.
+    async up(db: Kysely<any>) {
+      await db.schema.createTable('agent_keys')
+        .addColumn('agent_id', 'text', (c) => c.primaryKey())
+        .addColumn('team_id', 'text', (c) => c.notNull())
+        .addColumn('public_key', 'text', (c) => c.notNull())
+        .addColumn('registered_op_id', 'text', (c) => c.notNull())
+        .execute();
+
+      await db.schema.createTable('applied_ops')
+        .addColumn('agent', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('hash', 'text', (c) => c.notNull())
+        .addColumn('ts', 'text')
+        .addColumn('status', 'text', (c) => c.notNull())
+        .addColumn('error', 'text')
+        .addPrimaryKeyConstraint('applied_ops_pk', ['agent', 'op_id', 'hash'])
+        .execute();
+      await db.schema.createIndex('applied_ops_order_idx').on('applied_ops').columns(['ts', 'agent', 'op_id']).execute();
+      await db.schema.createIndex('applied_ops_id_idx').on('applied_ops').columns(['op_id']).execute();
+
+      await db.schema.createTable('replica_state')
+        .addColumn('key', 'text', (c) => c.primaryKey())
+        .addColumn('value', 'text', (c) => c.notNull())
+        .execute();
+
+      await db.schema.createTable('replica_notices')
+        .addColumn('agent_id', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('body', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'text', (c) => c.notNull())
+        .addColumn('delivered_at', 'text')
+        .addPrimaryKeyConstraint('replica_notices_pk', ['agent_id', 'op_id'])
+        .execute();
+
+      await db.schema.createTable('agent_key_pins')
+        .addColumn('agent_id', 'text', (c) => c.primaryKey())
+        .addColumn('public_key', 'text', (c) => c.notNull())
+        .addColumn('pinned_at', 'text', (c) => c.notNull())
+        .execute();
+      await db.schema.createTable('team_meta_pins')
+        .addColumn('team_id', 'text', (c) => c.primaryKey())
+        .addColumn('meta_json', 'text', (c) => c.notNull())
+        .addColumn('pinned_at', 'text', (c) => c.notNull())
+        .execute();
+
+      await db.schema.createTable('replica_pending')
+        .addColumn('agent_id', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('ts', 'text', (c) => c.notNull())
+        .addColumn('op_json', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'text', (c) => c.notNull())
+        .addPrimaryKeyConstraint('replica_pending_pk', ['agent_id', 'op_id'])
+        .execute();
+
+      await db.schema.dropIndex('commits_team_sha_branch_unique').execute();
+      await db.schema.createIndex('commits_team_agent_sha_branch_unique').unique().on('commits')
+        .columns(['team_id', 'agent_id', 'sha', 'branch']).execute();
+    },
+  },
 };
 
 class InCodeMigrationProvider implements MigrationProvider {
@@ -146,7 +214,18 @@ export async function migrateTo(db: Kysely<Database>, name: string): Promise<voi
   if (error) throw error instanceof Error ? error : new Error(String(error));
 }
 
+const SQLITE_MIGRATE_ATTEMPTS = 5;
+const SQLITE_MIGRATE_BACKOFF_MS = 50;
+
 export async function migrateToLatest(db: Kysely<Database>): Promise<void> {
-  const { error } = await new Migrator({ db, provider: new InCodeMigrationProvider() }).migrateToLatest();
-  if (error) throw error instanceof Error ? error : new Error(String(error));
+  const migrator = new Migrator({ db, provider: new InCodeMigrationProvider() });
+  // SQLite has no migration lock: two processes opening a fresh file can both start the same migration. Each
+  // migration is transactional, so the loser fails cleanly; retrying re-reads what the winner applied.
+  const attempts = db.getExecutor().adapter instanceof PostgresAdapter ? 1 : SQLITE_MIGRATE_ATTEMPTS;
+  for (let attempt = 1; ; attempt++) {
+    const { error } = await migrator.migrateToLatest();
+    if (!error) return;
+    if (attempt >= attempts) throw error instanceof Error ? error : new Error(String(error));
+    await new Promise((r) => setTimeout(r, SQLITE_MIGRATE_BACKOFF_MS * attempt));
+  }
 }

@@ -168,6 +168,17 @@ describe('agentteams commands', () => {
     expect(t.out.some((l) => l.startsWith('Invite code: '))).toBe(true);
   });
 
+  it('create and join never overwrite a credential for the same repo and tool (hub)', async () => {
+    const t = mk({}, {});
+    expect(await run(t, 'create', 'keep', '--hub', hub.url, '--local', '--no-install')).toBe(0);
+    const code = inviteCodeOf(t);
+    t.err.length = 0;
+    expect(await run(t, 'join', code, '--hub', hub.url, '--as', 'b', '--no-install')).toBe(1);
+    expect(t.err.join('\n')).toMatch(/already has a claude agent: ronit_k-claude on team "keep".*--agent codex/);
+    expect(await run(t, 'create', 'again', '--hub', hub.url, '--local', '--no-install')).toBe(1);
+    expect(t.err.join('\n')).toMatch(/already has a claude agent/);
+  });
+
   it('refuses to guess between several agents in one repo', async () => {
     const t = mk({}, { claude: { code: 0 } });
     expect(await run(t, 'create', 'amb', '--hub', hub.url, '--local', '--no-install')).toBe(0);
