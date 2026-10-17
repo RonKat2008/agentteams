@@ -6,9 +6,19 @@ import { defaultBranch } from '../git.js';
 import { repoRoot } from '../repo.js';
 import { teamClientFor, type TeamClient } from '../teamClient.js';
 
+/** No credential for `agent` here: when the repo has other agents, name them rather than suggest create/join. */
+export async function missingCredentialError(deps: CliDeps, agent?: ToolKind, cwd = deps.cwd): Promise<Error> {
+  const any = agent ? await resolveCredentialForCwd(deps, cwd) : null;
+  if (any) {
+    const tools = [...new Set((await loadCredentials(deps)).filter((c) => c.repoPath === any.repoPath).map((c) => c.tool))].sort();
+    return new Error(`no ${agent} agent in this repo (its agents: ${tools.join(', ')}); pass ${tools.map((x) => `--agent ${x}`).join(' or ')}`);
+  }
+  return new Error(noCredentialsMessage(await repoRoot(deps, cwd)));
+}
+
 export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promise<Credential> {
   const cred = await resolveCredentialForCwd(deps, deps.cwd, agent);
-  if (!cred) throw new Error(noCredentialsMessage(await repoRoot(deps, deps.cwd)));
+  if (!cred) throw await missingCredentialError(deps, agent);
   if (!agent) {
     const same = (await loadCredentials(deps)).filter((c) => c.repoPath === cred.repoPath);
     if (same.length > 1) {
@@ -31,7 +41,7 @@ export const teamKey = (c: Credential): string => (c.transport === 'git' && c.gi
  */
 export async function readableTeams(deps: CliDeps, agent?: ToolKind): Promise<TeamAccess[]> {
   const first = await resolveCredentialForCwd(deps, deps.cwd, agent);
-  if (!first) throw new Error(noCredentialsMessage(await repoRoot(deps, deps.cwd)));
+  if (!first) throw await missingCredentialError(deps, agent);
   if (agent) return [{ cred: first, mine: [first.agentName] }];
   const same = (await loadCredentials(deps)).filter((c) => c.repoPath === first.repoPath)
     .sort((a, b) => a.tool.localeCompare(b.tool));
