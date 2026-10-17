@@ -54,7 +54,9 @@ describe('git transport hooks', () => {
     const paths = await syncPaths(deps, a.repo);
     await writeStatus(paths, { lastFetchAt: new Date().toISOString(), lastAttemptAt: new Date().toISOString(), lastError: 'push: rejected', lastErrorAt: new Date().toISOString() });
     const first = await runHook('session-start', JSON.stringify({ cwd: a.repo }), 'claude', cliDeps(a.repo));
-    expect(first.stdout).toContain('agentteams: sync failed: push: rejected (see .git/agentteams/sync.log)');
+    // The resolved path: in a linked worktree `.git` is a file, so a fixed `.git/agentteams` would be wrong.
+    expect(first.stdout).toContain(`agentteams: sync failed: push: rejected (see ${paths.log})`);
+    expect(paths.log).toBe(join(a.repo, '.git', 'agentteams', 'sync.log'));
     const second = await runHook('session-start', JSON.stringify({ cwd: a.repo }), 'claude', cliDeps(a.repo));
     expect(second.stdout).not.toContain('sync failed');
     await writeStatus(paths, { lastFetchAt: new Date().toISOString(), lastError: 'fetch: timeout', lastErrorAt: new Date().toISOString() });
@@ -69,11 +71,21 @@ describe('detached sync spawn', () => {
     const script = join(world.tmp, 'fake-cli.mjs');
     writeFileSync(script, `import { writeFileSync } from 'node:fs';\nsetTimeout(() => writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2))), 300);\n`);
     const started = Date.now();
-    spawnDetachedSync(world.tmp, 'codex', script);
+    spawnDetachedSync(world.tmp, 'codex', script, { ...process.env, AGENTTEAMS_NO_BACKGROUND_SYNC: undefined });
     expect(Date.now() - started).toBeLessThan(200);
     expect(existsSync(out)).toBe(false);
     for (let i = 0; i < 100 && !existsSync(out); i++) await new Promise((r) => setTimeout(r, 50));
     expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual(['sync', '--repo', world.tmp, '--tool', 'codex', '--quiet']);
+  });
+
+  it('spawns nothing when AGENTTEAMS_NO_BACKGROUND_SYNC=1 (the test suite sets it for every test)', async () => {
+    expect(process.env.AGENTTEAMS_NO_BACKGROUND_SYNC).toBe('1');
+    const out = join(world.tmp, 'ran');
+    const script = join(world.tmp, 'fake-cli.mjs');
+    writeFileSync(script, `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(out)}, '1');\n`);
+    spawnDetachedSync(world.tmp, 'codex', script);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(existsSync(out)).toBe(false);
   });
 });
 

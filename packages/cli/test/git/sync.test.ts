@@ -163,7 +163,8 @@ describe('sync round', () => {
     expect(readFileSync(v.paths.log, 'utf8')).toMatch(/fetch \(from git\)/);
     const warnings = await takeSyncWarnings(deps, lead.repo);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/^agentteams: sync failed: fetch \(from git\): .{1,200} \(see \.git\/agentteams\/sync\.log\)$/);
+    expect(warnings[0]).toMatch(/^agentteams: sync failed: fetch \(from git\): .{1,200} \(see (.+)\)$/);
+    expect(warnings[0]!.endsWith(`(see ${v.paths.log})`)).toBe(true);
     expect(await takeSyncWarnings(deps, lead.repo)).toEqual([]);
     const fixed = { ...lead, cred: { ...lead.cred, git: { ...lead.cred.git!, remote: world.remote } } };
     expect((await sync(fixed)).pushed).toBe(true);

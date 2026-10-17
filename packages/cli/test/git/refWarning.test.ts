@@ -20,6 +20,8 @@ describe('unexpected team ref names in hook warnings', () => {
     expect(lines[0]).toMatch(/untrusted/);
     expect(lines[0]).toContain('"refs/agentteams/');
     expect(lines[0]).not.toContain(payload);
-    expect(lines[0]!.length).toBeLessThan(260);
+    const shown = /untrusted: ("(?:[^"\\]|\\.)*")\)/.exec(lines[0]!)?.[1];
+    expect(shown).toBeDefined();
+    expect(JSON.parse(shown!).length).toBeLessThanOrEqual(80);
   });
 });

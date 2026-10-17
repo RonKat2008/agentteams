@@ -14,6 +14,8 @@ export default defineConfig({
     // Real git, child processes and in-process hubs: generous limits so busy machines don't flake.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // No test may start a real detached `agentteams sync` (it would run with the real HOME).
+    env: { AGENTTEAMS_NO_BACKGROUND_SYNC: '1' },
     coverage: { include: ['packages/*/src/**'], exclude: ['**/bin.ts', '**/index.ts'] },
   },
 });

@@ -301,21 +301,21 @@ export async function takeSyncWarnings(deps: Deps, repo: string): Promise<string
   const lines: string[] = [];
   const next: Warned = { ...warned };
   if (status.lastError && warned.error !== status.lastError) {
-    lines.push(`agentteams: sync failed: ${oneLine(status.lastError)} (see .git/agentteams/sync.log)`);
+    lines.push(`agentteams: sync failed: ${oneLine(status.lastError)} (see ${paths.log})`);
     next.error = status.lastError;
   }
   const shown = new Set(warned.refusals ?? []);
   const fresh = (status.refusals ?? []).filter((r) => !shown.has(r));
   if (fresh.length > 0) {
     const more = fresh.length > 1 ? ` (+${fresh.length - 1} more)` : '';
-    lines.push(`agentteams: security: refused team data: ${oneLine(fresh[fresh.length - 1]!)}${more} (see .git/agentteams/sync.log)`);
+    lines.push(`agentteams: security: refused team data: ${oneLine(fresh[fresh.length - 1]!)}${more} (see ${paths.log})`);
     next.refusals = [...shown, ...fresh].slice(-MAX_REFUSALS * 2);
   }
   if (lines.length > 0) await writeJsonAtomic(paths.warned, next);
   return lines;
 }
 
-/** First warning line only (kept for callers that show one line). */
+/** All warning lines joined into one block, or null when there is none. */
 export async function takeSyncWarning(deps: Deps, repo: string): Promise<string | null> {
   return (await takeSyncWarnings(deps, repo)).join('\n') || null;
 }
@@ -328,10 +328,12 @@ export type SyncTrigger = () => void;
  * Starts `agentteams sync --repo <repo> --tool <tool> --quiet` in the background: detached, no stdio,
  * unref'd, never awaited. Failures to spawn are ignored (the next trigger tries again).
  */
-export function spawnDetachedSync(repo: string, tool: ToolKind, entry: string = binPath()): void {
+export function spawnDetachedSync(repo: string, tool: ToolKind, entry: string = binPath(), env: NodeJS.ProcessEnv = process.env): void {
+  // An opt-out for sandboxes and tests: rounds then run only through `agentteams sync`.
+  if (env.AGENTTEAMS_NO_BACKGROUND_SYNC === '1') return;
   try {
     const child = spawn(process.execPath, [entry, 'sync', '--repo', repo, '--tool', tool, '--quiet'], {
-      detached: true, stdio: 'ignore', cwd: repo,
+      detached: true, stdio: 'ignore', cwd: repo, env,
     });
     child.on('error', () => undefined);
     child.unref();
