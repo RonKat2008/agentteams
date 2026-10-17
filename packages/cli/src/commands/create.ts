@@ -1,9 +1,11 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { defaultMemberName, type RepoLink, type ToolKind } from '@agentteams/shared';
+import { defaultMemberName, MemberName, type RepoLink, type ToolKind } from '@agentteams/shared';
 import { saveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
+import { pickRemote } from '../git/remoteUrl.js';
+import { createGitTeam, hasGitTeam, INVITE_WARNING } from '../git/setup.js';
 import { HubClient } from '../hubClient.js';
 import { createLocalTeam, LOCAL_TEAM_LABEL } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
@@ -12,11 +14,16 @@ import { checkTeamDir, detectGithubSlug, isGitRepo, repoRoot } from '../repo.js'
 import { printReport, runInstallers } from './install.js';
 import { dateOnly } from './shared.js';
 
-export interface CreateResult { teamName: string; inviteCode: string; inviteExpiresAt: string; hubUrl: string }
+/** `inviteExpiresAt` is '' for git teams (their code does not expire); `remoteUrl` is set only for them. */
+export interface CreateResult { teamName: string; inviteCode: string; inviteExpiresAt: string; hubUrl: string; remoteUrl?: string }
 
 export interface CreateOpts {
   agent: ToolKind; as?: string; hub?: string; repo?: string; local?: boolean; install: boolean;
   newRepo?: boolean; trustHub?: boolean; visibility?: 'private' | 'public'; owner?: string;
+  /** A team for agents on this computer only, even when the repo has a git remote. */
+  thisComputer?: boolean;
+  /** The git remote a git team is shared through (default: origin). */
+  remote?: string;
 }
 
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
@@ -48,9 +55,23 @@ async function gitOrThrow(deps: CliDeps, cwd: string, args: string[]): Promise<s
 export const teammateJoinCommand = (inviteCode: string, hubUrl: string): string =>
   hubUrl ? `agentteams join ${inviteCode} --hub ${hubUrl}` : `agentteams join ${inviteCode}`;
 
-/** No --hub flag and no AGENTTEAMS_HUB: the team lives in this repo's local database. */
+/** No --hub flag and no AGENTTEAMS_HUB: the team is stored in this repo (a local or a git team), not on a hub. */
 export const isLocalCreate = (opts: Pick<CreateOpts, 'hub'>, env: NodeJS.ProcessEnv): boolean =>
   opts.hub === undefined && !env.AGENTTEAMS_HUB;
+
+export type CreateKind = 'hub' | 'local' | 'git';
+
+/**
+ * Which kind of team `create` makes, in order: --hub / AGENTTEAMS_HUB -> a hub; --this-computer or --local -> this
+ * computer only; --new-repo or a repo with a git remote -> a git team shared through the remote; else local.
+ * Returns the remote name for a git team.
+ */
+export async function createKind(deps: CliDeps, opts: CreateOpts, repoPath: string): Promise<{ kind: CreateKind; remote?: string }> {
+  if (!isLocalCreate(opts, deps.env)) return { kind: 'hub' };
+  if (opts.thisComputer || opts.local) return { kind: 'local' };
+  const remote = await pickRemote(deps, repoPath, opts.remote);
+  return remote ? { kind: 'git', remote } : { kind: 'local' };
+}
 
 /** Spec §3A steps 1-3: verify gh, create the local repo with a first commit, create and push the GitHub repo. */
 export function validateNewRepoArgs(name: string, owner?: string): void {
@@ -113,14 +134,12 @@ async function commitInstructions(deps: CliDeps, dir: string): Promise<void> {
   if (push.code !== 0) deps.err(`warning: could not push the instructions commit (${msgOf(push)})`);
 }
 
-const hasRemote = async (deps: CliDeps, repoPath: string): Promise<boolean> => {
-  const r = await deps.exec('git', ['remote'], { cwd: repoPath });
-  return r.code === 0 && r.stdout.trim() !== '';
-};
-
 async function registerLocalTeam(
   deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink,
 ): Promise<{ cred: Credential; result: CreateResult }> {
+  if (await hasGitTeam(deps, repoPath)) {
+    throw new Error('this repo already has a git team; a repo holds one git team (use another clone for a team on this computer only)');
+  }
   const member = opts.as ?? defaultMemberName(deps.username);
   const res = await createLocalTeam(deps, repoPath, { name, tool: opts.agent, repo, member });
   const cred: Credential = {
@@ -131,17 +150,31 @@ async function registerLocalTeam(
   deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
   deps.out(`Teammates join with: ${teammateJoinCommand(res.inviteCode, '')}`);
   deps.out(LOCAL_TEAM_LABEL);
-  if (await hasRemote(deps, repoPath)) {
-    deps.out('Note: this repo has a git remote; sharing the team with other computers will come from git sync (not yet available).');
-  }
   await saveCredential(deps, cred);
   return { cred, result: { teamName: res.teamName, inviteCode: res.inviteCode, inviteExpiresAt: res.inviteExpiresAt, hubUrl: '' } };
+}
+
+/** A git team shared through `remote`: no hub and no GitHub token; the push needs the user's normal git access. */
+async function registerGitTeam(
+  deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink, remote: string,
+): Promise<{ cred: Credential; result: CreateResult }> {
+  const member = MemberName.parse(opts.as ?? defaultMemberName(deps.username));
+  const res = await createGitTeam(deps, { repoPath, remote, name, tool: opts.agent, member, repo });
+  await saveCredential(deps, res.cred);
+  deps.out(`Created team "${name}" (shared through ${res.remoteUrl}). You are ${res.cred.agentName} (orchestrator).`);
+  deps.out(`Teammates join with: ${teammateJoinCommand(res.inviteCode, '')}`);
+  deps.out(INVITE_WARNING);
+  return { cred: res.cred, result: { teamName: name, inviteCode: res.inviteCode, inviteExpiresAt: '', hubUrl: '', remoteUrl: res.remoteUrl } };
 }
 
 async function registerTeam(
   deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink, githubToken: string | undefined,
 ): Promise<{ cred: Credential; result: CreateResult }> {
-  if (isLocalCreate(opts, deps.env)) return registerLocalTeam(deps, name, opts, repoPath, repo);
+  if (isLocalCreate(opts, deps.env)) {
+    const { kind, remote } = await createKind(deps, opts, repoPath);
+    if (kind === 'git') return registerGitTeam(deps, name, opts, repoPath, repo, remote!);
+    return registerLocalTeam(deps, name, opts, repoPath, repo);
+  }
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
   const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
   const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, tool: opts.agent, repo, ...identity });
@@ -160,6 +193,11 @@ async function registerTeam(
 export async function createCommand(deps: CliDeps, name: string, opts: CreateOpts): Promise<CreateResult> {
   // A fresh --new-repo folder is made below, so the "not a git repo" warning does not apply to cwd.
   const local = isLocalCreate(opts, deps.env);
+  if (opts.thisComputer && !local) throw new Error('--this-computer makes a team without a hub; drop --hub (and AGENTTEAMS_HUB)');
+  if (opts.thisComputer && opts.newRepo) throw new Error('--this-computer and --new-repo do not go together: a new GitHub repo is for sharing the team');
+  if (opts.remote !== undefined && (opts.thisComputer || opts.local || !local)) {
+    throw new Error('--remote is for teams shared through git; drop --hub, --local and --this-computer');
+  }
   await checkTeamDir(opts.newRepo || local ? { ...deps, err: () => {} } : deps, deps.cwd);
   if (local && !opts.newRepo && !(await isGitRepo(deps, deps.cwd))) {
     throw new Error('a local team lives in a git repository; run "git init" here first (or pass --hub <url> to use a hub)');

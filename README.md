@@ -66,12 +66,13 @@ Kai's Cursor claimed `src/auth/login.ts`. Jamie's commit to it is blocked until 
 ## Quick start
 
 ```bash
-# 1. In your repo: create a team (you become the orchestrator). No hub, no account, no network:
-#    the team lives in the repo's .git/agentteams.
+# 1. In your repo: create a team (you become the orchestrator). No hub and no account.
+#    With a git remote (e.g. a GitHub repo) the team is shared through it; without one it stays on this computer.
 cd ~/code/my-repo
 agentteams create my-team --agent claude        # prints an invite code
 
-# 2. Add another agent on this machine (run it in the same repo)
+# 2. Teammates (or another agent on this machine) join with the code. A git team's code starts with at1-;
+#    `join` clones the repo unless you are already inside a clone of it.
 agentteams join <invite-code> --agent codex
 
 # 3. Open the agents in the repo. In Codex, run /hooks once and approve the agentteams hooks.
@@ -80,11 +81,14 @@ agentteams join <invite-code> --agent codex
 `create` and `join` install everything (MCP server, hooks, instruction block). Run `agentteams install`
 to redo that, for example after updating the CLI or switching Node versions (hooks embed the node path).
 
-For teammates on other computers, use a hub server for now (add `--hub <url>` to `create` / `join`):
+A git team's invite code carries the team key: treat it like a password. Together with access to the repo it lets
+someone read and join the team (the team data in the remote is encrypted; access itself is the repo's access).
+`agentteams invite show` prints it again. No GitHub token is needed or sent; pushes use your normal git credentials.
 
 | You want | Run | Then |
 |---|---|---|
-| Same machine only | nothing (the default) | `agentteams create` / `join` |
+| Same machine only | nothing (the default without a git remote; `--this-computer` with one) | `agentteams create` / `join` |
+| Teammates on other computers, through the repo | nothing (the default with a git remote) | `agentteams create`, teammates `agentteams join at1-...` |
 | Agents anywhere, public hub | nothing | add `--hub https://agentteams-two.vercel.app` to `create` / `join` |
 | Private team across machines | `agentteams up --share` | send teammates the printed `join` command |
 
@@ -175,7 +179,7 @@ Caveats worth knowing:
 | `agentteams install [--agent <tool>\|all]` | (Re)configure agents for this repo |
 | `agentteams status` | Show the team and its agents |
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
-| `agentteams invite rotate\|revoke` | Rotate or revoke the invite code |
+| `agentteams invite show\|rotate\|revoke` | Show (git teams) the invite code again; rotate or revoke it (hub and local teams) |
 | `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
 | `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
 | `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
@@ -190,13 +194,18 @@ Caveats worth knowing:
 
 - `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name),
   `--hub <url>` (or `local` for http://127.0.0.1:4747; default `$AGENTTEAMS_HUB`), `--no-install` (skip tool setup).
-  Without `--hub` or `$AGENTTEAMS_HUB`, `create` makes a team stored in this repo (`.git/agentteams`), and `join`
-  joins it when the code belongs to that team; any other code goes to the public hub https://agentteams-two.vercel.app.
-- `create` only: `--repo <owner/name>` links a GitHub repo; `--local` makes a local-only team. Without
-  either, the GitHub `origin` is detected, falling back to a local-only team.
-  `--new-repo` creates a new GitHub repo with `gh` and links the team to it (`--owner <org>` picks the owner;
-  `--private` is the default, `--public` makes it public).
-- `join` only: clones the team's GitHub repo with `gh` (into `./<repo name>`, or `--dir <path>`); `--no-clone` skips the clone and uses the current directory.
+  Without `--hub` or `$AGENTTEAMS_HUB`, `create` makes a team stored in this repo (`.git/agentteams`): shared
+  through the repo's git remote (`origin`, or `--remote <name>`) when it has one, otherwise for this computer only.
+  `join` takes `at1-` codes (git teams) and this repo's own local codes without a hub; any other code needs
+  `--hub <url>` (or `$AGENTTEAMS_HUB`) and is never sent to the public hub by default.
+- `create` only: `--this-computer` makes a team for this computer only even when the repo has a git remote.
+  `--local` keeps its old meaning with `--hub` (no GitHub link); without a hub it also means this computer only.
+  `--repo <owner/name>` links a GitHub repo; otherwise the GitHub `origin` is detected.
+  `--new-repo` creates a new GitHub repo with `gh` and makes a git team on it (with `--hub`, a hub team linked to it;
+  `--owner <org>` picks the owner; `--private` is the default, `--public` makes it public).
+- `join` only: for a git team, uses the current clone when one of its remotes is the team's repo, otherwise clones
+  it with git (into `./<repo name>`, or `--dir <path>`); for a hub team, clones the GitHub repo with `gh`.
+  `--no-clone` skips the clone and uses the current directory.
 - `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
 - `status`, `log`, `invite`, `orchestrator`, `worktree`, `access grant`: `--agent <tool>` picks which credential to use when the repo
   has more than one (for example both Claude and Codex).
@@ -337,7 +346,7 @@ Environment variables:
 - `AGENTTEAMS_HOME`: data directory (default `~/.agentteams`; must be an absolute path, empty means default)
 - `AGENTTEAMS_PORT`: listen port for `up` and the hub (default `4747`)
 - `AGENTTEAMS_HUB`: hub URL the CLI talks to; `local` means http://127.0.0.1:4747 (when unset, `create` makes a
-  team stored in the repo and `join` falls back to the public hub for codes that team does not know)
+  team stored in the repo; when set, `create` uses that hub and `join` sends hub codes to it)
 
 To run the local hub without the CLI: `node packages/hub/dist/bin.js` (listens on http://127.0.0.1:4747).
 

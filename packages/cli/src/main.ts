@@ -3,7 +3,7 @@ import { ToolKind } from '@agentteams/shared';
 import { accessGrantCommand } from './commands/access.js';
 import { createCommand, type CreateOpts } from './commands/create.js';
 import { installCommand } from './commands/install.js';
-import { inviteCommand } from './commands/invite.js';
+import { inviteCommand, type InviteAction } from './commands/invite.js';
 import { joinCommand } from './commands/join.js';
 import { logCommand } from './commands/log.js';
 import { orchestratorCommand } from './commands/orchestrator.js';
@@ -57,9 +57,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action(async (o: { port?: string; share?: boolean }) => (await import('./commands/up.js')).upCommand(deps, o));
   sub('create').description('Create a team in this repo').argument('<name>')
     .addOption(agentOpt('claude')).option('--as <member>')
-    .option('--hub <url>', 'use a hub server: its URL, or "local" for http://127.0.0.1:4747 (default: $AGENTTEAMS_HUB, else a team stored in this repo)')
+    .option('--hub <url>', 'use a hub server: its URL, or "local" for http://127.0.0.1:4747 (default: $AGENTTEAMS_HUB, else a team stored in this repo: shared through its git remote if it has one, otherwise on this computer)')
+    .addOption(new Option('--this-computer', 'a team for agents on this computer only, even if the repo has a git remote').conflicts(['newRepo', 'hub']))
+    .option('--remote <name>', 'the git remote a team is shared through (default: origin)')
     .addOption(new Option('--repo <owner/name>').conflicts('newRepo'))
-    .addOption(new Option('--local', 'local-only repo (no GitHub link); this is NOT the local hub, use --hub local for that').conflicts('newRepo'))
+    .addOption(new Option('--local', 'no GitHub link; without --hub also a team on this computer only (NOT the local hub: --hub local is)').conflicts('newRepo'))
     .addOption(new Option('--new-repo', 'create a new GitHub repo with gh and link the team to it'))
     .addOption(new Option('--private', 'new repo is private (default)').conflicts('public'))
     .addOption(new Option('--public', 'new repo is public'))
@@ -70,11 +72,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     });
   sub('join').description('Join a team with an invite code').argument('<invite-code>')
     .addOption(agentOpt('claude')).option('--as <member>')
-    .option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747 (default: this repo\'s team if the code is for it, else $AGENTTEAMS_HUB or the public hub)')
+    .option('--hub <url>', 'hub URL, or "local" for http://127.0.0.1:4747, for hub codes (default: $AGENTTEAMS_HUB); at1- codes and this repo\'s own codes need no hub')
     .option('--no-install')
     .option('--trust-hub', TRUST_HUB_HELP)
     .option('--no-clone', 'do not clone the team repo; use the current directory')
-    .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>)')
+    .option('--dir <path>', 'where to clone the team repo (default: ./<repo name>; skipped inside a clone of it)')
     .action((code: string, o) => joinCommand(deps, code, o));
   sub('install').description('(Re)configure Claude Code / Codex for this repo')
     .addOption(new Option('--agent <tool>').choices([...TOOLS, 'all']))
@@ -95,9 +97,9 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       try { await logCommand(deps, { agent: o.agent, follow: Boolean(o.follow), limit: o.limit, signal: ac.signal }); }
       finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
     });
-  sub('invite').description('Rotate or revoke the invite code')
-    .addArgument(new Argument('<action>').choices(['rotate', 'revoke'])).addOption(agentOpt())
-    .action((action: 'rotate' | 'revoke', o) => inviteCommand(deps, action, o));
+  sub('invite').description('Show (git teams), rotate or revoke the invite code')
+    .addArgument(new Argument('<action>').choices(['show', 'rotate', 'revoke'])).addOption(agentOpt())
+    .action((action: InviteAction, o) => inviteCommand(deps, action, o));
   sub('orchestrator').description('Make an agent the orchestrator').argument('<agent-name>').addOption(agentOpt())
     .action((target: string, o) => orchestratorCommand(deps, target, o));
   sub('worktree').description('Claim a task and give it its own git worktree and branch')

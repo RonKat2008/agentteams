@@ -147,12 +147,15 @@ describe('local create/join edge cases', () => {
   beforeEach(() => { r = makeRepo(); });
   afterEach(() => { made.splice(0).forEach((c) => c.cleanup()); r.cleanup(); });
 
-  it('a repo with a git remote still gets a local team, with a note about git sync', async () => {
+  it('--this-computer (or --local) keeps a repo with a git remote on a local team', async () => {
     git(r.repo, 'remote', 'add', 'origin', 'https://example.com/me/app.git');
     const c = mk(r.repo);
-    expect(await c.run('create', 'acme', '--no-install')).toBe(0);
+    expect(await c.run('create', 'acme', '--this-computer', '--no-install')).toBe(0);
     expect((await credOf(c, 'claude')).transport).toBe('local');
-    expect(c.out.filter((l) => /git sync/.test(l))).toHaveLength(1);
+    expect(c.out).toContain('Team: local to this computer (stored in .git/agentteams)');
+    const d = mk(r.repo, c);
+    expect(await d.run('create', 'acme2', '--local', '--agent', 'codex', '--no-install')).toBe(0);
+    expect((await credOf(d, 'codex')).transport).toBe('local');
   });
 
   it('refuses a local team outside a git repo, pointing at git init', async () => {
