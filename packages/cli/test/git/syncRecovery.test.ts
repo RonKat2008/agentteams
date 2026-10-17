@@ -102,3 +102,26 @@ describe('the git MCP server', () => {
     await mcp.close();
   });
 });
+
+describe('a failing view', () => {
+  it('a round whose apply keeps failing still sends this agent\'s own pending ops', async () => {
+    const { lead, worker } = await twoAgents();
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'from lead' });
+    await client(worker).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'from worker' });
+    expect((await sync(worker)).ok).toBe(true);
+
+    // The lead's view cannot apply anything (a poison op would do the same), round after round.
+    const { store } = await view(lead);
+    await sql`create trigger fail_apply before insert on messages begin insert into injected_failure values (1); end`
+      .execute(store.ctx.db);
+    for (let i = 0; i < 2; i++) {
+      const r = await sync(lead);
+      expect(r.ok).toBe(false);
+      expect(r.errors.join('\n')).toMatch(/apply/);
+    }
+    expect((await sync(lead)).published).toBe(0); // already sent by the first failing round
+
+    expect((await sync(worker)).ok).toBe(true);
+    expect(await bodies(worker)).toContain('from lead');
+  });
+});

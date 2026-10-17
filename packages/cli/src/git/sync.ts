@@ -230,7 +230,9 @@ async function checkMeta(deps: Deps, repo: string, view: GitView, summary: SyncS
  * Applies the round's ops. `rebuild`: the view may lack accepted ops (the meta was just pinned, or an earlier apply
  * failed after its ops were accepted), so everything is replayed once. Clears the `unapplied` marker on success.
  */
-async function applyIngested(view: GitView, incoming: Op[], creator: TeamCreator, rebuild: boolean, now: () => number, summary: SyncSummary): Promise<void> {
+async function applyIngested(
+  view: GitView, lock: SyncLock, incoming: Op[], creator: TeamCreator, rebuild: boolean, now: () => number, summary: SyncSummary,
+): Promise<void> {
   const { files } = view;
   const candidates = [...(await files.readDeferred()), ...incoming, ...(await listPending(view.store.ctx.db))];
   const { ready, deferred } = deferFutureOps(candidates, now());
@@ -246,6 +248,7 @@ async function applyIngested(view: GitView, incoming: Op[], creator: TeamCreator
   summary.rejected += r.rejected;
   summary.backdated += r.backdated;
   summary.rebuilt ||= r.rebuilt;
+  await lock.assertOwned(); // a later lock holder may have set the marker again
   await files.setUnapplied(false);
 }
 
@@ -413,7 +416,15 @@ async function runRound(
   if (!f.ok || opts.ingestOnly) meta.repair = null; // decide repairs only on fresh remote state
   const ingested = await ingestAll(deps, repo, view, lock, opts, summary);
   await lock.assertOwned();
-  if (meta.creator) await applyIngested(view, ingested, meta.creator, meta.firstPin || unapplied, now, summary);
+  if (meta.creator) {
+    try {
+      await applyIngested(view, lock, ingested, meta.creator, meta.firstPin || unapplied, now, summary);
+    } catch (err) {
+      // The marker stays set, so the next round retries. Our own ops are already in our view and still get sent.
+      await lock.assertOwned();
+      summary.errors.push(`apply: ${cleanError(err)}`);
+    }
+  }
   await applyPresence(view, now());
   if (opts.ingestOnly) return;
   for (;;) {
@@ -545,7 +556,7 @@ export async function writeBootstrap(deps: Deps, repo: string, cred: Credential,
     if (r.problems.length > 0) throw new Error(r.problems.join('; '));
     summary.ingested = r.ops.length;
     const creator = await teamCreatorOf(view);
-    if (creator) await applyIngested(view, r.ops, creator, unapplied, now, summary);
+    if (creator) await applyIngested(view, lock, r.ops, creator, unapplied, now, summary);
   } finally {
     await lock.release();
   }
