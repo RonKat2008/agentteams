@@ -7,7 +7,6 @@ import { ReplicatedCreateTeamInput, ReplicatedJoinInput } from '@agentteams/shar
 import { withTx, type HubContext } from '../context.js';
 import { DomainError, parseInput } from '../errors.js';
 import { logEvent } from './activity.js';
-import { uniqueAgentName } from './teams.js';
 
 /**
  * Placeholder secrets for replicated rows. hashSecret() yields 64 hex characters, so these can never
@@ -15,6 +14,31 @@ import { uniqueAgentName } from './teams.js';
  */
 const inviteHashOf = (teamId: string): string => `replica:${teamId}`;
 const apiKeyHashOf = (agentId: string): string => `replica:${agentId}`;
+
+/** AgentName: `<member: 1-24>-<rest: 1-30>`; a suffix must fit inside `rest`. */
+const AGENT_NAME_REST_MAX = 30;
+
+/** `base` with `suffix` appended, the part after the first hyphen truncated so the result stays a valid AgentName. */
+export function fitAgentName(base: string, suffix: string): string {
+  const cut = base.indexOf('-');
+  const member = base.slice(0, cut);
+  const rest = base.slice(cut + 1, cut + 1 + Math.max(1, AGENT_NAME_REST_MAX - suffix.length));
+  return `${member}-${rest}${suffix}`;
+}
+
+/**
+ * The first free name among `base`, `base-2`, `base-3`, ... (each truncated to stay a valid AgentName).
+ * Deterministic: replay registers joins in total order against the same view.
+ */
+async function uniqueReplicatedName(ctx: HubContext, teamId: string, base: string): Promise<string> {
+  const rows = await ctx.db.selectFrom('agents').select('name').where('team_id', '=', teamId).execute();
+  const taken = new Set(rows.map((r) => r.name));
+  if (!taken.has(base)) return base;
+  for (let i = 2; ; i++) {
+    const candidate = fitAgentName(base, `-${i}`);
+    if (!taken.has(candidate)) return candidate;
+  }
+}
 
 function requireSelf(authorId: string, agentId: string): void {
   if (authorId !== agentId) throw new DomainError('forbidden', 'an agent can only register its own key');
@@ -51,8 +75,9 @@ export async function createReplicatedTeam(
 /**
  * An agent's first op. A second registration of the same agent id with a different key is rejected;
  * re-registering the identical key is an idempotent no-op. A join is never rejected over its name: if the
- * requested name is taken, the agent gets the first free `<name>-2`, `-3`, ... (as joinTeam does), which
- * is deterministic because replay applies joins in total order.
+ * requested name is taken, the agent gets the first free `<name>-2`, `-3`, ... (as joinTeam does; long names
+ * are truncated so the result stays a valid AgentName), which is deterministic because replay applies joins
+ * in total order.
  */
 export async function registerReplicatedAgent(
   ctx: HubContext, authorId: string, input: ReplicatedJoinInput,
@@ -73,7 +98,7 @@ export async function registerReplicatedAgent(
     }
     const row = await tx.db.selectFrom('agents').select('id').where('id', '=', p.agentId).executeTakeFirst();
     if (row) throw new DomainError('conflict', 'this agent is already registered');
-    const agentName = await uniqueAgentName(tx, p.teamId, p.agentName);
+    const agentName = await uniqueReplicatedName(tx, p.teamId, p.agentName);
     await insertAgent(tx, p.teamId, { ...p, agentName }, nowIso);
     await logEvent(tx, p.teamId, p.agentId, 'agent_joined', { agent: agentName, member: p.member, tool: p.tool, githubLogin: null });
     return { agentName, alreadyRegistered: false };

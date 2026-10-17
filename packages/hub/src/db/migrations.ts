@@ -4,6 +4,8 @@ import type { Database } from './schema.js';
 
 // Only portable column types (text, integer) so the same migrations run on SQLite and Postgres.
 // Keys are sorted as strings. The next key must be `003_...`; use 3-digit prefixes from here on.
+const NOTICE_COPY_CHUNK = 500;
+
 const migrations: Record<string, Migration> = {
   '0001_init': {
     async up(db: Kysely<any>) {
@@ -204,14 +206,17 @@ const migrations: Record<string, Migration> = {
         .addColumn('delivered_at', 'text')
         .addPrimaryKeyConstraint('replica_notices_pk', ['agent_id', 'op_id'])
         .execute();
-      if (notices.length > 0) await db.insertInto('replica_notices').values(notices).execute();
+      // Chunked: one multi-row INSERT per 500 rows stays well under SQLite's bound-variable limit.
+      for (let i = 0; i < notices.length; i += NOTICE_COPY_CHUNK) {
+        await db.insertInto('replica_notices').values(notices.slice(i, i + NOTICE_COPY_CHUNK)).execute();
+      }
 
-      await db.schema.createTable('agent_key_pins')
+      await db.schema.createTable('agent_key_pins').ifNotExists()
         .addColumn('agent_id', 'text', (c) => c.primaryKey())
         .addColumn('public_key', 'text', (c) => c.notNull())
         .addColumn('pinned_at', 'text', (c) => c.notNull())
         .execute();
-      await db.schema.createTable('team_meta_pins')
+      await db.schema.createTable('team_meta_pins').ifNotExists()
         .addColumn('team_id', 'text', (c) => c.primaryKey())
         .addColumn('meta_json', 'text', (c) => c.notNull())
         .addColumn('pinned_at', 'text', (c) => c.notNull())

@@ -58,14 +58,27 @@ describe('capture', () => {
   it('validates input with the service schema and stores the parsed form', () => {
     const hlc = createHlc(() => T);
     const DYLAN = '01JABCDEFGHJKMNPQRSTVWXYZ1';
-    const dir = { idOf: (name: string) => (name === 'dylan-claude' ? DYLAN : undefined) };
+    const TASK1 = '01JABCDEFGHJKMNPQRSTVWXYZ9';
+    const dir = {
+      idOf: (name: string) => (name === 'dylan-claude' ? DYLAN : undefined),
+      taskIdOf: (n: number) => (n === 1 ? TASK1 : undefined),
+    };
     const op = captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'Dylan-Claude', body: 'hi' }, dir);
     expect(op).toMatchObject({ v: 1, agent: 'AGENT00000001', op: 'sendMessage', input: { to: DYLAN, body: 'hi', kind: 'fyi' } });
     expect(captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'all', body: 'x' }, dir).input).toMatchObject({ to: 'all' });
     expect(captureOp(hlc, 'AGENT00000001', 'createTask', { title: 't', assignee: 'dylan-claude' }, dir).input)
       .toMatchObject({ assignee: DYLAN });
     expect(captureOp(hlc, 'AGENT00000001', 'assignTask', { task: 1, assignee: 'dylan-claude' }, dir).input)
-      .toMatchObject({ assignee: DYLAN });
+      .toMatchObject({ task: TASK1, assignee: DYLAN });
+    for (const name of ['claimTask', 'markMerged'] as const) {
+      expect(captureOp(hlc, 'AGENT00000001', name, { task: 1 }, dir).input).toMatchObject({ task: TASK1 });
+    }
+    expect(captureOp(hlc, 'AGENT00000001', 'updateTask', { task: 1, note: 'n' }, dir).input).toMatchObject({ task: TASK1 });
+    expect(captureOp(hlc, 'AGENT00000001', 'completeTask', { task: 1, summary: 's', branch: 'b' }, dir).input)
+      .toMatchObject({ task: TASK1 });
+    expect(() => captureOp(hlc, 'AGENT00000001', 'claimTask', { task: 2 }, dir)).toThrow(/task #2 not found/);
+    expect(() => captureOp(hlc, 'AGENT00000001', 'claimTask', { task: 1 }, { idOf: () => undefined }))
+      .toThrow(/needs a directory with task lookups/);
     expect(captureOp(hlc, 'AGENT00000001', 'setOrchestrator', { agent: 'dylan-claude' }, dir).input).toEqual({ agent: DYLAN });
     expect(() => captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'kai-cursor', body: 'x' }, dir)).toThrow(/no agent named "kai-cursor"/);
     expect(opIdMatchesTs(op.id, op.ts)).toBe(true);

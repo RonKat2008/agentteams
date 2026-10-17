@@ -54,16 +54,23 @@ export const CAPTURE_SCHEMAS = {
 
 /** An agent targeted by an op, on the wire: its id (names can be squatted or suffixed; ids cannot). */
 const AgentRef = Ulid;
+/** A task targeted by an op, on the wire: its row id (numbers shift when a late createTask replays earlier). */
+const TaskRef = Ulid;
 
 /**
  * What the log carries, per op. Identical to CAPTURE_SCHEMAS except that every field naming an agent
- * (TARGET_FIELDS) carries the agent id, resolved at capture time against the author's view.
+ * (TARGET_FIELDS) carries the agent id and every task number (TASK_FIELDS) carries the task's row id,
+ * both resolved at capture time against the author's view.
  */
 export const OP_SCHEMAS = {
   ...CAPTURE_SCHEMAS,
   sendMessage: SendMessageInput.extend({ to: z.union([z.literal('all'), AgentRef]) }),
   createTask: CreateTaskInput.extend({ assignee: AgentRef.optional() }),
-  assignTask: AssignTaskInput.extend({ assignee: AgentRef }),
+  assignTask: AssignTaskInput.extend({ task: TaskRef, assignee: AgentRef }),
+  claimTask: ClaimTaskInput.extend({ task: TaskRef }),
+  updateTask: UpdateTaskInput.extend({ task: TaskRef }),
+  completeTask: CompleteTaskInput.extend({ task: TaskRef }),
+  markMerged: MarkMergedInput.extend({ task: TaskRef }),
   setOrchestrator: SetOrchestratorInput.extend({ agent: AgentRef }),
 } as const satisfies Record<keyof typeof CAPTURE_SCHEMAS, z.ZodType>;
 
@@ -75,15 +82,27 @@ export const TARGET_FIELDS = {
   setOrchestrator: 'agent',
 } as const satisfies Partial<Record<keyof typeof CAPTURE_SCHEMAS, string>>;
 
+/** Input fields that name a task: captured as task numbers, carried and replayed as task row ids. */
+export const TASK_FIELDS = {
+  assignTask: 'task',
+  claimTask: 'task',
+  updateTask: 'task',
+  completeTask: 'task',
+  markMerged: 'task',
+} as const satisfies Partial<Record<keyof typeof CAPTURE_SCHEMAS, string>>;
+
 export type OpName = keyof typeof OP_SCHEMAS;
 export type BootstrapOpName = 'createTeam' | 'join';
 export type RegularOpName = Exclude<OpName, BootstrapOpName>;
 /** Capture-time input (agents by name). */
 export type OpInput<N extends OpName> = z.input<(typeof CAPTURE_SCHEMAS)[N]>;
 
-/** Name to id lookup over the author's current view (see replay.ts loadAgentDirectory). */
+/** Name/number to id lookups over the author's current view (see replay.ts loadAgentDirectory). */
 export interface AgentDirectory {
+  /** Agent name -> agent id. */
   idOf(name: string): string | undefined;
+  /** Task number -> task row id. Required to capture task ops (claimTask, assignTask, ...). */
+  taskIdOf?(number: number): string | undefined;
 }
 
 /** Ops that register their author's key. They must be the only op of the author's seq-0 segment. */
@@ -123,17 +142,27 @@ export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
   const to = withName('to');
   const assignee = withName('assignee');
   const agent = withName('agent');
+  /** Replay adapter: the services address tasks by number; the log carries row ids. */
+  const withNumber = async (ctx: HubContext, actor: Actor, input: unknown): Promise<Record<string, unknown>> => {
+    const i = (input ?? {}) as Record<string, unknown>;
+    if (typeof i.task !== 'string') return i;
+    const row = await ctx.db.selectFrom('tasks').select('number')
+      .where('team_id', '=', actor.teamId).where('id', '=', i.task).executeTakeFirst();
+    if (!row) throw new core.DomainError('not_found', 'the target task is not in this team');
+    return { ...i, task: row.number };
+  };
   return {
     createTeam: (ctx, actor, input) => core.createReplicatedTeam(ctx, actor.id, input as never),
     join: (ctx, actor, input) => core.registerReplicatedAgent(ctx, actor.id, input as never),
     sendMessage: async (ctx, actor, input) => core.sendMessage(ctx, actor, (await to(ctx, actor, input)) as never),
     markRead: (ctx, actor, input) => core.markRead(ctx, actor, input as never),
     createTask: async (ctx, actor, input) => core.createTask(ctx, actor, (await assignee(ctx, actor, input)) as never),
-    assignTask: async (ctx, actor, input) => core.assignTask(ctx, actor, (await assignee(ctx, actor, input)) as never),
-    claimTask: (ctx, actor, input) => core.claimTask(ctx, actor, input as never),
-    updateTask: (ctx, actor, input) => core.updateTask(ctx, actor, input as never),
-    completeTask: (ctx, actor, input) => core.completeTask(ctx, actor, input as never),
-    markMerged: (ctx, actor, input) => core.markMerged(ctx, actor, input as never),
+    assignTask: async (ctx, actor, input) =>
+      core.assignTask(ctx, actor, (await assignee(ctx, actor, await withNumber(ctx, actor, input))) as never),
+    claimTask: async (ctx, actor, input) => core.claimTask(ctx, actor, (await withNumber(ctx, actor, input)) as never),
+    updateTask: async (ctx, actor, input) => core.updateTask(ctx, actor, (await withNumber(ctx, actor, input)) as never),
+    completeTask: async (ctx, actor, input) => core.completeTask(ctx, actor, (await withNumber(ctx, actor, input)) as never),
+    markMerged: async (ctx, actor, input) => core.markMerged(ctx, actor, (await withNumber(ctx, actor, input)) as never),
     claimFiles: (ctx, actor, input) => core.claimFiles(ctx, actor, input as never),
     releaseFiles: (ctx, actor, input) => core.releaseFiles(ctx, actor, input as never),
     recordCommit: (ctx, actor, input) => core.recordCommit(ctx, actor, input as never),
@@ -241,13 +270,23 @@ function validated(schema: z.ZodType, op: string, input: unknown): unknown {
 
 /** Replaces the agent name in the op's target field (if any) by that agent's id; 'all' stays. */
 function resolveTargets(op: OpName, input: unknown, directory: AgentDirectory): unknown {
+  let out = input as Record<string, unknown>;
   const field = (TARGET_FIELDS as Partial<Record<OpName, string>>)[op];
-  const i = input as Record<string, unknown>;
-  if (!field || typeof i[field] !== 'string' || i[field] === 'all') return input;
-  const name = i[field] as string;
-  const id = directory.idOf(name);
-  if (!id) throw new Error(`no agent named "${name}" in this team`);
-  return { ...i, [field]: id };
+  if (field && typeof out[field] === 'string' && out[field] !== 'all') {
+    const name = out[field] as string;
+    const id = directory.idOf(name);
+    if (!id) throw new Error(`no agent named "${name}" in this team`);
+    out = { ...out, [field]: id };
+  }
+  const taskField = (TASK_FIELDS as Partial<Record<OpName, string>>)[op];
+  if (taskField && typeof out[taskField] === 'number') {
+    const number = out[taskField] as number;
+    if (!directory.taskIdOf) throw new Error(`capturing ${op} needs a directory with task lookups`);
+    const id = directory.taskIdOf(number);
+    if (!id) throw new Error(`task #${number} not found`);
+    out = { ...out, [taskField]: id };
+  }
+  return out;
 }
 
 /**
