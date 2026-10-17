@@ -19,7 +19,7 @@ const apiKeyHashOf = (agentId: string): string => `replica:${agentId}`;
 const AGENT_NAME_REST_MAX = 30;
 
 /** `base` with `suffix` appended, the part after the first hyphen truncated so the result stays a valid AgentName. */
-export function fitAgentName(base: string, suffix: string): string {
+function fitAgentName(base: string, suffix: string): string {
   const cut = base.indexOf('-');
   const member = base.slice(0, cut);
   const rest = base.slice(cut + 1, cut + 1 + Math.max(1, AGENT_NAME_REST_MAX - suffix.length));

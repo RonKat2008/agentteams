@@ -8,6 +8,7 @@ import { realExec } from '../../src/deps.js';
 import { newAgentKeyPair, newTeamKey } from '../../src/git/crypto.js';
 import { createHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp } from '../../src/git/ops.js';
+import { segFile, shardOf } from '../../src/git/refs.js';
 import { REPLICATED_TABLES } from '../../src/git/replay.js';
 import { writeBootstrap } from '../../src/git/sync.js';
 import { openGitView, type GitView } from '../../src/git/view.js';
@@ -120,11 +121,18 @@ export async function signedSegment(world: World, a: Agent, seq: number, body: s
   return encodeSegment({ teamId: TEAM, agent: a.id, seq, ops: [op] }, world.teamKey, a.cred.git!.privateKey);
 }
 
+/** Path of segment `seq` inside a log tree (the layout refs.ts writes). */
+export const segPath = (seq: number): string => `ops/${shardOf(seq)}/${segFile(seq)}`;
+
+/** Writes `data` to the object store; returns the blob id. */
+const writeBlob = (repo: string, data: Buffer): string =>
+  execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: data, encoding: 'utf8' }).trim();
+
 /** Segments from..to (message `m<seq>` each) appended to `a`'s local log in one commit. */
 export async function appendMany(world: World, a: Agent, from: number, to: number): Promise<void> {
-  const { addToLog, writeBlobs } = await import('../../src/git/refs.js');
+  const { addToLog } = await import('../../src/git/refs.js');
   const seqs = Array.from({ length: to - from + 1 }, (_, i) => from + i);
-  const blobs = await writeBlobs(deps, a.repo, await Promise.all(seqs.map((q) => signedSegment(world, a, q, `m${q}`))));
+  const blobs = (await Promise.all(seqs.map((q) => signedSegment(world, a, q, `m${q}`)))).map((d) => writeBlob(a.repo, d));
   const ref = `refs/agentteams-local/${TEAM}/agents/${a.id}`;
   await addToLog(deps, a.repo, ref, seqs.map((seq, i) => ({ seq, blob: blobs[i]! })), null, git(a.repo, 'rev-parse', ref));
 }

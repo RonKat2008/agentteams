@@ -86,12 +86,6 @@ export interface ApplySummary {
   rebuilt: boolean;
 }
 
-export interface ReplicaNotice {
-  opId: string;
-  body: string;
-  createdAt: string;
-}
-
 export type PinResult = 'pinned' | 'match' | 'mismatch';
 
 /** Tables that make up the replicated view, wiped by a rebuild. Never the local replica_* or pin tables. */
@@ -535,20 +529,6 @@ export async function getPinnedKey(store: ReplayStore, agentId: string): Promise
 }
 
 /**
- * Signing keys (agent id -> public key) for segment verification: keys registered in the view, overridden
- * by local pins (pins win, and survive rebuilds that reject a registration). decodeSegment's lookup is
- * synchronous, so load this map first and pass `(id) => keys.get(id)`; undefined means unregistered.
- */
-export async function loadAgentKeys(store: ReplayStore): Promise<Map<string, string>> {
-  const keys = new Map<string, string>();
-  const registered = await store.ctx.db.selectFrom('agent_keys').select(['agent_id', 'public_key']).execute();
-  for (const r of registered) keys.set(r.agent_id, r.public_key);
-  const pins = await store.ctx.db.selectFrom('agent_key_pins').select(['agent_id', 'public_key']).execute();
-  for (const p of pins) keys.set(p.agent_id, p.public_key);
-  return keys;
-}
-
-/**
  * Pins a team's meta (its creator's agent id and public key) on first sight. Never replaces a pin.
  * Returns 'pinned' when this call created it, 'match' when the creator id and key equal the pinned ones,
  * else 'mismatch'. Other meta fields are stored with the pin but not compared.
@@ -579,17 +559,4 @@ export async function loadAgentDirectory(store: ReplayStore, teamId?: string): P
   const byName = new Map((await agents.execute()).map((r) => [r.name, r.id]));
   const byNumber = new Map((await tasks.execute()).map((r) => [Number(r.number), r.id]));
   return { idOf: (name) => byName.get(name), taskIdOf: (number) => byNumber.get(number) };
-}
-
-/** Returns this agent's undelivered notices, oldest first, and marks them delivered. */
-export async function takeNotices(store: ReplayStore, agentId: string): Promise<ReplicaNotice[]> {
-  return store.core.withTx(store.ctx, async (tx) => {
-    const rows = await tx.db.selectFrom('replica_notices').select(['op_id', 'body', 'created_at'])
-      .where('agent_id', '=', agentId).where('delivered_at', 'is', null).orderBy('op_id').execute();
-    if (rows.length > 0) {
-      await tx.db.updateTable('replica_notices').set({ delivered_at: tx.now().toISOString() })
-        .where('agent_id', '=', agentId).where('op_id', 'in', rows.map((r) => r.op_id)).execute();
-    }
-    return rows.map((r) => ({ opId: r.op_id, body: r.body, createdAt: r.created_at }));
-  });
 }

@@ -3,13 +3,13 @@ import * as core from '@agentteams/hub/core';
 import { newAgentKeyPair, newTeamKey } from '../../src/git/crypto.js';
 import { createHlc, formatHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp, mintOpId } from '../../src/git/ops.js';
-import { loadAgentKeys, rebuildView, takeNotices } from '../../src/git/replay.js';
+import { rebuildView } from '../../src/git/replay.js';
 import { decodeSegment, encodeSegment, type Op } from '../../src/git/segment.js';
 import type { TeamCreator } from '../../src/git/replay.js';
 
 const NO_DIR = { idOf: () => undefined };
 import {
-  Scenario, TEAM_ID, TEST_NOW, batches, buildLog, openReplica, prng, shuffle, type Built, type Replica, type ScenarioAgent,
+  Scenario, TEAM_ID, TEST_NOW, batches, buildLog, openReplica, prng, shuffle, type Built, type Replica, type ScenarioAgent, loadAgentKeys, takeNotices,
 } from './replayHelpers.js';
 
 const open: Replica[] = [];

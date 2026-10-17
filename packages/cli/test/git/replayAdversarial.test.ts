@@ -2,12 +2,12 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { newAgentKeyPair, newTeamKey } from '../../src/git/crypto.js';
 import { createHlc, formatHlc, parseHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp, mintOpId } from '../../src/git/ops.js';
-import { deferFutureOps, getPinnedKey, loadAgentKeys, pinAgentKey, rebuildView } from '../../src/git/replay.js';
+import { deferFutureOps, getPinnedKey, pinAgentKey, rebuildView } from '../../src/git/replay.js';
 import { decodeSegment, encodeSegment, type Op } from '../../src/git/segment.js';
 import type { TeamCreator } from '../../src/git/replay.js';
 
 const NO_DIR = { idOf: () => undefined };
-import { Scenario, TEAM_ID, TEST_NOW, buildLog, openReplica, type Built, type Replica } from './replayHelpers.js';
+import { Scenario, TEAM_ID, TEST_NOW, buildLog, loadAgentKeys, openReplica, type Built, type Replica } from './replayHelpers.js';
 
 const open: Replica[] = [];
 async function replica(source: () => unknown[], localAgentId?: string, creator?: TeamCreator): Promise<Replica> {

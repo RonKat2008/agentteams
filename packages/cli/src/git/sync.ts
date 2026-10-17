@@ -7,7 +7,7 @@
  *
  * Replicas never track commit chains: a log is its tip tree, read by path (ingest.ts), so re-created or rewritten
  * commits change nothing. Every per-agent phase is isolated: a failure becomes a refusal for that agent, never a
- * failed round. Refusals are logged and shown once in a hook as a security warning (ruling C4).
+ * failed round. Refusals are logged and shown once in a hook as a security warning.
  * The lock is owned by a token; ownership is checked before every write phase, and every local ref write is a
  * compare-and-swap (`update-ref <ref> <new> <old>`), so a round paused past its lease cannot corrupt the log.
  * A round is bounded (ingest.ts budget); leftover work sets `morePending`, which queues another round.
@@ -47,7 +47,7 @@ type Deps = Pick<CliDeps, 'exec'>;
 export const PRESENCE_INTERVAL_MS = 60_000;
 /** Ops per own segment (a segment that still exceeds the byte limit is split). */
 const OPS_PER_SEGMENT = 100;
-/** Extra rounds run for detached syncs that found the lock held, or for work left by a bounded round (ruling C7). */
+/** Extra rounds run for detached syncs that found the lock held, or for work left by a bounded round. */
 const MAX_EXTRA_ROUNDS = 3;
 
 export interface SyncSummary {
@@ -85,7 +85,7 @@ export interface SyncOptions {
   now?: () => number;
   /** Wait this long for a running round (interactive `sync`). Ignored with `coalesce`. */
   waitMs?: number;
-  /** Detached syncs: if a round is running, leave sync.pending for it and exit (ruling C7). */
+  /** Detached syncs: if a round is running, leave sync.pending for it and exit. */
   coalesce?: boolean;
   /** Tests only: called right after a phase's assertOwned(). */
   onPhase?: (phase: SyncPhase) => Promise<void>;
@@ -145,7 +145,7 @@ async function verifiedOwnTip(deps: Deps, repo: string, view: GitView, lock: Syn
 // ---- Team meta ---------------------------------------------------------------------------------------
 
 /**
- * Pins the creator from the invite (Task 8): the joiner trusts the invite, not the first meta it sees. A meta
+ * Pins the creator from the invite: the joiner trusts the invite, not the first meta it sees. A meta
  * whose creator differs from this pin is refused by every round.
  */
 export function pinTeamMetaFromInvite(store: ReplayStore, teamId: string, creator: TeamCreator): Promise<PinResult> {
@@ -184,7 +184,7 @@ async function creatorMeta(deps: Deps, repo: string, view: GitView): Promise<boo
  * Verifies our local meta (we are the creator) and the remote meta, pinning on first sight. A remote meta that is
  * not a valid meta of this team, or names another creator than the pin, is refused. If the pin names us (our
  * credential holds the creator's key), we restore it: from our local copy, or re-encoded from the pin after a
- * re-clone (review L4). The meta is write-once, so a restore is always correct.
+ * re-clone. The meta is write-once, so a restore is always correct.
  */
 async function checkMeta(deps: Deps, repo: string, view: GitView, summary: SyncSummary): Promise<MetaCheck> {
   const { teamId, teamKey, agentId, publicKey } = view.git;
@@ -345,7 +345,7 @@ async function pushAll(
   return { observed: local, remoteRoot: localRoot, vandalised: false, conflict: null };
 }
 
-/** Writes a presence newer than our last one: ts = max(now, last.ts), counter = last.counter + 1 (review R3). */
+/** Writes a presence newer than our last one: ts = max(now, last.ts), counter = last.counter + 1. */
 async function writePresence(deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, now: number, summary: SyncSummary): Promise<void> {
   const due = !status.lastPresenceAt || now - Date.parse(status.lastPresenceAt) >= PRESENCE_INTERVAL_MS;
   if (!due) return;
@@ -393,7 +393,7 @@ async function runRound(
 ): Promise<void> {
   const { teamId, remote, agentId } = view.git;
   const unapplied = (await view.files.readLogState()).unapplied === true;
-  // The creator named by our credential is pinned before anything is fetched (review L5).
+  // The creator named by our credential is pinned before anything is fetched.
   const creator = view.git.creator;
   if (creator && (await pinTeamMetaFromInvite(view.store, teamId, creator)) === 'mismatch') {
     summary.problems.push('this clone pinned a different team creator than this credential names; refusing that meta');
@@ -517,7 +517,7 @@ export async function syncRound(deps: Deps, repo: string, cred: Credential, opts
 /**
  * Writes this agent's seq-0 bootstrap segment (a createTeam or join op from captureBootstrapOp, alone) to its local
  * log, under the sync lock. A createTeam also writes and pins the signed team meta. The op is applied when the team
- * meta is pinned (always for createTeam; for a join once the meta is pinned, from the invite or a round). Task 8.
+ * meta is pinned (always for createTeam; for a join once the meta is pinned, from the invite or a round).
  */
 export async function writeBootstrap(deps: Deps, repo: string, cred: Credential, op: Op, opts: SyncOptions = {}): Promise<SyncSummary> {
   const now = opts.now ?? Date.now;

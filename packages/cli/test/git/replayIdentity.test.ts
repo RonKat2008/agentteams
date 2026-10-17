@@ -3,10 +3,10 @@ import { newAgentKeyPair } from '../../src/git/crypto.js';
 import { createHlc, parseHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp } from '../../src/git/ops.js';
 import {
-  getPinnedTeamMeta, loadAgentDirectory, pinAgentKey, pinTeamMeta, rebuildView, takeNotices,
+  getPinnedTeamMeta, loadAgentDirectory, pinAgentKey, pinTeamMeta, rebuildView,
 } from '../../src/git/replay.js';
 import type { Op } from '../../src/git/segment.js';
-import { TEAM_ID, TEST_NOW, buildLog, openReplica, type Built, type Replica } from './replayHelpers.js';
+import { TEAM_ID, TEST_NOW, buildLog, openReplica, takeNotices, type Built, type Replica } from './replayHelpers.js';
 
 const open: Replica[] = [];
 async function replica(source: () => unknown[], localAgentId?: string): Promise<Replica> {

@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { realExec, type Exec } from '../../src/deps.js';
 import {
   MAX_ROOT_TREE_BYTES, appendSegment, fetchTeam, fetchedTips, localTips, objectInfo, pushMeta, pushOwn, readFetchedMeta, readLocalMeta,
-  segPath, setPresence, writeMeta,
+  setPresence, writeMeta,
 } from '../../src/git/refs.js';
+import { segPath } from './syncHelpers.js';
 
 const deps = { exec: realExec };
 const TEAM = '01HZZZZZZZZZZZZZZZZZZZTEAM';
@@ -125,7 +126,6 @@ describe('git refs layer', () => {
     expect(await sh(a, 'ls-tree', '-r', '--name-only', localRef(A))).toBe(
       'ops/00000/00000000.bin\nops/00000/00000999.bin\nops/00001/00001000.bin\nops/00012/00012345.bin',
     );
-    expect(segPath(12_345)).toBe('ops/00012/00012345.bin');
   });
 
   it('keeps one commit per append and a single parent chain', async () => {

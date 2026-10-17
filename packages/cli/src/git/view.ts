@@ -10,7 +10,7 @@
  *   3. applies it with applyOps and, in the SAME transaction, records it in replica_pending: either the op is
  *      applied locally and queued for publishing, or neither (a rejection rolls both back and is thrown).
  *
- * The write path's applyOps does not take the sync lock (ruling C1): it runs in its own BEGIN IMMEDIATE
+ * The write path's applyOps does not take the sync lock: it runs in its own BEGIN IMMEDIATE
  * transaction, never nested, and its OpSource reads pending rows through that same transaction.
  */
 import type { Actor, ControlledTransaction, Database, Kysely } from '@agentteams/hub/core';

@@ -148,8 +148,6 @@ export const SEQ_PER_SHARD = 1000;
 const SHARD_PAD = 5;
 export const shardOf = (seq: number): string => String(Math.floor(seq / SEQ_PER_SHARD)).padStart(SHARD_PAD, '0');
 export const segFile = (seq: number): string => `${String(seq).padStart(SEQ_PAD, '0')}.bin`;
-/** Path of segment `seq` inside a log tree. */
-export const segPath = (seq: number): string => `${OPS_DIR}/${shardOf(seq)}/${segFile(seq)}`;
 export const SHARD_RE = /^\d{5}$/;
 export const SEG_FILE_RE = /^(\d{8})\.bin$/;
 
@@ -191,13 +189,6 @@ export async function addToLog(
   }
   if (presence) root = withEntry(root, blobEntry(PRESENCE_FILE, presence));
   return commitOn(deps, repo, ref, parent, root);
-}
-
-/** Writes blobs to the object store (one `hash-object` per blob). */
-export async function writeBlobs(deps: GitDeps, repo: string, data: Buffer[]): Promise<string[]> {
-  const out: string[] = [];
-  for (const d of data) out.push(await writeBlob(deps, repo, d));
-  return out;
 }
 
 /** Appends a segment to our local log (see addToLog for `expectedTip`). */

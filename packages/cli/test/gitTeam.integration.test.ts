@@ -16,7 +16,7 @@ import { loadCredentials, type Credential } from '../src/credentials.js';
 import { realExec, type CliDeps, type Exec } from '../src/deps.js';
 import { createGitMcpServer } from '../src/git/mcp.js';
 import { REPLICATED_TABLES } from '../src/git/replay.js';
-import { segPath } from '../src/git/refs.js';
+import { segPath } from './git/syncHelpers.js';
 import { openGitView } from '../src/git/view.js';
 import { runPreCommit } from '../src/gitHooks.js';
 import { runHook } from '../src/hooks.js';
