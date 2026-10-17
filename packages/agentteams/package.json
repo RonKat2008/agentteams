@@ -1,6 +1,6 @@
 {
   "name": "agentteams-cli",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Coordinate multiple AI coding agents working in the same repo.",
   "license": "MIT",
   "type": "module",

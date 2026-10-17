@@ -205,13 +205,33 @@ describe('guided menu', () => {
     expect(box).not.toContain('--hub');
   });
 
-  it('a team for this computer outside a git repo (and no gh) explains that it needs git init', async () => {
-    const { p, calls, run } = setup(['create', 'squad', 'claude', 'local', 'quit'], {
-      table: { 'git rev-parse --show-toplevel': { code: 128 } },
+  it('outside a git repo, a team for this computer gets a new project folder (git init) instead of an error', async () => {
+    const cwds: string[] = [];
+    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'folder', 'ada'], {
+      table: { 'git rev-parse --show-toplevel': { code: 128 }, 'git init -b main': {} },
+      commands: { create: async (deps, name) => { cwds.push(deps.cwd); return { teamName: name, inviteCode: 'abcd-efgh-jkmn-pqrs', inviteExpiresAt: '2026-11-01T00:00:00.000Z' }; } },
     });
     expect(await run()).toBe(0);
-    expect(calls.create).toEqual([]);
-    expect(p.log.some((l) => l.startsWith('error:') && l.includes('git init'))).toBe(true);
+    const where = p.asked.find((a) => a.message === 'Where should the team live?')!;
+    expect(where.choices!.map((c) => c.value)).toEqual(['folder', 'here']);
+    expect(where.initial).toBe('folder');
+    const dir = join(t.deps.cwd, 'squad');
+    expect(t.calls).toContainEqual({ cmd: 'git', args: ['init', '-b', 'main'], cwd: dir });
+    expect(cwds).toEqual([dir]);
+    expect(p.asked.some((a) => a.message === 'Which repo is this team for?')).toBe(false);
+    expect(p.log).toContain('info: Made ./squad a git repo. Start your agents there: cd squad');
+  });
+
+  it('never offers to git init the home folder', async () => {
+    const { p, run } = setup(['create', 'squad', 'claude', 'local', 'folder', 'ada'], {
+      table: { 'git rev-parse --show-toplevel': { code: 128 }, 'git init -b main': {} },
+    });
+    t.deps.cwd = t.deps.homedir;
+    expect(await run()).toBe(0);
+    const here = p.asked.find((a) => a.message === 'Where should the team live?')!.choices!.find((c) => c.value === 'here')!;
+    expect(here).toMatchObject({ disabled: true });
+    expect(here.hint).toMatch(/home folder/);
+    expect(t.calls).toContainEqual({ cmd: 'git', args: ['init', '-b', 'main'], cwd: join(t.deps.homedir, 'squad') });
   });
 
   it('joins the local team in this repo without asking about hubs or cloning', async () => {

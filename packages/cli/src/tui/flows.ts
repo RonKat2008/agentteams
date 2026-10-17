@@ -7,11 +7,13 @@ import { statusCommand } from '../commands/status.js';
 import type { UpOptions } from '../commands/up.js';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
+import { mkdir } from 'node:fs/promises';
+import { join, parse } from 'node:path';
 import { decodeInvite } from '../git/invite.js';
 import { findRemoteFor, pickRemote, remoteFetchUrl, remoteNames, repoNameOf, stripCredentials } from '../git/remoteUrl.js';
 import { INVITE_WARNING, inviteCodeOf } from '../git/setup.js';
 import { hubUrlFrom } from '../paths.js';
-import { detectGithubSlug, isGitRepo, repoRoot } from '../repo.js';
+import { detectGithubSlug, isGitRepo, real, repoRoot } from '../repo.js';
 import {
   agentChoices, createOptions, defaultTeamKind, isGitInviteCode, joinOptions, repoChoices, teamKindChoices,
   validateHubTarget, validateInviteCode, validateMemberName, validateTeamName, type RepoChoice, type TeamKind,
@@ -119,6 +121,27 @@ async function pickRepo(ctx: TuiContext, name: string, kind: TeamKind, isGit: bo
   return ctx.p.select('Which repo is this team for?', choices);
 }
 
+/**
+ * A team for this computer lives in a git repo. Outside one, offer a new project folder ./<name> (the default) or
+ * this folder, then `git init` it. Never the home folder or the filesystem root. Returns deps rooted there.
+ */
+async function projectFolder(ctx: TuiContext, name: string): Promise<CliDeps> {
+  const { deps, p } = ctx;
+  const cwd = await real(deps.cwd);
+  const unsafe = cwd === (await real(deps.homedir)) ? 'this is your home folder' : cwd === parse(cwd).root ? 'the filesystem root' : undefined;
+  const folder = join(deps.cwd, name);
+  const where = await p.select<'folder' | 'here'>('Where should the team live?', [
+    { value: 'folder', label: `A new project folder ./${name}`, hint: folder },
+    { value: 'here', label: 'This folder (runs git init here)', hint: unsafe ?? cwd, disabled: Boolean(unsafe) },
+  ], 'folder');
+  const dir = where === 'folder' ? folder : deps.cwd;
+  if (where === 'folder') await mkdir(dir, { recursive: true });
+  const init = await deps.exec('git', ['init', '-b', 'main'], { cwd: dir });
+  if (init.code !== 0) throw new Error(`git init failed in ${dir}: ${(init.stderr || init.stdout).trim()}`);
+  p.info(where === 'folder' ? `Made ./${name} a git repo. Start your agents there: cd ${name}` : 'Made this folder a git repo.');
+  return { ...deps, cwd: dir };
+}
+
 const pickVisibility = (p: Prompter) => p.select<'private' | 'public'>('New repo visibility', [
   { value: 'private', label: 'Private' }, { value: 'public', label: 'Public' }], 'private');
 
@@ -143,7 +166,8 @@ function createdBox(p: Prompter, res: CreateResult): void {
 }
 
 export async function createFlow(ctx: TuiContext): Promise<void> {
-  const { deps, p } = ctx;
+  const { p } = ctx;
+  let { deps } = ctx;
   const name = await p.text('Team name', { placeholder: 'my-team', validate: validateTeamName });
   const agent = (await pickAgent(ctx, 'Which agent do you want to link?'))!;
   const isGit = await isGitRepo(deps, deps.cwd);
@@ -153,8 +177,10 @@ export async function createFlow(ctx: TuiContext): Promise<void> {
   const remote = kind === 'git' && here.several.length > 0
     ? await p.select('Which git remote should the team be shared through?', here.several)
     : undefined;
+  const madeRepo = kind === 'local' && !isGit;
+  if (madeRepo) deps = await projectFolder(ctx, name);
   // A git team is for this repo (its remote), or for the GitHub repo created for it.
-  const repo: RepoChoice = kind === 'git' ? 'link' : kind === 'newRepo' ? 'new' : await pickRepo(ctx, name, kind, isGit);
+  const repo: RepoChoice = kind === 'git' ? 'link' : kind === 'newRepo' ? 'new' : madeRepo ? 'local' : await pickRepo(ctx, name, kind, isGit);
   const visibility = repo === 'new' ? await pickVisibility(p) : undefined;
   const { hub, as } = kind === 'hub' ? await pickHubServer(ctx) : { hub: undefined, as: await memberName(ctx) };
   // Without a hub the choice is explicit even when AGENTTEAMS_HUB is set in the environment.
