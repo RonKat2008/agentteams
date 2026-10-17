@@ -35,15 +35,22 @@ const BEGIN_SYNC = '\u001b[?2026h';
 const END_SYNC = '\u001b[0m\u001b[?2026l';
 const CLEAR = '\u001b[2J';
 
-/** Positions every line absolutely, inside a synchronized update, so a redraw never scrolls or flickers. */
-export function frameToScreen(frame: string, clear = false): string {
-  const lines = frame.split('\n').map((l, i) => `\u001b[${i + 1};1H${l}\u001b[0m`);
-  return `${BEGIN_SYNC}${clear ? CLEAR : ''}${lines.join('')}${END_SYNC}`;
+/**
+ * The escape sequences that turn the screen showing `prev` into `frame`: every line positioned absolutely and
+ * only lines that differ rewritten (all of them after a clear), inside a synchronized update, so a redraw never
+ * scrolls or flickers. Returns '' when nothing changed.
+ */
+export function frameToScreen(frame: string, prev: readonly string[] | null): string {
+  const lines = frame.split('\n');
+  const changed = lines.map((l, i) => (prev && prev[i] === l ? '' : `\u001b[${i + 1};1H${l}\u001b[0m`)).join('');
+  if (changed === '') return '';
+  return `${BEGIN_SYNC}${prev ? '' : CLEAR}${changed}${END_SYNC}`;
 }
 
 class WatchLoop {
   private state: WatchState;
-  private lastFrame = '';
+  /** Lines on screen now; null forces a clear and a full redraw. */
+  private shown: string[] | null = null;
   private failures = 0;
   private inFlight = false;
   private stopped = false;
@@ -82,9 +89,9 @@ class WatchLoop {
   private draw(clear = false): void {
     if (this.stopped) return;
     const frame = renderFrame(this.state, this.opts());
-    if (!clear && frame === this.lastFrame) return;
-    this.lastFrame = frame;
-    this.o.screen.write(frameToScreen(frame, clear));
+    const out = frameToScreen(frame, clear ? null : this.shown);
+    this.shown = frame.split('\n');
+    if (out) this.o.screen.write(out);
   }
 
   private async poll(): Promise<void> {

@@ -15,8 +15,17 @@ interface FakeScreen extends Screen {
   calls: string[];
   key: (data: string) => void;
   resize: (w: number, h: number) => void;
-  /** Visible text of the last full frame written. */
+  /** Visible text of the virtual screen the writes produced, rows joined by newlines. */
   last: () => string;
+}
+
+const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+
+/** Applies the loop's writes (absolute row positioning, clear) to an array of rows. */
+function applyWrite(rows: string[], s: string): void {
+  if (s.includes('\u001b[2J')) rows.length = 0;
+  const parts = s.split(/\u001b\[(\d+);1H/);
+  for (let i = 1; i < parts.length; i += 2) rows[Number(parts[i]) - 1] = parts[i + 1]!.replace(ANSI, '');
 }
 
 function fakeScreen(width = 80, height = 24): FakeScreen {
@@ -25,17 +34,18 @@ function fakeScreen(width = 80, height = 24): FakeScreen {
   let onResize: (() => void) | undefined;
   const writes: string[] = [];
   const calls: string[] = [];
+  const rows: string[] = [];
   return {
     writes, calls,
     size: () => size,
-    write: (s) => writes.push(s),
+    write: (s) => { writes.push(s); applyWrite(rows, s); },
     enter: () => calls.push('enter'),
     restore: () => calls.push('restore'),
     onKey: (cb) => { onKey = cb; return () => { onKey = undefined; }; },
     onResize: (cb) => { onResize = cb; return () => { onResize = undefined; }; },
     key: (d) => onKey?.(d),
     resize: (w, h) => { size = { width: w, height: h }; onResize?.(); },
-    last: () => (writes.filter((w) => w.includes('\u001b[1;1H')).at(-1) ?? '').replace(/\u001b\[[0-9;?]*[A-Za-z]/g, ''),
+    last: () => rows.join('\n'),
   };
 }
 
@@ -87,6 +97,20 @@ describe('runWatchLoop', () => {
     expect(frame).toContain('\u001b[30;1H'); // the frame now has 30 rows
     screen.resize(20, 5);
     expect(screen.last()).toContain('too small');
+    screen.key('q');
+    await done;
+  });
+
+  it('rewrites only the lines that changed', async () => {
+    const screen = fakeScreen();
+    const done = start(screen, async () => snap());
+    await vi.advanceTimersByTimeAsync(0);
+    const before = screen.writes.length;
+    screen.key('a');
+    const diff = screen.writes.slice(before).join('');
+    expect(diff).toContain('only active (1 of 1)');
+    expect(diff).not.toContain('\u001b[1;1H'); // the header did not change
+    expect(diff).not.toContain('\u001b[2J');
     screen.key('q');
     await done;
   });
