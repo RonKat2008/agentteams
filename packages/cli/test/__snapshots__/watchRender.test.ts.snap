@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderFrame > 80x24: header, agents, tasks, feed and footer, every line exactly 80 cells 1`] = `
+" shop-api · shared via /tmp/remote.… · synced 4s ago · ★ alice-claude  12:00:00 
+── Agents · 4 ──────────────────────────────────────────────────────────────────
+  AGENT         TOOL    STATE      TASK                  CLAIMS      LAST       
+● alice-claude  claude  active     —                     —            30s  ★ you
+● jamie-claude  claude  ⠋ working  #1 Rate-limit POST …  src/auth/…    1m       
+◐ kai-cursor    cursor  idle       #2 Show order total…  web/Check…    5s       
+○ sam-gemini    gemini  offline    —                     —             1m       
+── Tasks · open 1 · in progress 2 · done 1 · merged 1 ──────────────────────────
+▶ #1 Rate-limit POST /login                                         jamie-claude
+▶ #2 Show order total on checkout                                   kai-cursor  
+○ #3 Tests for the orders API                                       sam-gemini  
+── Activity · newest first ─────────────────────────────────────────────────────
+11:59:30 alice-claude command → sam-gemini: "Yes, in-memory.                    
+                      Real DB only in CI."                                      
+11:59:00 sam-gemini   question → alice-claude: "Should order tests use the      
+                      in-memory store? Or the real database we run in CI on     
+                      every push?"                                              
+11:58:30 jamie-claude started #1 "Rate-limit POST /login"                       
+11:58:00 alice-claude created #1 "Rate-limit POST /login" → jamie-claude        
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ q quit  ↑↓ scroll  r refresh  a only active  ? help             updated 1s ago "
+`;
+
+exports[`renderFrame > 120x40: side-by-side panels with whole message bodies wrapped in the feed 1`] = `
+" shop-api · shared via /tmp/remote.git · synced 4s ago · ★ alice-claude                                        12:00:00 
+── Agents · 4 ────────────────────────────────────────────────── │ ── Activity · newest first ──────────────────────────
+  AGENT         TOOL    STATE      TASK              LAST        │ 11:59:30 alice-claude command → sam-gemini: "Yes,    
+● alice-claude  claude  active     —                  30s  ★ you │                       in-memory.                     
+● jamie-claude  claude  ⠋ working  #1 Rate-limit P…    1m        │                       Real DB only in CI."           
+◐ kai-cursor    cursor  idle       #2 Show order t…    5s        │ 11:59:00 sam-gemini   question → alice-claude:       
+○ sam-gemini    gemini  offline    —                   1m        │                       "Should order tests use the    
+── Tasks · open 1 · in progress 2 · done 1 · merged 1 ────────── │                       in-memory store? Or the real   
+▶ #1 Rate-limit POST /login                         jamie-claude │                       database we run in CI on every 
+▶ #2 Show order total on checkout                   kai-cursor   │                       push?"                         
+○ #3 Tests for the orders API                       sam-gemini   │ 11:58:30 jamie-claude started #1 "Rate-limit POST    
+                                                                 │                       /login"                        
+                                                                 │ 11:58:00 alice-claude created #1 "Rate-limit POST    
+                                                                 │                       /login" → jamie-claude         
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+                                                                 │                                                      
+ q quit  ↑↓ scroll  r refresh  a only active  ? help                                                     updated 1s ago "
+`;
+
+exports[`renderFrame > falls back to a message on a tiny terminal 1`] = `
+" agentteams watch             
+ Terminal too small: 30x8     
+ Needs at least 50x12.        
+ Press q to quit.             
+                              
+                              
+                              
+                              "
+`;
