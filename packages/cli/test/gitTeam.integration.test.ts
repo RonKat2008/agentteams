@@ -16,6 +16,7 @@ import { loadCredentials, type Credential } from '../src/credentials.js';
 import { realExec, type CliDeps, type Exec } from '../src/deps.js';
 import { createGitMcpServer } from '../src/git/mcp.js';
 import { REPLICATED_TABLES } from '../src/git/replay.js';
+import { segPath } from '../src/git/refs.js';
 import { openGitView } from '../src/git/view.js';
 import { runPreCommit } from '../src/gitHooks.js';
 import { runHook } from '../src/hooks.js';
@@ -299,14 +300,15 @@ describe('three machines, one bare remote', () => {
     // A scratch clone with plain git: put a junk blob on top of jamie's ref and push it (a fast-forward).
     const evil = world.clone('scratch');
     git(evil, 'fetch', '-q', world.remote, `+${ref}:refs/x`);
-    const names = git(evil, 'ls-tree', '--name-only', 'refs/x:ops').split('\n').filter(Boolean);
-    const last = names.map((n) => /^(\d+)\.bin$/.exec(n)).filter((m): m is RegExpExecArray => m !== null).map((m) => m[1]!).sort().at(-1)!;
-    const next = String(Number(last) + 1).padStart(last.length, '0');
+    // Add a junk blob at jamie's next segment path (layout-agnostic: list every ops file, take the max seq).
+    const seqs = git(evil, 'ls-tree', '-r', '--name-only', 'refs/x', 'ops').split('\n')
+      .map((n) => /(\d+)\.bin$/.exec(n)).filter((m): m is RegExpExecArray => m !== null).map((m) => Number(m[1]));
     const junk = execBlob(evil, 'this is not a segment');
-    const entries = git(evil, 'ls-tree', 'refs/x').split('\n');
-    const opsTree = git(evil, 'ls-tree', 'refs/x:ops').split('\n').concat(`100644 blob ${junk}\t${next}.bin`);
-    const newOps = mkTree(evil, opsTree);
-    const root = mkTree(evil, entries.map((l) => (l.endsWith('\tops') ? `040000 tree ${newOps}\tops` : l)));
+    const index = join(evil, '.git', 'evil-index');
+    const env = { ...process.env, GIT_INDEX_FILE: index };
+    execFileSync('git', ['read-tree', 'refs/x'], { cwd: evil, env });
+    execFileSync('git', ['update-index', '--add', '--cacheinfo', `100644,${junk},${segPath(Math.max(...seqs) + 1)}`], { cwd: evil, env });
+    const root = execFileSync('git', ['write-tree'], { cwd: evil, env, encoding: 'utf8' }).trim();
     const evilCommit = git(evil, 'commit-tree', root, '-p', 'refs/x', '-m', 'junk');
     git(evil, 'push', '-q', world.remote, `${evilCommit}:${ref}`);
     expect(git(world.remote, 'rev-parse', ref)).toBe(evilCommit);
@@ -344,4 +346,3 @@ function gitIn(repo: string, input: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: repo, input, encoding: 'utf8' }).trim();
 }
 const execBlob = (repo: string, content: string): string => gitIn(repo, content, 'hash-object', '-w', '--stdin');
-const mkTree = (repo: string, lines: string[]): string => gitIn(repo, `${lines.join('\n')}\n`, 'mktree');
