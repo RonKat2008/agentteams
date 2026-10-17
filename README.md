@@ -120,6 +120,40 @@ The publishable package is `packages/agentteams` (single-file bundle, Node >=22)
 
 </details>
 
+## Watch the team
+
+```bash
+agentteams watch
+```
+
+A live, full-screen dashboard of the team: every agent with its presence (● active, ◐ idle, ○ offline), tool,
+current task, claimed files and how long ago it last did something, with a spinner on agents that are working on an
+in-progress task; the task board (open, in progress, done and merged counts, plus what is in progress or waiting and
+for whom); and the activity feed, newest first, with whole messages wrapped to fit. The header names the team, how it
+is shared (this computer, the git remote, or a hub), the orchestrator (★) and, for git teams, when it last synced.
+This repo's own agents are marked "you". Reading the team counts as presence, so while the dashboard is open the agent
+it reads as (the repo's first by tool name, or `--agent <tool>`) shows as active.
+
+<p align="center"><img src="assets/watch.gif" alt="agentteams watch: the agents, the task board and the activity feed updating live as the team works" width="100%"></p>
+
+**Tip:** run it in a split pane next to Claude Code, Codex or Cursor (a tmux split, an iTerm or VS Code split
+terminal) and keep it open while your agents work.
+
+| Key | Does |
+|---|---|
+| `q`, `Ctrl+C` | Quit (the terminal is always restored) |
+| `↑` `↓` (or `k` `j`), `PgUp` `PgDn`, `Home` `End` | Scroll the activity feed |
+| `r` | Refresh now |
+| `a` | Show only active agents / everyone |
+| `?` | Help |
+
+It refreshes every 2 seconds (`--interval <seconds>`, at least 1). Local and git teams are read from the local
+database (for git teams the usual background sync keeps it current); a hub team is polled over HTTP, and when the hub
+is unreachable the error shows in the header while it retries with backoff. Piped (`agentteams watch | cat`) or with
+`--once` it prints one snapshot and exits. When the repo is in several teams it shows the first and names the others:
+pick one with `--team <name>`. The guided menu (`agentteams`) has it too: "Watch the team live". Colors follow
+`NO_COLOR` / `FORCE_COLOR`.
+
 ## Supported agents
 
 Eleven integrations. **Live** means hooks inject teammate messages into the agent's context
@@ -380,7 +414,7 @@ fi
 
 | Command | Purpose |
 |---|---|
-| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
+| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity, the live dashboard. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
 | `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only. A repo with no commits gets an empty first commit (`chore: start agentteams team`) when your git identity is set, so task worktrees have a branch point |
 | `agentteams join <invite-code>` | Join a team and install the agent integration. `at1-` codes clone the repo (or use the current clone) |
 | `agentteams sync` | Exchange team state with the git remote now. Normally runs in the background from hooks and MCP; run it to make a recording or a debugging session deterministic |
@@ -389,6 +423,7 @@ fi
 | `agentteams install [--agent <tool>\|all]` | (Re)configure agents for this repo |
 | `agentteams status` | Show the team, its agents and when it last synced |
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
+| `agentteams watch [--interval <s>] [--team <name>] [--once]` | Live full-screen dashboard of agents, tasks and activity (see [Watch the team](#watch-the-team)); prints one snapshot when piped or with `--once` |
 | `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
 | `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
 | `agentteams run <task> [--agent <tool>] [--model <m>] [--detach]` | Start the assignee's tool (Codex, Cursor, Claude Code, Gemini) non-interactively on the task in its worktree; `--all` starts every assigned task, `--watch` keeps doing so for new assignments |
@@ -422,7 +457,7 @@ fi
 - `merge`: `--into <branch>`, `--test <cmd>` / `--no-test`, `--no-notify`, `--stop-on-conflict`, `--dry-run`, `--push`.
   With several agents in the repo it acts as the one that is the orchestrator; `--agent <tool>` picks one explicitly.
 - `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
-- `status`, `log`, `invite show`, `pr`, `access grant` only read team state, so they need no `--agent`: every agent in a repo sees
+- `status`, `log`, `watch`, `invite show`, `pr`, `access grant` only read team state, so they need no `--agent`: every agent in a repo sees
   the same team. `status` lists the whole team and marks all of this repo's agents "you" (if the repo's agents are on
   different teams it shows each team); `log` shows the team (with several teams it shows the first and says how to pick
   another). `--agent <tool>` still selects a specific credential.
