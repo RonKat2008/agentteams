@@ -87,11 +87,18 @@ replayed op that fails validation is recorded as rejected and skipped, never fat
 **Refs.** Each agent writes only its own ref, so pushes never conflict:
 - `refs/agentteams/<teamId>/meta` — written once by the creator: team id, name, created-at, creator's public key,
   default branch.
-- `refs/agentteams/<teamId>/agents/<agentId>` — that agent's log: a commit chain, each commit adding one segment file
-  `ops/<seq>.bin` (a batch of ops), plus `presence.bin` (overwritten).
+- `refs/agentteams/<teamId>/agents/<agentId>` — that agent's log. Readers use only the **tip's tree**:
+  - `ops/<shard>/<seq>.bin` holds segment `seq` (a batch of ops). `shard` is `floor(seq / 1000)` as 5 digits and
+    `seq` is 8 digits, e.g. `ops/00001/00001234.bin`. Sharding keeps every tree small: an append rewrites one shard
+    tree of at most 1000 entries, never a tree listing every segment.
+  - `presence.bin` is overwritten.
+  - Commits exist only to carry trees. The writer makes one commit per change; history depth, parents and commit ids
+    are never read, so the writer may squash freely.
 
 A machine fetches `+refs/agentteams/<teamId>/*:refs/agentteams-remote/<teamId>/*` and pushes
-`<local log commit>:refs/agentteams/<teamId>/agents/<agentId>` (always a fast-forward).
+`<local log commit>:refs/agentteams/<teamId>/agents/<agentId>` with `--force-with-lease` on the remote tip it last
+observed. One leased push covers a normal push, a restore after vandalism and a re-clone whose rebuilt log has
+different commits.
 
 **Encryption and signatures.**
 - **Team key:** 32 random bytes created at `create`, carried only in the invite code. Every segment and presence file
@@ -111,16 +118,64 @@ user's normal git credentials, so private repos need the lead to grant access (`
 the host's UI).
 
 **Sync engine.**
-- `agentteams sync` runs one round: fetch team refs → verify + decrypt new segments → apply/rebuild → push own
-  unpushed ops and presence. A lock file (`.git/agentteams/sync.lock`) keeps one round at a time.
-- Hooks and MCP never block on the network. After any state-changing op they spawn `agentteams sync` detached
+- `agentteams sync` runs one round under a lock file (`.git/agentteams/sync.lock`, owned by a token, with a
+  heartbeat; every local ref write is a compare-and-swap):
+  1. fetch the team refs;
+  2. check our own remote log;
+  3. verify and pin the team meta;
+  4. ingest the agents' logs by path;
+  5. apply or rebuild the view;
+  6. publish our pending ops and presence;
+  7. push our log.
+- **Path-based ingestion.** For each agent, a replica reads `ops/<shard>/<seq>.bin` from the fetched tip's tree for
+  seq = lastAcceptedSeq + 1, + 2, ... until a path is missing or the round's budget runs out.
+  - Each blob is size-checked (at most 1 MiB) before it is read, then decrypted and verified. The signature binds
+    team, agent and seq. The key comes from the agent's pin, or for seq 0 from its bootstrap op, which then pins it.
+  - Per agent the replica keeps `nextSeq`, the git blob id (content hash) of every accepted seq, and the last
+    accepted presence.
+  - A blob that fails verification stops that agent at that seq for that tip, with one security warning. Any later
+    tip is read again, so a valid blob at the same path is accepted.
+  - When an agent's tip changes, its last accepted seq is looked up again. Different content there is logged and
+    ignored: as equivocation if the agent signed it, as vandalism otherwise. The accepted copy stays.
+  - A seq gap is just a missing path: the replica waits.
+- **Tree guards.** Before any path lookup, `cat-file --batch-check` sizes are checked:
+  - the tip commit: at most 64 KiB;
+  - the root tree: at most 4 KiB (it holds only `ops` and `presence.bin`);
+  - the `ops` tree: at most 4 MiB (about 130,000 shards);
+  - each shard tree: at most 64 KiB.
+
+  An oversized log is skipped with a warning until its tip changes.
+- **Budget.** A round reads at most 64 new segments and visits at most 64 changed agents, across all remote agents.
+  Each visit reads at most one presence. Agents are served round-robin in passes of 8 segments, from an offset that
+  rotates every round. Leftover work sets "more pending": the round leaves `sync.pending`, so the coalescing loop
+  (up to 3 more rounds per call) or the next detached sync continues it. Logs written in this clone (other agents
+  sharing it) are not budgeted. A fully processed tip is cached, so unchanged agents cost nothing.
+- **Own log.** Every round compares our remote tip's tree with our local one, by path and content. Shards with the
+  same tree id are skipped.
+  - Our own segments on the remote that we lack are adopted at any depth. They must be contiguous after our last one
+    and verify under our own key. This covers a fresh clone with the same credential, which rebuilds its local log
+    from them and continues.
+  - A newer presence of ours is adopted too.
+  - Anything else that differs is vandalism: junk, extra files, or missing or replaced segments that do not verify.
+    Our verified local log is pushed back over it with a leased push.
+  - A different segment signed with our key means the credential is in use in another clone. It is never pushed over:
+    the round fails until a person resolves it.
+  - We push only a local log that verifies: every seq 0..n present, each verified under our key.
+- **Hooks and MCP** never block on the network. After any state-changing op they spawn `agentteams sync` detached
   (push now). On read paths they spawn a detached sync if the last fetch is older than **10 s**. They always read the
   local view, so new messages show up on the next hook event after the background fetch lands.
-- Presence: each agent overwrites its `presence.bin` at most every **60 s** while active. Replicas set `last_seen_at`
-  from it. `status` thresholds (active < 60 s, idle < 10 min) gain the replication delay; acceptable.
-- Offline: ops queue in the local log and push on the next successful round; `status`/`log` show "last synced Xs ago".
-- Failures (no network, auth error, rejected push) are logged to `.git/agentteams/sync.log` and surfaced once in the
-  next hook output as a short warning; they never break the agent's turn.
+- **Presence.** Each agent overwrites its `presence.bin` at most every **60 s** while active.
+  - The blob is signed `{ts, counter}` under its own domain prefix.
+  - Replicas accept it only if (ts, counter) is newer than the last presence they accepted for that agent, so a
+    replayed blob is refused.
+  - The writer uses ts = max(now, last.ts) and counter = last.counter + 1, taken from its own log, so a clock moving
+    backwards never wedges it.
+  - Replicas set `last_seen_at` from it, never in the future. `status` thresholds (active < 60 s, idle < 10 min) gain
+    the replication delay; acceptable.
+- **Offline:** ops queue in `team.db` (`replica_pending`) and in the local log, and push on the next successful round.
+  `status` and `log` show "last synced Xs ago".
+- **Failures** (no network, auth error, rejected push) and security refusals are logged to `.git/agentteams/sync.log`
+  and surfaced once in the next hook output as a short warning. They never break the agent's turn.
 
 ### Defaults and selection
 
@@ -139,6 +194,26 @@ the host's UI).
 - Signed ops prevent impersonation; orchestrator-only rules are enforced on replay on every replica.
 - Hub-supplied strings remain untrusted in hook output (existing `oneLine` / peer-message labelling unchanged).
 - No secrets in refs other than ciphertext; ref names contain only random ids.
+- **Push access is not trust.** Anyone with push access can rewrite any ref. Replicas accept only content that
+  verifies by path, so forged or re-created commits change nothing. The owner restores its own ref, and the creator
+  restores the meta: from its local copy, or after a re-clone by re-encoding the pinned meta with its key.
+
+**Residual risks** (accepted, documented):
+- **TOFU for creator pins.** Invites carry the creator's agent id and key, and a joiner pins them before its first
+  fetch. Only a joiner without the creator in its invite (an old or hand-made invite) trusts the first meta it sees.
+  Each agent's own key is still trust-on-first-use from its seq-0 bootstrap.
+- **A large push slows fetches.** `git fetch` downloads everything under the team refs, with a 20 s timeout. One
+  member pushing a huge object onto any ref makes every member's fetch slow or time out until the owner or creator
+  overwrites it. The tree guards and the round budget bound what is read after the fetch, not what is downloaded.
+- **Members are attributable but can backdate.** Every op is signed, so it is attributable to its author. Its HLC
+  timestamp is chosen by that author, though, so a member can backdate ops to win races such as task claims. (Ops
+  dated too far in the future are held back.) Late or backdated arrivals are logged when they force a rebuild.
+- **OS-user trust between agents in one clone.** Agents sharing a clone share `.git/agentteams`, the local refs and
+  `team.db`. Anyone running as that OS user can edit them, and local logs are read without the round budget. The
+  boundary against teammates is the git remote, not the local machine.
+- **One credential, one clone at a time.** Running the same agent credential in two clones at once makes them sign
+  different segments for the same seq. Replicas keep the first copy and log equivocation; the agent stops pushing
+  until a person resolves it.
 
 ## Testing
 

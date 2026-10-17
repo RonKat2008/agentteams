@@ -105,5 +105,23 @@ export async function forgeOnRemote(world: World, agentId: string, seq: number, 
 export const remoteHead = (world: World, agentId: string): string =>
   git(world.remote, 'rev-parse', `refs/agentteams/${TEAM}/agents/${agentId}`);
 
+/** Segment paths of an agent's local log, e.g. ['00000/00000000.bin', ...]. */
 export const ownSeqs = (repo: string, agentId: string): string[] =>
-  git(repo, 'ls-tree', '--name-only', `refs/agentteams-local/${TEAM}/agents/${agentId}:ops`).split('\n').filter(Boolean);
+  git(repo, 'ls-tree', '-r', '--name-only', `refs/agentteams-local/${TEAM}/agents/${agentId}:ops`).split('\n').filter(Boolean);
+
+/** A segment signed by `a` (as if written by its own CLI): one broadcast message. */
+export async function signedSegment(world: World, a: Agent, seq: number, body: string): Promise<Buffer> {
+  const { captureOp } = await import('../../src/git/ops.js');
+  const { encodeSegment } = await import('../../src/git/segment.js');
+  const op = captureOp(createHlc(), a.id, 'sendMessage', { to: 'all', kind: 'fyi', body }, { idOf: () => undefined });
+  return encodeSegment({ teamId: TEAM, agent: a.id, seq, ops: [op] }, world.teamKey, a.cred.git!.privateKey);
+}
+
+/** Segments from..to (message `m<seq>` each) appended to `a`'s local log in one commit. */
+export async function appendMany(world: World, a: Agent, from: number, to: number): Promise<void> {
+  const { addToLog, writeBlobs } = await import('../../src/git/refs.js');
+  const seqs = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  const blobs = await writeBlobs(deps, a.repo, await Promise.all(seqs.map((q) => signedSegment(world, a, q, `m${q}`))));
+  const ref = `refs/agentteams-local/${TEAM}/agents/${a.id}`;
+  await addToLog(deps, a.repo, ref, seqs.map((seq, i) => ({ seq, blob: blobs[i]! })), null, git(a.repo, 'rev-parse', ref));
+}

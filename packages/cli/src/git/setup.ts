@@ -193,6 +193,9 @@ export interface GitJoinInput {
   member: string;
 }
 
+/** Ingest-only calls a join makes at most (each runs up to 4 bounded rounds). */
+const JOIN_INGEST_MAX_CALLS = 50;
+
 const MISMATCH = (url: string) =>
   `the team data shared through ${url} does not match this invite code (its creator differs); refusing to join. ` +
   'Ask the team creator for a fresh invite (agentteams invite show) and check the repo has not been tampered with';
@@ -208,7 +211,11 @@ async function fetchAndVerify(deps: Deps, input: GitJoinInput, probe: Credential
   if (!meta) throw new Error(`the team on ${url} does not match this invite code (wrong key, or the team data was altered)`);
   if (meta.agentId !== creator.agentId || meta.publicKey !== creator.publicKey) throw new Error(MISMATCH(url));
   // Ingest only: no agent of ours exists yet, so nothing is published, pushed or written as the probe identity.
-  const round = await syncRound(deps, repoPath, probe, { waitMs: LOCK_WAIT_MS, ingestOnly: true });
+  let round = await syncRound(deps, repoPath, probe, { waitMs: LOCK_WAIT_MS, ingestOnly: true });
+  // Rounds are bounded: read the whole history (every join, for the free-name check) before joining.
+  for (let i = 0; i < JOIN_INGEST_MAX_CALLS && round.fetched && round.morePending; i++) {
+    round = await syncRound(deps, repoPath, probe, { waitMs: LOCK_WAIT_MS, ingestOnly: true });
+  }
   if (!round.fetched) throw new Error(`could not sync with ${url}: ${firstError(round)}`);
   const view = await openGitView(deps, probe);
   const team = await view.store.ctx.db.selectFrom('teams').select('name').where('id', '=', teamId).executeTakeFirst();

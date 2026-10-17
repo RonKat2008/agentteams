@@ -6,7 +6,7 @@ import { GitTeamClient } from '../../src/git/client.js';
 import { newAgentKeyPair } from '../../src/git/crypto.js';
 import { createHlc } from '../../src/git/hlc.js';
 import { captureOp } from '../../src/git/ops.js';
-import { appendSegment, pushOwn } from '../../src/git/refs.js';
+import { appendSegment } from '../../src/git/refs.js';
 import { listPending } from '../../src/git/replicaStore.js';
 import { getPinnedKey, loadAgentDirectory, pinAgentKey, rebuildView } from '../../src/git/replay.js';
 import { MAX_SEGMENT_BYTES, encodeSegment } from '../../src/git/segment.js';
@@ -15,7 +15,7 @@ import { acquireLock, readStatus, takeSyncWarnings } from '../../src/git/syncSta
 import { replayTarget, teamCreatorOf } from '../../src/git/view.js';
 import { HubError } from '../../src/hubClient.js';
 import {
-  TEAM, bootstrap, deps, dump, forgeOnRemote, git, makeWorld, ownSeqs, remoteHead, view, type Agent, type World,
+  TEAM, appendMany, bootstrap, deps, dump, forgeOnRemote, git, makeWorld, ownSeqs, remoteHead, view, type Agent, type World,
 } from './syncHelpers.js';
 
 let world: World;
@@ -27,6 +27,7 @@ const client = (a: Agent, trigger: () => void = noSync) => new GitTeamClient(dep
 const sync = (a: Agent, opts = {}) => syncRound(deps, a.repo, a.cred, opts);
 const bodies = async (a: Agent) => (await client(a).ping(false)).messages.map((m) => m.body);
 const pending = async (a: Agent) => listPending((await view(a)).store.ctx.db, a.id);
+const stateOf = async (who: Agent, agent: string) => (await (await view(who)).files.readLogState()).agents[agent];
 
 /** Lead creates the team in clone a; worker joins from clone b. Both synced. */
 async function twoAgents(): Promise<{ lead: Agent; worker: Agent }> {
@@ -178,21 +179,28 @@ describe('sync round', () => {
     expect(await takeSyncWarnings(deps, lead.repo)).toHaveLength(1);
   });
 
-  it('refuses a non-fast-forward rewrite of another agent ref, keeps the chain and warns once', async () => {
+  it('a rewritten ref (empty tree) changes nothing accepted: the rollback is warned once and the agent keeps flowing', async () => {
     const { lead, worker } = await twoAgents();
     await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'original' });
     await sync(lead);
     await sync(worker);
+    const before = await stateOf(worker, lead.id);
     const evil = world.clone('evil');
     const commit = git(evil, 'commit-tree', git(evil, 'mktree'), '-m', 'rewrite');
     git(evil, 'push', '-q', '--force', world.remote, `${commit}:refs/agentteams/${TEAM}/agents/${lead.id}`);
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(/non-fast-forward rewrite/);
+    expect(s.problems.join('\n')).toMatch(new RegExp(`agent ${lead.id}: its log no longer has seq ${before!.nextSeq - 1} \\(rolled back`));
     expect(await bodies(worker)).toContain('original');
-    expect((await (await view(worker)).files.readLogState()).agents[lead.id]!.head).not.toBe(commit);
+    expect((await stateOf(worker, lead.id))!.nextSeq).toBe(before!.nextSeq);
     const w = await takeSyncWarnings(deps, worker.repo);
-    expect(w.join('\n')).toMatch(/agentteams: security: refused team data: .*non-fast-forward/);
+    expect(w.join('\n')).toMatch(/agentteams: security: refused team data: .*no longer has seq/);
     expect(await takeSyncWarnings(deps, worker.repo)).toEqual([]);
+    // The lead puts its log back (a leased push over the rewrite) and keeps writing; the worker reads on by path.
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'after the rewrite' });
+    expect((await sync(lead)).pushed).toBe(true);
+    const s2 = await sync(worker);
+    expect(s2.problems).toEqual([]);
+    expect(await bodies(worker)).toContain('after the rewrite');
   });
 
   it('probe 1: a forged commit on our own remote ref is not adopted; our log is restored and keeps flowing', async () => {
@@ -213,15 +221,13 @@ describe('sync round', () => {
     expect(await bodies(worker)).toContain('after vandalism');
   });
 
-  it('probe 2: a forged fast-forward on another agent ref is refused, and the later restore is accepted', async () => {
+  it('probe 2: a forged segment on another agent ref is refused, and the later restore is accepted', async () => {
     const { lead, worker } = await twoAgents();
-    const acceptedHead = (await (await view(worker)).files.readLogState()).agents[lead.id]!.head;
-    const forged = await forgeOnRemote(world, lead.id, ownSeqs(lead.repo, lead.id).length, Buffer.from('junk'));
+    const accepted = await stateOf(worker, lead.id);
+    await forgeOnRemote(world, lead.id, ownSeqs(lead.repo, lead.id).length, Buffer.from('junk'));
     const s = await sync(worker);
     expect(s.problems.join('\n')).toMatch(/does not verify \(decrypt\); refused/);
-    const state = (await (await view(worker)).files.readLogState()).agents[lead.id]!;
-    expect(state.head).not.toBe(forged);
-    expect(state.head).toBe(acceptedHead);
+    expect((await stateOf(worker, lead.id))!.nextSeq).toBe(accepted!.nextSeq);
     // The lead restores its chain (ruling C5) and keeps writing: the worker accepts it as a fast-forward.
     await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'restored' });
     expect((await sync(lead)).restored).toBe(true);
@@ -230,23 +236,23 @@ describe('sync round', () => {
     expect(await bodies(worker)).toContain('restored');
   });
 
-  it('a seq gap halts ingestion for that agent; a restored contiguous chain is accepted', async () => {
+  it('a seq gap is just a missing path: the replica waits without refusing, then takes both once the gap is filled', async () => {
     const { lead, worker } = await twoAgents();
-    const good = git(lead.repo, 'rev-parse', `refs/agentteams-local/${TEAM}/agents/${lead.id}`);
     const n = ownSeqs(lead.repo, lead.id).length;
+    const ref = `refs/agentteams-local/${TEAM}/agents/${lead.id}`;
+    const publish = () => git(lead.repo, 'push', '-q', '--force', world.remote, `${ref}:refs/agentteams/${TEAM}/agents/${lead.id}`);
     await appendSegment(deps, lead.repo, TEAM, lead.id, n + 1, segmentOf(lead, n + 1, 'two'));
-    expect((await pushOwn(deps, lead.repo, world.remote, TEAM, lead.id)).ok).toBe(true);
+    publish();
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(new RegExp(`adds seq ${n + 1} where seq ${n} was expected`));
+    expect(s.problems).toEqual([]);
     expect(await bodies(worker)).not.toContain('two');
-    // The real chain, contiguous, from the last good commit (as a restore would publish it).
-    git(lead.repo, 'update-ref', `refs/agentteams-local/${TEAM}/agents/${lead.id}`, good);
+    expect((await stateOf(worker, lead.id))!.nextSeq).toBe(n);
     await appendSegment(deps, lead.repo, TEAM, lead.id, n, segmentOf(lead, n, 'one'));
-    await appendSegment(deps, lead.repo, TEAM, lead.id, n + 1, segmentOf(lead, n + 1, 'two'));
-    git(lead.repo, 'push', '-q', '--force', world.remote, `refs/agentteams-local/${TEAM}/agents/${lead.id}:refs/agentteams/${TEAM}/agents/${lead.id}`);
+    publish();
     const s2 = await sync(worker);
     expect(s2.problems).toEqual([]);
     expect(await bodies(worker)).toEqual(expect.arrayContaining(['one', 'two']));
+    expect((await stateOf(worker, lead.id))!.nextSeq).toBe(n + 2);
   });
 
   it('refuses an oversized blob without reading it', async () => {
@@ -255,10 +261,15 @@ describe('sync round', () => {
     await forgeOnRemote(world, lead.id, n, Buffer.alloc(MAX_SEGMENT_BYTES + 1, 7));
     const s = await sync(worker);
     expect(s.problems.join('\n')).toMatch(new RegExp(`seq ${n} is \\d+ bytes, over the segment limit`));
-    expect((await (await view(worker)).files.readLogState()).agents[lead.id]!.nextSeq).toBe(n);
+    expect((await stateOf(worker, lead.id))!.nextSeq).toBe(n);
+    // A valid segment at the same path later is accepted.
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'valid at the same seq' });
+    expect((await sync(lead)).restored).toBe(true);
+    expect((await sync(worker)).problems).toEqual([]);
+    expect(await bodies(worker)).toContain('valid at the same seq');
   });
 
-  it('a huge or garbage ref never stops our own publish and push; backlogs drain 32 segments per round', async () => {
+  it('extra files in a log tree are ignored; a backlog drains within the round budget, the rest in queued rounds', async () => {
     const { lead, worker } = await twoAgents();
     // Garbage: a commit that adds a non-segment file on the lead's ref.
     const evil = world.clone('evil');
@@ -269,19 +280,19 @@ describe('sync round', () => {
     git(evil, 'push', '-q', world.remote, `${c}:refs/agentteams/${TEAM}/agents/${lead.id}`);
     await client(worker).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'still flowing' });
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(/adds not-a-segment; refused/);
+    expect(s.problems).toEqual([]);
     expect(s.pushed).toBe(true);
     expect(s.published).toBe(1);
 
-    // An honest backlog of 40 segments from a third agent reaches the worker over two rounds.
+    // An honest backlog of 100 segments from a third agent: 64 in the first round, the rest in the queued round.
     const third = await bootstrap(world, world.clone('c'), 'join', 'cat');
-    for (let i = 1; i <= 40; i++) await appendSegment(deps, third.repo, TEAM, third.id, i, segmentOf(third, i, `m${i}`));
+    await appendMany(world, third, 1, 100);
     expect((await sync(third)).ok).toBe(true);
     const r1 = await sync(worker);
-    expect((await (await view(worker)).files.readLogState()).agents[third.id]!.nextSeq).toBe(32);
-    expect(r1.problems.filter((p) => p.includes(third.id))).toEqual([]);
-    await sync(worker);
-    expect((await (await view(worker)).files.readLogState()).agents[third.id]!.nextSeq).toBe(41);
+    expect(r1.problems).toEqual([]);
+    expect(r1.rounds).toBe(2);
+    expect(r1.morePending).toBe(false);
+    expect((await stateOf(worker, third.id))!.nextSeq).toBe(101);
   });
 
   it('refuses a seq-0 segment whose key differs from the pinned key', async () => {
@@ -292,7 +303,7 @@ describe('sync round', () => {
     const other = newAgentKeyPair().publicKey;
     expect(await pinAgentKey(v.store, lead.id, other)).toBe('pinned');
     const s = await sync(worker);
-    expect(s.problems.join('\n')).toMatch(new RegExp(`agent ${lead.id}: commit [0-9a-f]+: seq 0 bootstrap key differs from the pinned key`));
+    expect(s.problems).toEqual([`agent ${lead.id}: seq 0 bootstrap key differs from the pinned key; refused`]);
     expect(await getPinnedKey(v.store, lead.id)).toBe(other);
   });
 
