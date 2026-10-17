@@ -4,6 +4,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolKind } from '@agentteams/shared';
 import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
+import type { GitClientOptions } from './git/client.js';
 
 const errorResult = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
 
@@ -177,18 +178,45 @@ async function localServer(deps: CliDeps, cred: Credential): Promise<StdioServer
   }
 }
 
-/** For a git credential: the team's tools in-process over the local view; writes become ops and sync in the background. */
-async function gitServer(deps: CliDeps, cred: Credential): Promise<StdioServer> {
+/** An MCP client for `server`, linked in-process. */
+async function connectInProcess(server: import('@modelcontextprotocol/sdk/server/index.js').Server): Promise<Client> {
+  const [{ Client }, { InMemoryTransport }] = await Promise.all([
+    import('@modelcontextprotocol/sdk/client/index.js'),
+    import('@modelcontextprotocol/sdk/inMemory.js'),
+  ]);
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: 'agentteams-git', version: '0.1.0' });
+  await client.connect(clientSide);
+  return client;
+}
+
+/**
+ * For a git credential: the team's tools in-process over the local view; writes become ops and sync in the
+ * background. When the team cannot be opened yet (typically: this agent is not in the local view before a sync
+ * filled it), the server stays up, starts a background sync, and retries opening the team on every call.
+ */
+export async function gitServer(deps: CliDeps, cred: Credential, opts: GitClientOptions = {}): Promise<StdioServer> {
   try {
-    return await (await import('./git/mcp.js')).createGitMcpServer(deps, cred);
+    return await (await import('./git/mcp.js')).createGitMcpServer(deps, cred, opts);
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
     deps.err(`agentteams: cannot open the git team for ${cred.repoPath}: ${why}`);
+    const { shouldSyncForRead, spawnDetachedSync } = await import('./git/syncState.js');
+    const trigger = opts.trigger ?? (() => spawnDetachedSync(cred.repoPath, cred.tool));
+    trigger();
     return createProxyServer({
-      connect: () => Promise.reject(new Error(why)),
+      connect: async () => {
+        try {
+          return await connectInProcess(await (await import('./git/mcp.js')).createGitMcpServer(deps, cred, opts));
+        } catch (err) {
+          if (await shouldSyncForRead(deps, cred.repoPath).catch(() => false)) trigger();
+          throw err;
+        }
+      },
       messages: {
         authRejected: "this agent's git team credential was rejected (re-run agentteams join)",
-        unavailable: `the team for ${cred.repoPath} is unavailable: ${why}`,
+        unavailable: `the team for ${cred.repoPath} is unavailable (a background sync was started; retry shortly): ${why}`,
       },
     });
   }
