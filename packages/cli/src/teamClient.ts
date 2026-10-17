@@ -21,6 +21,8 @@ export interface TeamClient {
   completeTask(n: number, summary: string, branch: string): Promise<TaskView>;
   markMerged(n: number, pr?: string): Promise<TaskView>;
   getTask(n: number): Promise<TaskView>;
+  /** The whole task board, by number. */
+  listTasks(): Promise<TaskView[]>;
   recordCommit(input: CommitInput): Promise<{ notified: string[]; duplicate: boolean }>;
 }
 
