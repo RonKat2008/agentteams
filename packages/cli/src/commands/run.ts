@@ -88,7 +88,22 @@ async function launchSupervisor(deps: CliDeps, l: Launch): Promise<number> {
   if (res.pid) await writeFile(`${base}.pid`, `${res.pid}\n`);
   deps.out(`Started ${binaryFor(cred.tool)} as ${cred.agentName} on task #${task.number} in the background (pid ${res.pid ?? 'unknown'}) in ${l.wt.path}`);
   deps.out(`Follow it with: tail -f ${log}`);
+  if (res.pid) deps.out(`Stop it with: kill ${res.pid}`);
   return 0;
+}
+
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+
+/**
+ * While the tool runs, Ctrl-C or `kill <pid>` (of a foreground run or a background supervisor) must not just end this
+ * process: that would orphan the tool, still working unattended, and leave its pid file. The signal aborts `signal`
+ * instead, and the runner passes it on to the tool.
+ */
+function stopSignals(): { signal: AbortSignal; dispose: () => void } {
+  const ac = new AbortController();
+  const handlers = STOP_SIGNALS.map((sig) => [sig, () => { if (!ac.signal.aborted) ac.abort(sig); }] as const);
+  for (const [sig, h] of handlers) process.on(sig, h);
+  return { signal: ac.signal, dispose: () => { for (const [sig, h] of handlers) process.off(sig, h); } };
 }
 
 /** Runs the tool here and waits for it (a foreground run, or the supervisor), then commits and reports. */
@@ -105,15 +120,22 @@ async function launchHere(deps: CliDeps, l: Launch, echo: boolean): Promise<numb
   deps.out(`Starting ${bin} as ${cred.agentName} on task #${task.number} in ${wt.path}`);
   deps.out(`Log: ${log}`);
   await writeFile(`${base}.pid`, `${process.pid}\n`);
+  const stop = stopSignals();
   try {
-    const res = await runnerOf(deps).start(bin, args, { cwd: wt.path, logPath: log, detach: false, echo });
+    const res = await runnerOf(deps).start(bin, args, { cwd: wt.path, logPath: log, detach: false, echo, signal: stop.signal });
     if (res.error) throw new Error(`could not start ${bin}: ${res.error}`);
+    if (stop.signal.aborted) {
+      deps.err(`agentteams: stopped ${bin} (${String(stop.signal.reason)}); nothing was committed and ${wt.path} is left as it is`);
+      deps.out(`To start it again: agentteams run ${task.number} --agent ${cred.tool}`);
+      return res.code ?? 1;
+    }
     const code = res.code ?? 1;
     if (code !== 0) deps.err(`agentteams: ${bin} exited with code ${code}; log: ${log}`);
     else deps.out(`${bin} finished; log: ${log}`);
     await afterRun(deps, { cred, tool: cred.tool, client: clientFor(deps, cred), task, path: wt.path, branch: wt.branch, root: wt.root, log });
     return code;
   } finally {
+    stop.dispose();
     if ((await pidIn(`${base}.pid`)) === process.pid) await rm(`${base}.pid`, { force: true });
   }
 }

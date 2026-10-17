@@ -375,7 +375,9 @@ assignee: pick its credential with `--agent <tool>` when the repo has several, a
 refused. Output streams to the terminal and to `.git/agentteams/runs/<team>-<task>-<agent>.log` (`<team>` is a short
 tag for the team, since task numbers are per team); `--detach` starts a background `agentteams` process that runs the
 tool (output only in the log) and does the after-run steps below when it exits. `--model <m>` is passed to the tool's
-own `--model` flag. While a run is going, a `.pid` file next to the log marks the agent busy.
+own `--model` flag. While a run is going, a `.pid` file next to the log marks the agent busy. Ctrl-C, or
+`kill <pid>` of a background run (the pid is printed), stops the tool and everything it started, commits nothing and
+leaves the worktree as it is.
 
 **After the tool exits**, `run` itself (outside any sandbox, as you, with your git identity and hooks) commits whatever
 the tool left in the worktree on the task branch as `task #<n>: <title>`, for every tool that is told not to commit

@@ -218,6 +218,7 @@ describe('agentteams run <task>', () => {
     });
     expect(readFileSync(runFile(n, s.bob.agentName, 'pid')!, 'utf8').trim()).toBe('4243');
     expect(cli.out.join('\n')).toMatch(/pid 4243/);
+    expect(cli.out.join('\n')).toContain('Stop it with: kill 4243');
   });
 
   it('--supervise (the background half) runs the tool with output only in the log, then commits', async () => {
@@ -227,6 +228,29 @@ describe('agentteams run <task>', () => {
     expect(await run('run', String(n), '--agent', 'codex', '--supervise')).toBe(0);
     expect(starts[0]).toMatchObject({ cmd: 'codex', detach: false, echo: false });
     expect(branchLog(`at/${s.bob.agentName}/${n}`).split('\n')[0]).toBe(`task #${n}: Signup`);
+  });
+
+  it('a stop signal stops the tool, commits nothing, frees the task and says how to restart it', async () => {
+    installBins('codex');
+    const n = await addTask('x', s.bob.agentName);
+    cli.deps.runner = {
+      async start(cmd, args, opts) {
+        starts.push({ cmd, args, ...opts });
+        writeFileSync(join(opts.cwd, 'half-done.ts'), 'x');
+        process.emit('SIGTERM'); // what `kill <pid>` of a background run delivers
+        expect(opts.signal?.aborted).toBe(true); // the runner passes it on to the tool
+        return { code: 143 };
+      },
+      isAlive: () => true,
+    };
+    const listeners = process.listenerCount('SIGTERM');
+    expect(await run('run', String(n), '--agent', 'codex')).toBe(143);
+    expect(process.listenerCount('SIGTERM')).toBe(listeners);
+    expect(branchLog(`at/${s.bob.agentName}/${n}`).split('\n')[0]).toBe('init'); // nothing committed
+    expect(existsSync(join(wtOf(s.bob.agentName, n), 'half-done.ts'))).toBe(true); // the worktree is left as it is
+    expect(runFile(n, s.bob.agentName, 'pid')).toBeUndefined();
+    expect(cli.err.join('\n')).toMatch(/stopped codex \(SIGTERM\)/);
+    expect(cli.out.join('\n')).toContain(`agentteams run ${n} --agent codex`);
   });
 
   it('refuses a second run of the same task while the first is alive', async () => {
