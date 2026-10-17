@@ -10,3 +10,4 @@ packages/agentteams/README.md
 packages/agentteams/assets
 .claude/worktrees/
 .superpowers/
+.DS_Store
