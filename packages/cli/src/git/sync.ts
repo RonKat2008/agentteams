@@ -56,7 +56,7 @@ export interface SyncSummary {
   skipped?: 'locked' | 'queued';
   fetched: boolean;
   pushed: boolean;
-  /** Ops newly verified from the team's refs (including our own log). */
+  /** Ops newly verified from the team's refs (teammates' logs, and our own only when it came from elsewhere). */
   ingested: number;
   /** Own pending ops appended to our log. */
   published: number;
@@ -134,10 +134,9 @@ async function verifiedOwnTip(deps: Deps, repo: string, view: GitView, lock: Syn
   const { teamId, agentId } = view.git;
   const tip = await localAgentHead(deps, repo, teamId, agentId);
   if (!tip) return null;
-  // Our own ops in this log were applied locally when they were written.
+  // Our own ops in this log were applied locally when they were written, and are not "received" either.
   const r = await ingestAgents(deps, repo, view, lock, [{ agent: agentId, tip, local: true }], null, false);
   summary.problems.push(...r.problems);
-  summary.ingested += r.ops.length;
   const state = (await view.files.readLogState()).agents[agentId];
   return state?.doneTip === tip && !state.stuck ? tip : null;
 }
@@ -229,9 +228,11 @@ async function checkMeta(deps: Deps, repo: string, view: GitView, summary: SyncS
 /**
  * Applies the round's ops. `rebuild`: the view may lack accepted ops (the meta was just pinned, or an earlier apply
  * failed after its ops were accepted), so everything is replayed once. Clears the `unapplied` marker on success.
+ * `locals`: every agent writing in this clone; their pending ops are replayed too, so they get notices as well.
  */
 async function applyIngested(
   view: GitView, lock: SyncLock, incoming: Op[], creator: TeamCreator, rebuild: boolean, now: () => number, summary: SyncSummary,
+  locals: readonly string[],
 ): Promise<void> {
   const { files } = view;
   const candidates = [...(await files.readDeferred()), ...incoming, ...(await listPending(view.store.ctx.db))];
@@ -240,9 +241,11 @@ async function applyIngested(
   let r;
   if (rebuild) {
     const { store, source } = replayTarget(view);
-    r = await rebuildView(store, { source, teamCreator: creator, localAgentId: view.git.agentId, teamId: view.git.teamId, nowMs: now() });
+    r = await rebuildView(store, {
+      source, teamCreator: creator, localAgentId: view.git.agentId, localAgentIds: locals, teamId: view.git.teamId, nowMs: now(),
+    });
   } else {
-    r = await applyToView(view, ready, { now, creator });
+    r = await applyToView(view, ready, { now, creator, localAgentIds: locals });
   }
   summary.applied += r.applied;
   summary.rejected += r.rejected;
@@ -418,7 +421,8 @@ async function runRound(
   await lock.assertOwned();
   if (meta.creator) {
     try {
-      await applyIngested(view, lock, ingested, meta.creator, meta.firstPin || unapplied, now, summary);
+      const locals = [...(await localTips(deps, repo, teamId)).keys()];
+      await applyIngested(view, lock, ingested, meta.creator, meta.firstPin || unapplied, now, summary, locals);
     } catch (err) {
       // The marker stays set, so the next round retries. Our own ops are already in our view and still get sent.
       await lock.assertOwned();
@@ -556,7 +560,7 @@ export async function writeBootstrap(deps: Deps, repo: string, cred: Credential,
     if (r.problems.length > 0) throw new Error(r.problems.join('; '));
     summary.ingested = r.ops.length;
     const creator = await teamCreatorOf(view);
-    if (creator) await applyIngested(view, lock, r.ops, creator, unapplied, now, summary);
+    if (creator) await applyIngested(view, lock, r.ops, creator, unapplied, now, summary, [...(await localTips(deps, repo, teamId)).keys()]);
   } finally {
     await lock.release();
   }
@@ -570,7 +574,8 @@ export function formatSyncSummary(s: SyncSummary): string {
   const parts = [
     s.fetched ? 'fetched' : 'fetch failed',
     `${s.ingested} op${s.ingested === 1 ? '' : 's'} received`,
-    `${s.published} sent`,
+    // Published = appended to our local log; it only left this machine if the round pushed.
+    s.published > 0 && !s.pushed ? `${s.published} queued (not pushed yet)` : `${s.published} sent`,
     s.pushed ? 'pushed' : null,
     s.restored ? 'own log restored' : null,
     s.morePending ? 'more to read next round' : null,

@@ -478,7 +478,7 @@ fi
   `--repo <owner/name>` links a GitHub repo.
 - `join` only: for a git team, uses the current clone when one of its remotes is the team's repo, otherwise clones
   it with git (into `./<repo name>`, or `--dir <path>`). `--no-clone` skips the clone and uses the current directory.
-- `sync`: `--repo <path>` and `--tool <tool>` pick the repo and credential.
+- `sync`: `--repo <path>` picks the repo; every git agent of the repo syncs (each pushes only its own writes), or just the one `--tool <tool>` names.
 - `merge`: `--into <branch>`, `--test <cmd>` / `--no-test` / `--yes` (run the detected test command without asking), `--no-notify`, `--stop-on-conflict`, `--dry-run`, `--push`.
   With several agents in the repo it acts as the one that is the orchestrator; `--agent <tool>` picks one explicitly.
 - `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.

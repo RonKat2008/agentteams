@@ -104,6 +104,19 @@ describe('agentteams sync / status', () => {
     expect(t.out).toEqual([]);
   });
 
+  it('without --tool, syncs every agent of this repo (each pushes its own queued ops)', async () => {
+    const lead = await saved(await bootstrap(world, world.clone('a'), 'createTeam', 'ann'));
+    const codex = await saved(await bootstrap(world, lead.repo, 'join', 'ann', { tool: 'codex' }));
+    const { GitTeamClient } = await import('../../src/git/client.js');
+    await new GitTeamClient(deps, codex.cred, { trigger: () => undefined })
+      .execute('sendMessage', { to: 'all', kind: 'fyi', body: 'from codex' });
+    expect(await main(['node', 'agentteams', 'sync'], cliDeps(lead.repo))).toBe(0);
+    const out = t.out.join('\n');
+    expect(out).toMatch(/^agentteams: ann-claude synced \(fetched, /m);
+    expect(out).toMatch(/^agentteams: ann-codex synced \(fetched, 0 ops received, 1 sent, pushed\)$/m);
+    expect(await listPending((await view(codex)).store.ctx.db, codex.id)).toEqual([]);
+  });
+
   it('exits 1 and reports the error when the remote is unreachable', async () => {
     const a = await saved(await bootstrap(world, world.clone('a'), 'createTeam', 'ann', { remote: join(world.tmp, 'nope.git') }));
     expect(await main(['node', 'agentteams', 'sync'], cliDeps(a.repo))).toBe(1);

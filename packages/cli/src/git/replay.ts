@@ -51,6 +51,11 @@ export interface ApplyOptions {
   source: OpSource;
   /** This replica's own agent: rejections and refused outcomes of its ops produce a local notice. */
   localAgentId?: string;
+  /**
+   * Every agent writing in this clone (they share the view, and a round of one replays the others' pending ops):
+   * rejections and refused outcomes of their ops produce a local notice for them too.
+   */
+  localAgentIds?: readonly string[];
   /** When set, ops for any other team are rejected. */
   teamId?: string;
   /** Local wall time for deferring future ops; defaults to Date.now(). */
@@ -340,8 +345,12 @@ class Replayer {
     return row ? { id: row.id, teamId: row.team_id, name: row.name, member: row.member, tool: row.tool } : null;
   }
 
+  private isLocal(agent: string): boolean {
+    return agent === this.opts.localAgentId || (this.opts.localAgentIds?.includes(agent) ?? false);
+  }
+
   private async notify(c: Candidate, body: string): Promise<void> {
-    if (this.opts.localAgentId === undefined || c.agent !== this.opts.localAgentId) return;
+    if (!this.isLocal(c.agent)) return;
     const at = c.valid ? parseHlc(c.op.ts) : null;
     await this.trx.insertInto('replica_notices').values({
       agent_id: c.agent, op_id: c.id, body, created_at: new Date(at ? at.ms : 0).toISOString(), delivered_at: null,
@@ -350,7 +359,7 @@ class Replayer {
   }
 
   private async withdrawNotice(c: Candidate): Promise<void> {
-    if (this.opts.localAgentId === undefined || c.agent !== this.opts.localAgentId) return;
+    if (!this.isLocal(c.agent)) return;
     await this.trx.deleteFrom('replica_notices')
       .where('agent_id', '=', c.agent).where('op_id', '=', c.id).where('delivered_at', 'is', null).execute();
   }

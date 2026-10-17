@@ -10,7 +10,7 @@ import { appendSegment } from '../../src/git/refs.js';
 import { listPending } from '../../src/git/replicaStore.js';
 import { getPinnedKey, pinAgentKey, rebuildView } from '../../src/git/replay.js';
 import { MAX_SEGMENT_BYTES, encodeSegment } from '../../src/git/segment.js';
-import { syncRound } from '../../src/git/sync.js';
+import { formatSyncSummary, syncRound } from '../../src/git/sync.js';
 import { acquireLock, readStatus, takeSyncWarnings } from '../../src/git/syncState.js';
 import { replayTarget, teamCreatorOf } from '../../src/git/view.js';
 import { HubError } from '../../src/hubClient.js';
@@ -352,6 +352,60 @@ describe('sync round', () => {
     const lead = await bootstrap(world, world.clone('a'), 'createTeam', 'ann');
     await expect(client(lead).rotateInvite()).rejects.toBeInstanceOf(HubError);
     await expect(client(lead).revokeInvite()).rejects.toThrow(/controlled by the team repo/);
+  });
+});
+
+describe('found by the cross-machine smoke test', () => {
+  it('read_inbox delivers a rejection notice together with messages, without an internal error', async () => {
+    const { lead, worker } = await twoAgents();
+    // Both claim the same files before either syncs: the lead's earlier claim wins, the worker's is refused on replay.
+    await client(lead).execute('claimFiles', { globs: ['docs/**'], exclusive: true });
+    await client(worker).execute('claimFiles', { globs: ['docs/**'], exclusive: true });
+    await client(lead).execute('sendMessage', { to: worker.name, kind: 'fyi', body: 'hello bob' });
+    expect((await sync(lead)).ok).toBe(true);
+    expect((await sync(worker)).ok).toBe(true);
+
+    const first = await client(worker).ping(true);
+    expect(first.messages.map((m) => m.from)).toEqual(['agentteams', lead.name]);
+    expect(first.messages[0]!.body).toMatch(/file claim was refused/);
+    expect((await client(worker).ping(true)).messages).toEqual([]);
+  });
+
+  it('a second agent of a clone is told when another agent\'s round rejects its op', async () => {
+    const { lead, worker } = await twoAgents();
+    const codex = await bootstrap(world, worker.repo, 'join', 'bob', { tool: 'codex' });
+    expect((await sync(codex)).ok).toBe(true);
+    await client(lead).execute('createTask', { title: 'race' });
+    expect((await sync(lead)).ok).toBe(true);
+    expect((await sync(worker)).ok).toBe(true);
+    // Both claim the open task before syncing; the lead's claim is earlier and wins.
+    await client(lead).execute('claimTask', { task: 1 });
+    await client(codex).execute('claimTask', { task: 1 });
+    expect((await sync(lead)).ok).toBe(true);
+    // The worker's (claude) round replays the clone's pending ops, codex's included, and rejects the claim.
+    expect((await sync(worker)).ok).toBe(true);
+    expect((await sync(codex)).ok).toBe(true);
+    const notices = (await client(codex).ping(true)).messages.filter((m) => m.from === 'agentteams');
+    expect(notices.map((m) => m.body)).toEqual([expect.stringMatching(/Your claimTask .* was rejected/)]);
+    expect((await client(worker).ping(true)).messages.filter((m) => m.from === 'agentteams')).toEqual([]);
+  });
+
+  it('counts only teammates\' ops as received, not our own ops written to our log this round', async () => {
+    const { lead, worker } = await twoAgents();
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'one' });
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'two' });
+    const s = await sync(lead);
+    expect(s.published).toBe(2);
+    expect(s.ingested).toBe(0);
+    expect((await sync(worker)).ingested).toBe(2);
+  });
+
+  it('the summary says ops are queued, not sent, when the round could not push', async () => {
+    const lead = await bootstrap(world, world.clone('a'), 'createTeam', 'ann', { remote: join(world.tmp, 'missing.git') });
+    await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'queued' });
+    const line = formatSyncSummary(await sync(lead));
+    expect(line).toMatch(/^agentteams: sync failed: fetch \(from git\): /);
+    expect(line).toMatch(/\(fetch failed, 0 ops received, 1 queued \(not pushed yet\)\)$/);
   });
 });
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { saveCredential, type Credential } from '../src/credentials.js';
-import { readableTeams } from '../src/commands/shared.js';
+import { readableTeams, requireCredential } from '../src/commands/shared.js';
 import { makeTestCli, type TestCli } from './helpers.js';
 
 let t: TestCli;
@@ -42,5 +42,14 @@ describe('readableTeams', () => {
     await saveCredential(t.deps, cred({}));
     await saveCredential(t.deps, cred({ tool: 'codex', agentName: 'a-codex' }));
     expect((await readableTeams(t.deps, 'codex')).map((x) => x.mine)).toEqual([['a-codex']]);
+  });
+
+  it('with an --agent this repo does not have, names the agents it does have instead of "run create or join"', async () => {
+    await saveCredential(t.deps, cred({}));
+    await saveCredential(t.deps, cred({ tool: 'codex', agentName: 'a-codex' }));
+    const msg = /no gemini agent in this repo \(its agents: claude, codex\); pass --agent claude or --agent codex/;
+    await expect(readableTeams(t.deps, 'gemini')).rejects.toThrow(msg);
+    await expect(requireCredential(t.deps, 'gemini')).rejects.toThrow(msg);
+    await expect(readableTeams(t.deps, 'gemini')).rejects.not.toThrow(/run "agentteams create"/);
   });
 });
