@@ -194,6 +194,14 @@ describe('git-layer routes', () => {
     expect((await view.json()).number).toBe(1);
   });
 
+  it('sends a message; commands are orchestrator-only', async () => {
+    const { ronitKey, ashKey } = await setup();
+    expect((await app.request('/api/team/messages', json({ to: 'ronit-claude', body: 'x', kind: 'command' }, ashKey))).status).toBe(403);
+    const sent = await app.request('/api/team/messages', json({ to: 'ash-codex', body: 'rebase', kind: 'command' }, ronitKey));
+    expect(sent.status).toBe(200);
+    expect(await sent.json()).toMatchObject({ to: 'ash-codex' });
+  });
+
   it('maps errors: 403 non-orchestrator merged, 404 unknown task, 400 bad number', async () => {
     const { ashKey } = await setup();
     expect((await app.request('/api/team/tasks/1/merged', json({}, ashKey))).status).toBe(403);

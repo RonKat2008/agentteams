@@ -46,6 +46,10 @@ describe('HubClient git-layer methods', () => {
     await expect(ash.markMerged(1)).rejects.toMatchObject({ status: 403 });
     expect((await ronit.markMerged(1, 'https://github.com/o/r/pull/1')).mergedAt).toBeTruthy();
 
+    await expect(ash.sendMessage('ronit-claude', 'rebase please', 'command')).rejects.toMatchObject({ status: 403 });
+    expect(await ronit.sendMessage('ash-codex', 'rebase please', 'command')).toMatchObject({ to: 'ash-codex' });
+    expect((await ash.ping()).messages.map((m) => [m.kind, m.body])).toContainEqual(['command', 'rebase please']);
+
     await expect(ash.getTask(7)).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
 });

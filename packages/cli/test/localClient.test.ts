@@ -153,6 +153,13 @@ describe('LocalTeamClient', () => {
     await expect(alice.getTask(999)).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
 
+  it('sends messages; commands are orchestrator-only', async () => {
+    await expect(bob.sendMessage(s.alice.agentName, 'nope', 'command')).rejects.toMatchObject({ code: 'forbidden', status: 403 });
+    expect(await alice.sendMessage(s.bob.agentName, 'rebase task 3', 'command')).toMatchObject({ to: s.bob.agentName });
+    const inbox = (await bob.ping(false)).messages;
+    expect(inbox.map((m) => [m.kind, m.body])).toContainEqual(['command', 'rebase task 3']);
+  });
+
   it('logs each task step once: create, assign, claim (twice), without duplicates', async () => {
     const { openTeamStore } = await import('../src/local/store.js');
     const { ctx, core } = await openTeamStore(gitDeps, r.repo);
