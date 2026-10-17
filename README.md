@@ -279,6 +279,38 @@ Each task gets its own branch and worktree, and commits are checked against file
 4. `agentteams pr <task>` opens a pull request with `gh` (needs `gh`). If one exists, its URL is printed.
 5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
 
+### Starting agents on their tasks (`agentteams run`)
+
+Assigning a task does not wake the assignee's tool by itself. On the computer where the assignee's agent lives,
+`agentteams run <task>` claims the task as that agent, makes its worktree and starts the tool there non-interactively
+with a prompt to work the task through the agentteams MCP tools and finish with `agentteams done` (or
+`complete_task`). It runs as the assignee: pick its credential with `--agent <tool>` when the repo has several, and a
+task assigned to someone else is refused. Output streams to the terminal and to
+`.git/agentteams/runs/<task>-<agent>.log`; `--detach` runs it in the background (output only in the log).
+`--model <m>` is passed to the tool's own `--model` flag.
+
+| Tool | Command started |
+|---|---|
+| Codex | `codex exec --sandbox workspace-write --add-dir <repo>/.git -C <worktree> "<prompt>"` |
+| Cursor | `cursor-agent -p --output-format text --trust --approve-mcps --force --workspace <worktree> --add-dir <repo>/.git "<prompt>"` |
+| Claude Code | `claude -p "<prompt>" --permission-mode acceptEdits --allowedTools mcp__agentteams "Bash(git *)"` |
+| Gemini CLI | `gemini -p "<prompt>" --yolo` (headless Gemini cannot call MCP tools otherwise) |
+
+Other tools have no non-interactive mode agentteams can drive; `run` says so. The exact command (without the prompt)
+is the first line of the log, so you can rerun it by hand with other flags.
+
+`agentteams run --all` (for the orchestrator) starts, in the background, every assigned, unfinished task whose agent
+has a credential in this repo on this computer and whose tool is installed; it skips agents that already have a run
+going and tasks that were already started once (rerun those with `agentteams run <task>`), and prints why it skipped
+each task. `agentteams run --watch [--interval <seconds>]` does the same every 30 seconds (by default) until Ctrl-C, so
+new assignments start on their own; runs it started keep going after you stop watching.
+
+**Codex sandbox.** Task worktrees are inside the repo, so Codex's `workspace-write` sandbox can edit them;
+`agentteams run` also passes `--add-dir <repo>/.git` because commits from a linked worktree write to the main
+repo's `.git`. Running Codex yourself in a worktree, use `codex --sandbox workspace-write --add-dir <repo>/.git`.
+The sandbox has no network, so `agentteams done` cannot push from inside it; the prompt then falls back to
+`complete_task`, and you push the branch (`git push -u origin at/<agent>/<task>`) from outside.
+
 The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). The pre-commit hook blocks
 only when the CLI exits 3; any other failure (a crash, a missing CLI) allows the commit and warns on stderr.
 Git 2.31 or newer is required.
@@ -319,6 +351,7 @@ fi
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
 | `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
 | `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
+| `agentteams run <task> [--agent <tool>] [--model <m>] [--detach]` | Start the assignee's tool (Codex, Cursor, Claude Code, Gemini) non-interactively on the task in its worktree; `--all` starts every assigned task, `--watch` keeps doing so for new assignments |
 | `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
 | `agentteams pr <task>` | Open a GitHub pull request for a finished task (needs `gh`) |
 | `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |

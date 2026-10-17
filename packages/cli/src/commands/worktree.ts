@@ -94,7 +94,7 @@ async function setupForAgent(deps: CliDeps, cred: Credential, root: string, path
   if (hooks.status === 'skipped') deps.err(`agentteams: warning: ${hooks.detail.startsWith('git hooks') ? hooks.detail : `git hooks not installed: ${hooks.detail}`}`);
 }
 
-async function repoRootOf(deps: CliDeps): Promise<string> {
+export async function repoRootOf(deps: CliDeps): Promise<string> {
   const root = (await mainRepoRoot(deps, deps.cwd)) ?? (await gitTopLevel(deps, deps.cwd));
   if (!root) throw new Error('not inside a git repository');
   return root;

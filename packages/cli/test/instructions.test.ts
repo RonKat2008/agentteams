@@ -13,6 +13,9 @@ describe('managed instruction block', () => {
     expect(block).toContain('Finish: commit, then `agentteams done <task> -m "<summary>"` (pushes the branch, completes the task).');
     expect(block).toContain('Commits touching files another agent claimed are blocked by a pre-commit check; message the owner rather than overriding.');
   });
+  it('tells the orchestrator how to start an assignee that is on this computer', () => {
+    expect(block).toContain("Orchestrator: after assigning a task, `agentteams run <task>` starts the assignee's tool on it");
+  });
   it('points completion at agentteams done, with complete_task only for local teams', () => {
     expect(block).not.toContain('with a short summary and your branch name');
     expect(block).toContain('When finished, run `agentteams done <task> -m "<summary>"`');

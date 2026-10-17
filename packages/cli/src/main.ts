@@ -11,12 +11,14 @@ import { statusCommand } from './commands/status.js';
 import { syncCommand } from './commands/sync.js';
 import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
+import type { RunEntryOpts } from './commands/run.js';
 import { realDeps, type CliDeps } from './deps.js';
 import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
+const DEFAULT_WATCH_INTERVAL_SEC = 30;
 const TRUST_HUB_HELP = 'send your GitHub token to a non-official hosted hub without asking (required when not interactive)';
 
 function parsePositive(name: string) {
@@ -108,6 +110,16 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .option('--remove', "remove this task's worktree instead (the branch is kept)")
     .option('--force', 'with --remove: discard uncommitted changes')
     .action((task: number, o: { agent?: ToolKind; base?: string; remove?: boolean; force?: boolean }) => worktreeCommand(deps, task, o));
+  sub('run').description("Start a task's assignee (codex, cursor, claude or gemini) non-interactively in the task worktree")
+    .addArgument(new Argument('[task]', 'task number').argParser(parsePositive('task')))
+    .addOption(agentOpt()).option('--model <model>', "model passed to the tool's own --model flag")
+    .option('--detach', 'run in the background; output goes only to the log')
+    .option('--all', 'start every assigned, unfinished task whose agent is on this computer, in the background')
+    .option('--watch', 'keep polling the task board and start runs for new assignments (Ctrl-C stops watching)')
+    .option('--interval <seconds>', 'with --watch: seconds between polls', parsePositive('--interval'), DEFAULT_WATCH_INTERVAL_SEC)
+    .action(async (task: number | undefined, o: RunEntryOpts) => {
+      exit.code = await (await import('./commands/run.js')).runEntry(deps, task, o);
+    });
   const taskArg = () => new Argument('<task>', 'task number').argParser(parsePositive('task'));
   sub('done').description('Push this task branch and mark the task done')
     .addArgument(taskArg()).addOption(agentOpt())
