@@ -2,7 +2,7 @@ import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import { oneLine } from '../format.js';
 import { validSlug } from './join.js';
-import { clientFor, requireCredential } from './shared.js';
+import { clientFor, readableTeams } from './shared.js';
 
 const LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const firstLine = (s: string): string => s.trim().split('\n')[0] ?? '';
@@ -12,7 +12,7 @@ const isCi = (v: string | undefined): boolean => v === 'true' || v === '1';
 export async function accessGrantCommand(
   deps: CliDeps, target: string, opts: { yes?: boolean; agent?: ToolKind },
 ): Promise<void> {
-  const cred = await requireCredential(deps, opts.agent);
+  const { cred } = (await readableTeams(deps, opts.agent))[0]!; // only reads team status
   const status = await clientFor(deps, cred).status();
   const { repo } = status.team;
   if (repo.provider !== 'github') throw new Error('access grant needs a team linked to a GitHub repo');

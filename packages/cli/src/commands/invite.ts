@@ -2,7 +2,7 @@ import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import { INVITE_WARNING, inviteCodeOf } from '../git/setup.js';
 import { teammateJoinCommand } from './create.js';
-import { clientFor, dateOnly, requireCredential } from './shared.js';
+import { clientFor, dateOnly, readableTeams, requireCredential } from './shared.js';
 
 export type InviteAction = 'show' | 'rotate' | 'revoke';
 
@@ -14,7 +14,8 @@ export const GIT_INVITE_EXPLANATION =
   'Run "agentteams invite show" to print the current code.';
 
 export async function inviteCommand(deps: CliDeps, action: InviteAction, opts: { agent?: ToolKind }): Promise<void> {
-  const cred = await requireCredential(deps, opts.agent);
+  // `show` only reads; rotate/revoke act as an agent, so they still need an unambiguous one.
+  const cred = action === 'show' ? (await readableTeams(deps, opts.agent))[0]!.cred : await requireCredential(deps, opts.agent);
   if (cred.transport === 'git') {
     if (action !== 'show') throw new Error(`cannot ${action} the invite: ${GIT_INVITE_EXPLANATION}`);
     const { code, url } = await inviteCodeOf(deps, cred);

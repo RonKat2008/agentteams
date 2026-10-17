@@ -1,7 +1,7 @@
 import type { ToolKind } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import { currentBranch } from '../git.js';
-import { assertSafeBranch, clientFor, requireCredential, teamDefaultBranch } from './shared.js';
+import { assertSafeBranch, clientFor, readableTeams, requireCredential, teamDefaultBranch } from './shared.js';
 
 const TASK_BRANCH = /^at\/.+\/(\d+)$/;
 
@@ -36,7 +36,7 @@ export async function doneCommand(deps: CliDeps, task: number, opts: DoneOpts): 
 }
 
 export async function prCommand(deps: CliDeps, task: number, opts: AgentOpts): Promise<void> {
-  const cred = await requireCredential(deps, opts.agent);
+  const { cred } = (await readableTeams(deps, opts.agent))[0]!; // only reads the task
   const client = clientFor(deps, cred);
   const { branch: base, provider } = await teamDefaultBranch(deps, client, deps.cwd);
   if (provider !== 'github') throw new Error('pr needs a GitHub-linked team');

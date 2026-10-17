@@ -19,6 +19,31 @@ export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promis
   return cred;
 }
 
+/** One team this repo has credentials for: a credential that can read it, and every local agent that belongs to it. */
+export interface TeamAccess { cred: Credential; mine: string[] }
+
+const teamKey = (c: Credential): string => (c.transport === 'git' && c.git ? `git:${c.git.teamId}` : `${c.transport ?? 'http'}:${c.hubUrl}:${c.teamName}`);
+
+/**
+ * Credentials for reading team state, which every agent of a team sees identically: no --agent needed.
+ * Returns one entry per distinct team among this repo's credentials, ordered by tool name so the choice
+ * is deterministic; `mine` lists the repo's local agents on that team. With --agent, just that credential.
+ */
+export async function readableTeams(deps: CliDeps, agent?: ToolKind): Promise<TeamAccess[]> {
+  const first = await resolveCredentialForCwd(deps, deps.cwd, agent);
+  if (!first) throw new Error(noCredentialsMessage(await repoRoot(deps, deps.cwd)));
+  if (agent) return [{ cred: first, mine: [first.agentName] }];
+  const same = (await loadCredentials(deps)).filter((c) => c.repoPath === first.repoPath)
+    .sort((a, b) => a.tool.localeCompare(b.tool));
+  const teams = new Map<string, TeamAccess>();
+  for (const c of same) {
+    const known = teams.get(teamKey(c));
+    if (known) known.mine.push(c.agentName);
+    else teams.set(teamKey(c), { cred: c, mine: [c.agentName] });
+  }
+  return [...teams.values()];
+}
+
 export const noCredentialsMessage = (repo: string): string =>
   `no agentteams credentials for ${repo}; run "agentteams create" or "agentteams join" first`;
 

@@ -342,8 +342,14 @@ fi
   it with git (into `./<repo name>`, or `--dir <path>`). `--no-clone` skips the clone and uses the current directory.
 - `sync`: `--repo <path>` and `--tool <tool>` pick the repo and credential.
 - `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
-- `status`, `log`, `invite`, `orchestrator`, `worktree`, `access grant`: `--agent <tool>` picks which credential to use when the repo
-  has more than one (for example both Claude and Codex).
+- `status`, `log`, `invite show`, `pr`, `access grant` only read team state, so they need no `--agent`: every agent in a repo sees
+  the same team. `status` lists the whole team and marks all of this repo's agents "you" (if the repo's agents are on
+  different teams it shows each team); `log` shows the team (with several teams it shows the first and says how to pick
+  another). `--agent <tool>` still selects a specific credential.
+- `invite rotate|revoke`, `orchestrator`, `worktree`, `done`, `merged` act as an agent: when the repo has more than one,
+  pass `--agent <tool>` (for example both Claude and Codex).
+- `log` prints whole message bodies, task notes and summaries, word-wrapped under the event with control characters
+  stripped (only the `status` table shortens long values). Events from older hubs carry only an 80-character preview.
 
 `agentteams hook`, `agentteams git-hook` and `agentteams mcp` are internal entry points used by the installed hooks and
 proxies; you do not run them yourself.

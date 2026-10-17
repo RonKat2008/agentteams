@@ -1,9 +1,9 @@
 import type { ToolKind } from '@agentteams/shared';
 import { makePalette } from '../color.js';
 import type { CliDeps } from '../deps.js';
-import { formatEvent } from '../format.js';
+import { formatEvent, oneLine } from '../format.js';
 import { syncSummaryLine } from '../git/syncState.js';
-import { clientFor, requireCredential } from './shared.js';
+import { clientFor, readableTeams } from './shared.js';
 
 const DEFAULT_INTERVAL_MS = 2000;
 const FOLLOW_BATCH = 100;
@@ -19,7 +19,12 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 export interface LogOpts { agent?: ToolKind; follow: boolean; limit: number; intervalMs?: number; signal?: AbortSignal }
 
 export async function logCommand(deps: CliDeps, opts: LogOpts): Promise<void> {
-  const cred = await requireCredential(deps, opts.agent);
+  const teams = await readableTeams(deps, opts.agent);
+  const { cred } = teams[0]!;
+  if (teams.length > 1) {
+    const names = teams.slice(1).map((t) => `"${oneLine(t.cred.teamName)}" (--agent ${t.cred.tool})`).join(', ');
+    deps.err(`agentteams: this repo is in ${teams.length} teams; showing "${oneLine(cred.teamName)}". For the others pass --agent: ${names}`);
+  }
   const client = clientFor(deps, cred);
   const palette = makePalette(deps.color);
   const first = await client.activity({ limit: opts.limit });
