@@ -13,7 +13,7 @@ import { decodeInvite } from '../git/invite.js';
 import { findRemoteFor, pickRemote, remoteFetchUrl, remoteNames, repoNameOf, stripCredentials } from '../git/remoteUrl.js';
 import { INVITE_WARNING, inviteCodeOf } from '../git/setup.js';
 import { hubUrlFrom } from '../paths.js';
-import { detectGithubSlug, isGitRepo, real, repoRoot } from '../repo.js';
+import { detectGithubSlug, ensureFirstCommit, firstCommitNote, isGitRepo, real, repoRoot } from '../repo.js';
 import {
   agentChoices, createOptions, defaultTeamKind, isGitInviteCode, joinOptions, repoChoices, teamKindChoices,
   validateHubTarget, validateInviteCode, validateMemberName, validateTeamName, type RepoChoice, type TeamKind,
@@ -139,6 +139,8 @@ async function projectFolder(ctx: TuiContext, name: string): Promise<CliDeps> {
   const init = await deps.exec('git', ['init', '-b', 'main'], { cwd: dir });
   if (init.code !== 0) throw new Error(`git init failed in ${dir}: ${(init.stderr || init.stdout).trim()}`);
   p.info(where === 'folder' ? `Made ./${name} a git repo. Start your agents there: cd ${name}` : 'Made this folder a git repo.');
+  const note = firstCommitNote(await ensureFirstCommit(deps, dir));
+  if (note) p.info(note.text);
   return { ...deps, cwd: dir };
 }
 
