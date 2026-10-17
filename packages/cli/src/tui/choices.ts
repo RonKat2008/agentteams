@@ -5,8 +5,11 @@ import { getAdapter } from '../tools/registry.js';
 import type { ToolChoice } from './detect.js';
 import type { Choice } from './prompter.js';
 
-/** Who will be on the team: decides the transport (local database, git sync, or a hub server). */
-export type TeamKind = 'local' | 'git' | 'hub';
+/**
+ * Who will be on the team: decides the transport (local database, git sync, or a hub server). `newRepo` is the git
+ * team on a GitHub repo created for it (offered when this directory has no remote).
+ */
+export type TeamKind = 'local' | 'git' | 'newRepo' | 'hub';
 export type RepoChoice = 'link' | 'new' | 'local';
 
 /** Hub invite codes: four groups of four from a lowercase alphabet without l, o, 0 and 1 (case-insensitive). */
@@ -18,8 +21,13 @@ export function validateTeamName(v: string): string | undefined {
   return r.success ? undefined : (r.error.issues[0]?.message ?? 'invalid team name');
 }
 
+/** Git-team codes: `at1-` and lowercase base32 (fully checked by the join command). */
+const GIT_INVITE_RE = /^at1-[a-z2-7]{20,}$/;
+
+export const isGitInviteCode = (v: string): boolean => GIT_INVITE_RE.test(v.trim());
+
 export function validateInviteCode(v: string): string | undefined {
-  return INVITE_RE.test(v.trim()) ? undefined : 'invite codes look like abcd-efgh-jkmn-pqrs';
+  return INVITE_RE.test(v.trim()) || isGitInviteCode(v) ? undefined : 'invite codes look like at1-... or abcd-efgh-jkmn-pqrs';
 }
 
 export function validateHubUrl(v: string): string | undefined {
@@ -38,11 +46,27 @@ export function agentChoices(tools: ToolChoice[], exclude: readonly ToolKind[] =
     .map((t) => ({ value: t.tool, label: getAdapter(t.tool).label, hint: t.detected ? `detected · ${t.why}` : undefined }));
 }
 
-export const teamKindChoices = (): Choice<TeamKind>[] => [
-  { value: 'local', label: 'Just my agents on this computer' },
-  { value: 'git', label: "People on other computers (through this repo's git remote)", hint: 'coming soon', disabled: true },
-  { value: 'hub', label: 'A hub server (advanced)' },
-];
+/**
+ * `remoteUrl`: this repo's git remote (credentials stripped), or null. `newRepo`: a GitHub repo ./<name> can be
+ * created with gh here (gh present, not inside a git repo, valid name).
+ */
+export interface TeamKindContext { remoteUrl: string | null; newRepo?: boolean; teamName?: string }
+
+export const GIT_NO_REMOTE_HINT = 'add a git remote first (e.g. a GitHub repo)';
+
+export function teamKindChoices(ctx: TeamKindContext = { remoteUrl: null }): Choice<TeamKind>[] {
+  const git: Choice<TeamKind> = ctx.remoteUrl
+    ? { value: 'git', label: "People on other computers (through this repo's git remote)", hint: ctx.remoteUrl }
+    : { value: 'git', label: "People on other computers (through this repo's git remote)", hint: GIT_NO_REMOTE_HINT, disabled: true };
+  return [
+    { value: 'local', label: 'Just my agents on this computer' },
+    git,
+    ...(!ctx.remoteUrl && ctx.newRepo
+      ? [{ value: 'newRepo' as const, label: `People on other computers (create a new GitHub repo ./${ctx.teamName ?? '<name>'})`, hint: 'uses gh' }]
+      : []),
+    { value: 'hub', label: 'A hub server (advanced)' },
+  ];
+}
 
 /** A hub server answer: a full http(s) URL, or "local" for the hub `agentteams up` starts. */
 export function validateHubTarget(v: string): string | undefined {
@@ -67,25 +91,34 @@ export function repoChoices(ctx: RepoContext, teamName: string): Choice<RepoChoi
   return choices;
 }
 
-/** `hub` absent means a local team (no --hub). */
-export interface CreateAnswers { name: string; agent: ToolKind; repo: RepoChoice; visibility?: 'private' | 'public'; hub?: string; as?: string }
+/**
+ * `hub` absent means no --hub: `kind` 'local' is a team on this computer (--this-computer), 'git' one shared
+ * through the repo's remote (the default when it has one).
+ */
+export interface CreateAnswers {
+  name: string; agent: ToolKind; repo: RepoChoice; visibility?: 'private' | 'public'; hub?: string; as?: string; kind?: TeamKind;
+}
 
 /** Menu answers → the options object `agentteams create` builds from its flags. */
 export function createOptions(a: CreateAnswers): CreateOpts {
   return {
     agent: a.agent, ...(a.hub ? { hub: a.hub } : {}), install: true,
     ...(a.as ? { as: a.as } : {}),
+    ...(a.kind === 'local' ? { thisComputer: true } : {}),
     ...(a.repo === 'local' ? { local: true } : {}),
     ...(a.repo === 'new' ? { newRepo: true, visibility: a.visibility ?? 'private' } : {}),
   };
 }
 
-/** `hub` absent: no --hub (a code for this repo's local team joins locally). */
-export interface JoinAnswers { code: string; agent: ToolKind; hub?: string; clone: boolean; as?: string }
+/** `hub` absent: no --hub (an at1- code, or a code for this repo's local team). `dir`: where to clone. */
+export interface JoinAnswers { code: string; agent: ToolKind; hub?: string; clone: boolean; as?: string; dir?: string }
 
 /** Menu answers → the options object `agentteams join` builds from its flags. */
 export function joinOptions(a: JoinAnswers): { code: string; opts: JoinOpts } {
-  return { code: a.code.trim(), opts: { agent: a.agent, ...(a.hub ? { hub: a.hub } : {}), install: true, clone: a.clone, ...(a.as ? { as: a.as } : {}) } };
+  return {
+    code: a.code.trim(),
+    opts: { agent: a.agent, ...(a.hub ? { hub: a.hub } : {}), install: true, clone: a.clone, ...(a.as ? { as: a.as } : {}), ...(a.dir ? { dir: a.dir } : {}) },
+  };
 }
 
 export function validateMemberName(v: string): string | undefined {

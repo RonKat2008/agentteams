@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { saveCredential } from '../src/credentials.js';
+import { newAgentKeyPair, newTeamKey } from '../src/git/crypto.js';
+import { encodeInvite } from '../src/git/invite.js';
 import type { CreateOpts } from '../src/commands/create.js';
 import type { JoinOpts } from '../src/commands/join.js';
 import { DEFAULT_HUB_URL } from '../src/paths.js';
@@ -193,9 +195,9 @@ describe('guided menu', () => {
     expect(await run()).toBe(0);
     const who = p.asked.find((a) => a.message === 'Who will be on this team?')!;
     expect(who.choices!.map((c) => c.value)).toEqual(['local', 'git', 'hub']);
-    expect(who.choices!.find((c) => c.value === 'git')).toMatchObject({ disabled: true, hint: 'coming soon' });
+    expect(who.choices!.find((c) => c.value === 'git')).toMatchObject({ disabled: true, hint: 'add a git remote first (e.g. a GitHub repo)' });
     expect(p.asked.some((a) => a.message.startsWith('Hub URL'))).toBe(false);
-    expect(created).toEqual([{ agent: 'claude', install: true, local: true, as: 'ada' }]);
+    expect(created).toEqual([{ agent: 'claude', install: true, thisComputer: true, local: true, as: 'ada' }]);
     expect(hubEnv).toEqual(['']); // AGENTTEAMS_HUB must not turn the local choice into a hub team
     const box = p.log.find((l) => l.startsWith('box:'))!;
     expect(box).toContain('Add another agent on this computer');
@@ -285,5 +287,73 @@ describe('guided menu', () => {
     const { p, run } = setup(['join', 'abcd-efgh-jkmn-pqrs', 'claude', DEFAULT_HUB_URL, 'clone', CANCEL], { commands: { join } });
     expect(await run()).toBe(0);
     expect(p.log.at(-1)).toBe('cancel: Cancelled.');
+  });
+});
+
+describe('guided menu: git teams', () => {
+  const remoteUrl = 'https://github.com/me/app.git';
+  const gitCode = encodeInvite({
+    remote: remoteUrl, teamId: '01M53M31E0000CSJWXQ4WTTC12', key: newTeamKey(),
+    creator: { agentId: '01M53M31E10004AT4C85BXMTTX', publicKey: newAgentKeyPair().publicKey },
+  });
+  const withRemote = (url: string) => ({ 'git remote': { stdout: 'origin\n' }, 'git remote get-url -- origin': { stdout: `${url}\n` } });
+
+  it('creates a git team through the repo remote: the option shows the URL (no credentials) and no repo question', async () => {
+    const created: CreateOpts[] = [];
+    const { p, run } = setup(['create', 'squad', 'claude', 'git', 'ada'], {
+      table: withRemote('https://x-token:secret@github.com/me/app.git'),
+      commands: {
+        create: async (_d, name, o) => {
+          created.push(o);
+          return { teamName: name, inviteCode: gitCode, inviteExpiresAt: '', hubUrl: '', remoteUrl };
+        },
+      },
+    });
+    expect(await run()).toBe(0);
+    const who = p.asked.find((a) => a.message === 'Who will be on this team?')!;
+    expect(who.choices!.find((c) => c.value === 'git')).toMatchObject({ hint: remoteUrl });
+    expect(who.choices!.find((c) => c.value === 'git')!.disabled).toBeFalsy();
+    expect(p.asked.some((a) => a.message.startsWith('Which repo') || a.message.startsWith('Hub URL'))).toBe(false);
+    expect(created).toEqual([{ agent: 'claude', install: true, as: 'ada' }]);
+    const box = p.log.find((l) => l.startsWith('box:'))!;
+    expect(box).toContain(`Shared through ${remoteUrl}`);
+    expect(box).toContain(`agentteams join ${gitCode}`);
+    expect(box).toContain('Treat this code like a password');
+    expect(box).not.toContain('expires');
+  });
+
+  it('without a remote, offers a new GitHub repo (with gh, outside a repo) as the way to share', async () => {
+    const created: CreateOpts[] = [];
+    const { p, run } = setup(['create', 'squad', 'claude', 'newRepo', 'public', 'ada'], {
+      hasGh: true,
+      table: { 'git rev-parse --show-toplevel': { code: 128 } },
+      commands: {
+        create: async (_d, name, o) => {
+          created.push(o);
+          return { teamName: name, inviteCode: gitCode, inviteExpiresAt: '', hubUrl: '', remoteUrl };
+        },
+      },
+    });
+    expect(await run()).toBe(0);
+    const who = p.asked.find((a) => a.message === 'Who will be on this team?')!;
+    expect(who.choices!.find((c) => c.value === 'git')).toMatchObject({ disabled: true });
+    expect(created).toEqual([{ agent: 'claude', install: true, as: 'ada', newRepo: true, visibility: 'public' }]);
+  });
+
+  it('joins with an at1- code: asks where to clone, never about hubs', async () => {
+    const { p, calls, run } = setup(['join', gitCode, 'codex', 'dir', '../elsewhere', 'bob']);
+    expect(await run()).toBe(0);
+    const where = p.asked.find((a) => a.message.startsWith('Where should the team repo'))!;
+    expect(where.message).toContain(remoteUrl);
+    expect(where.choices!.map((c) => c.value)).toEqual(['here', 'dir', 'cwd']);
+    expect(p.asked.some((a) => a.message.startsWith('Hub URL'))).toBe(false);
+    expect(calls.join).toEqual([[gitCode, { agent: 'codex', install: true, clone: true, as: 'bob', dir: '../elsewhere' }]]);
+  });
+
+  it('joins with an at1- code inside a clone of the team repo without asking where', async () => {
+    const { p, calls, run } = setup(['join', gitCode, 'codex', 'bob'], { table: withRemote('git@github.com:me/app.git') });
+    expect(await run()).toBe(0);
+    expect(p.asked.some((a) => a.message.startsWith('Where'))).toBe(false);
+    expect(calls.join).toEqual([[gitCode, { agent: 'codex', install: true, clone: false, as: 'bob' }]]);
   });
 });

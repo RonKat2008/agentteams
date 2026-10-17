@@ -44,12 +44,24 @@ describe('choices', () => {
     expect(agentChoices(tools, ['codex', 'gemini']).map((c) => c.value)).toEqual(['claude']);
   });
 
-  it('asks who will be on the team: local first, git disabled until it ships, a hub server last', () => {
+  it('asks who will be on the team: local first, git (needs a remote), a hub server last', () => {
     const kinds = teamKindChoices();
     expect(kinds.map((k) => k.value)).toEqual(['local', 'git', 'hub']);
     expect(kinds[0]!.label).toBe('Just my agents on this computer');
-    expect(kinds[1]).toMatchObject({ disabled: true, hint: 'coming soon' });
+    expect(kinds[1]).toMatchObject({ disabled: true, hint: 'add a git remote first (e.g. a GitHub repo)' });
     expect(kinds[2]!.label).toBe('A hub server (advanced)');
+    const withRemote = teamKindChoices({ remoteUrl: 'https://github.com/me/app.git' });
+    expect(withRemote[1]).toMatchObject({ value: 'git', hint: 'https://github.com/me/app.git' });
+    expect(withRemote[1]!.disabled).toBeFalsy();
+    const withGh = teamKindChoices({ remoteUrl: null, newRepo: true, teamName: 'squad' });
+    expect(withGh.map((k) => k.value)).toEqual(['local', 'git', 'newRepo', 'hub']);
+    expect(withGh[2]!.label).toContain('./squad');
+  });
+
+  it('accepts git invite codes as well as hub codes', () => {
+    expect(validateInviteCode('at1-' + 'a'.repeat(120))).toBeUndefined();
+    expect(validateInviteCode('at1-short')).toBeDefined();
+    expect(validateInviteCode('at1-' + 'A'.repeat(120))).toBeDefined();
   });
 
   it('a hub server answer is an http(s) URL or "local"', () => {

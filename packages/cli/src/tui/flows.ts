@@ -1,5 +1,5 @@
 import { defaultMemberName, type ToolKind } from '@agentteams/shared';
-import { createCommand, teammateJoinCommand, type CreateOpts, type CreateResult } from '../commands/create.js';
+import { createCommand, teammateJoinCommand, validateNewRepoArgs, type CreateOpts, type CreateResult } from '../commands/create.js';
 import { joinCommand, type JoinOpts } from '../commands/join.js';
 import { logCommand, type LogOpts } from '../commands/log.js';
 import { dateOnly } from '../commands/shared.js';
@@ -7,11 +7,14 @@ import { statusCommand } from '../commands/status.js';
 import type { UpOptions } from '../commands/up.js';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
+import { decodeInvite } from '../git/invite.js';
+import { findRemoteFor, pickRemote, remoteFetchUrl, repoNameOf, stripCredentials } from '../git/remoteUrl.js';
+import { INVITE_WARNING, inviteCodeOf } from '../git/setup.js';
 import { hubUrlFrom } from '../paths.js';
-import { detectGithubSlug, isGitRepo } from '../repo.js';
+import { detectGithubSlug, isGitRepo, repoRoot } from '../repo.js';
 import {
-  agentChoices, createOptions, joinOptions, repoChoices, teamKindChoices,
-  validateHubTarget, validateInviteCode, validateMemberName, validateTeamName, type TeamKind,
+  agentChoices, createOptions, isGitInviteCode, joinOptions, repoChoices, teamKindChoices,
+  validateHubTarget, validateInviteCode, validateMemberName, validateTeamName, type RepoChoice, type TeamKind,
 } from './choices.js';
 import type { ToolChoice } from './detect.js';
 import type { Prompter } from './prompter.js';
@@ -82,24 +85,45 @@ async function pickHubServer(ctx: TuiContext): Promise<{ hub: string; as?: strin
   return { hub, as: await memberName(ctx) };
 }
 
-export async function createFlow(ctx: TuiContext): Promise<void> {
-  const { deps, p } = ctx;
-  const name = await p.text('Team name', { placeholder: 'my-team', validate: validateTeamName });
-  const agent = (await pickAgent(ctx, 'Which agent do you want to link?'))!;
-  const kind = await p.select<TeamKind>('Who will be on this team?', teamKindChoices(), 'local');
-  const isGit = await isGitRepo(deps, deps.cwd);
-  const repoCtx = { isGit, slug: await detectGithubSlug(deps, deps.cwd), hasGh: ctx.hasGh, localTeam: kind === 'local' };
-  const choices = repoChoices(repoCtx, name);
+/** This repo's git remote for a new team, credentials stripped, or null (none, or several and none is origin). */
+async function remoteHere(deps: CliDeps): Promise<string | null> {
+  try {
+    const name = await pickRemote(deps, deps.cwd);
+    const url = name ? await remoteFetchUrl(deps, deps.cwd, name) : null;
+    return url ? stripCredentials(url) : null;
+  } catch {
+    return null;
+  }
+}
+
+const canCreateRepo = (name: string): boolean => {
+  try { validateNewRepoArgs(name); return true; } catch { return false; }
+};
+
+/** Which repo a local or hub team is for (a git team is for this repo, or the new GitHub repo). */
+async function pickRepo(ctx: TuiContext, name: string, kind: TeamKind, isGit: boolean): Promise<RepoChoice> {
+  const repoCtx = { isGit, slug: await detectGithubSlug(ctx.deps, ctx.deps.cwd), hasGh: ctx.hasGh, localTeam: kind === 'local' };
+  // A new GitHub repo is for sharing the team, so it is offered as its own "who" answer, not for a local team.
+  const choices = repoChoices(repoCtx, name).filter((c) => kind !== 'local' || c.value !== 'new');
   if (choices.length === 0) throw new Error('a team for agents on this computer lives in a git repository; run "git init" here first');
-  const repo = await p.select('Which repo is this team for?', choices);
-  const visibility = repo === 'new'
-    ? await p.select<'private' | 'public'>('New repo visibility', [
-      { value: 'private', label: 'Private' }, { value: 'public', label: 'Public' }], 'private')
-    : undefined;
-  const { hub, as } = kind === 'hub' ? await pickHubServer(ctx) : { hub: undefined, as: await memberName(ctx) };
-  // "Just my agents on this computer" means a local team even when AGENTTEAMS_HUB is set in the environment.
-  const createDeps = hub ? deps : { ...deps, env: { ...deps.env, AGENTTEAMS_HUB: '' } };
-  const res = await ctx.commands.create(createDeps, name, createOptions({ name, agent, repo, visibility, hub, as }));
+  return ctx.p.select('Which repo is this team for?', choices);
+}
+
+const pickVisibility = (p: Prompter) => p.select<'private' | 'public'>('New repo visibility', [
+  { value: 'private', label: 'Private' }, { value: 'public', label: 'Public' }], 'private');
+
+function createdBox(p: Prompter, res: CreateResult): void {
+  if (res.remoteUrl) {
+    p.box([
+      `Shared through ${res.remoteUrl}`,
+      '',
+      'Send teammates this command (they also need access to the repo):',
+      `  ${teammateJoinCommand(res.inviteCode, '')}`,
+      '',
+      INVITE_WARNING,
+    ].join('\n'), ` Team "${res.teamName}" is ready `);
+    return;
+  }
   p.box([
     `Invite code: ${res.inviteCode}   (expires ${dateOnly(res.inviteExpiresAt)})`,
     '',
@@ -108,10 +132,55 @@ export async function createFlow(ctx: TuiContext): Promise<void> {
   ].join('\n'), ` Team "${res.teamName}" is ready `);
 }
 
+export async function createFlow(ctx: TuiContext): Promise<void> {
+  const { deps, p } = ctx;
+  const name = await p.text('Team name', { placeholder: 'my-team', validate: validateTeamName });
+  const agent = (await pickAgent(ctx, 'Which agent do you want to link?'))!;
+  const isGit = await isGitRepo(deps, deps.cwd);
+  const remoteUrl = isGit ? await remoteHere(deps) : null;
+  const kinds = teamKindChoices({ remoteUrl, newRepo: ctx.hasGh && !isGit && canCreateRepo(name), teamName: name });
+  const kind = await p.select<TeamKind>('Who will be on this team?', kinds, 'local');
+  // A git team is for this repo (its remote), or for the GitHub repo created for it.
+  const repo: RepoChoice = kind === 'git' ? 'link' : kind === 'newRepo' ? 'new' : await pickRepo(ctx, name, kind, isGit);
+  const visibility = repo === 'new' ? await pickVisibility(p) : undefined;
+  const { hub, as } = kind === 'hub' ? await pickHubServer(ctx) : { hub: undefined, as: await memberName(ctx) };
+  // Without a hub the choice is explicit even when AGENTTEAMS_HUB is set in the environment.
+  const createDeps = hub ? deps : { ...deps, env: { ...deps.env, AGENTTEAMS_HUB: '' } };
+  const opts = createOptions({ name, agent, repo, visibility, hub, as, kind });
+  createdBox(p, await ctx.commands.create(createDeps, name, opts));
+}
+
+/** Where an at1- team's repo should live: no question when this directory already is a clone of it. */
+async function pickCloneTarget(ctx: TuiContext, code: string): Promise<{ clone: boolean; dir?: string }> {
+  const { deps, p } = ctx;
+  let url: string;
+  try { url = decodeInvite(code.trim()).remote; } catch (e) { throw new Error(`invalid invite code: ${(e as Error).message}`); }
+  const isGit = await isGitRepo(deps, deps.cwd);
+  if (isGit && (await findRemoteFor(deps, await repoRoot(deps, deps.cwd), url))) return { clone: false };
+  const name = repoNameOf(url) ?? 'team-repo';
+  const where = await p.select<'here' | 'dir' | 'cwd'>(`Where should the team repo (${url}) be cloned?`, [
+    { value: 'here', label: `Clone it into ./${name}` },
+    { value: 'dir', label: 'Clone it into another folder' },
+    ...(isGit ? [{ value: 'cwd' as const, label: 'Use the current directory', hint: 'no clone' }] : []),
+  ], 'here');
+  if (where === 'cwd') return { clone: false };
+  if (where === 'here') return { clone: true };
+  const dir = await p.text('Folder to clone into', { placeholder: `../${name}`, validate: (v) => (v.trim() ? undefined : 'enter a folder') });
+  return { clone: true, dir };
+}
+
 export async function joinFlow(ctx: TuiContext): Promise<void> {
   const { deps, p } = ctx;
-  const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
+  const code = await p.text('Invite code', { placeholder: 'at1-... or abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
   const agent = (await pickAgent(ctx, 'Which agent do you want to link?'))!;
+  if (isGitInviteCode(code)) {
+    // A team shared through git: no hub; clone the repo unless this directory is a clone of it.
+    const target = await pickCloneTarget(ctx, code);
+    const args = joinOptions({ code, agent, as: await memberName(ctx), ...target });
+    await ctx.commands.join(deps, args.code, args.opts);
+    p.success('Joined. Open your agent in the repo to start working with the team.');
+    return;
+  }
   if (ctx.localTeam) {
     // This repo holds a local team: the code is for it, so no hub and nothing to clone.
     const args = joinOptions({ code, agent, as: await memberName(ctx), clone: false });
@@ -139,10 +208,17 @@ export async function linkFlow(ctx: TuiContext): Promise<void> {
   const cred = ctx.linked[0]!;
   const agent = await pickAgent(ctx, 'Which agent do you want to add?', ctx.linked.map((c) => c.tool));
   if (!agent) { p.info('Every agent is already linked to this team.'); return; }
-  p.info(`Paste the invite code for "${cred.teamName}" (printed by create; "agentteams invite rotate" issues a new one).`);
-  const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
   // Same person, another tool: agent names are <member>-<tool>. Hosted hubs ignore this and use the gh login.
   const member = cred.agentName.endsWith(`-${cred.tool}`) ? cred.agentName.slice(0, -cred.tool.length - 1) : undefined;
+  if (cred.transport === 'git') {
+    // A git team's code is derived from the stored team key: nothing to paste.
+    const args = joinOptions({ code: (await inviteCodeOf(deps, cred)).code, agent, as: member, clone: false });
+    await ctx.commands.join(deps, args.code, args.opts);
+    p.success(`${agent} is linked to "${cred.teamName}".`);
+    return;
+  }
+  p.info(`Paste the invite code for "${cred.teamName}" (printed by create; "agentteams invite rotate" issues a new one).`);
+  const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
   const hub = cred.transport === 'local' ? undefined : cred.hubUrl;
   const args = joinOptions({ code, agent, hub, as: member, clone: false });
   await ctx.commands.join(deps, args.code, args.opts);
