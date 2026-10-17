@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { newTeamKey } from '../../src/git/crypto.js';
-import { decodeInvite, encodeInvite, isValidRemote } from '../../src/git/invite.js';
+import { newAgentKeyPair, newTeamKey } from '../../src/git/crypto.js';
+import { decodeInvite, encodeInvite, isValidRemote, MAX_INVITE_LENGTH } from '../../src/git/invite.js';
+
+const creator = { agentId: '01M53M31E10004AT4C85BXMTTX', publicKey: newAgentKeyPair().publicKey };
+/** A raw v1 payload with a valid creator, for crafted-payload tests. */
+const rawPayload = (key: Buffer, teamId: Buffer, remote: Buffer, version = 1): Buffer => Buffer.concat([
+  Buffer.from([version]), key, Buffer.from(creator.publicKey, 'base64url'), Buffer.from([creator.agentId.length]),
+  Buffer.from(creator.agentId), Buffer.from([teamId.length]), teamId, remote,
+]);
 
 const remotes = [
   'https://github.com/acme/repo.git',
@@ -30,18 +37,18 @@ function b32(data: Buffer): string {
 describe('invite', () => {
   it.each(remotes)('round-trips %s', (remote) => {
     const key = newTeamKey();
-    const code = encodeInvite({ remote, teamId: 'team_01-abc', key });
+    const code = encodeInvite({ remote, teamId: 'team_01-abc', key, creator });
     expect(code).toMatch(/^at1-[a-z2-7]+$/);
-    expect(decodeInvite(code)).toEqual({ remote, teamId: 'team_01-abc', key });
+    expect(decodeInvite(code)).toEqual({ remote, teamId: 'team_01-abc', key, creator });
     expect(decodeInvite(`  ${code}\n`).remote).toBe(remote);
   });
 
   it('is reasonably compact', () => {
-    const code = encodeInvite({ remote: 'git@github.com:acme/repo.git', teamId: 'abc123', key: newTeamKey() });
-    expect(code.length).toBeLessThanOrEqual(112);
+    const code = encodeInvite({ remote: 'git@github.com:acme/repo.git', teamId: 'abc123', key: newTeamKey(), creator });
+    expect(code.length).toBeLessThanOrEqual(210);
   });
 
-  const good = encodeInvite({ remote: 'https://github.com/a/b.git', teamId: 'abc', key: newTeamKey() });
+  const good = encodeInvite({ remote: 'https://github.com/a/b.git', teamId: 'abc', key: newTeamKey(), creator });
   it('rejects wrong prefix', () => {
     expect(() => decodeInvite(good.replace('at1-', 'at2-'))).toThrow(/start with "at1-"/);
     expect(() => decodeInvite('hello')).toThrow(/invite code/);
@@ -57,10 +64,10 @@ describe('invite', () => {
   it('rejects bad schemes on encode', () => {
     const key = newTeamKey();
     for (const remote of ['http://example.com/r.git', 'ftp://x/y', 'relative/path', 'git@host', '--upload-pack=x', '']) {
-      expect(() => encodeInvite({ remote, teamId: 'abc', key })).toThrow(/remote/);
+      expect(() => encodeInvite({ remote, teamId: 'abc', key, creator })).toThrow(/remote/);
     }
-    expect(() => encodeInvite({ remote: '/x', teamId: 'bad id', key })).toThrow(/team id/);
-    expect(() => encodeInvite({ remote: '/x', teamId: 'abc', key: 'short' })).toThrow(/key/);
+    expect(() => encodeInvite({ remote: '/x', teamId: 'bad id', key, creator })).toThrow(/team id/);
+    expect(() => encodeInvite({ remote: '/x', teamId: 'abc', key: 'short', creator })).toThrow(/key/);
   });
 
   it('rejects option-like, control and bidi remotes', () => {
@@ -88,7 +95,7 @@ describe('invite', () => {
 
   it('rejects crafted payloads on decode (bad scheme, option host, invalid UTF-8)', () => {
     const key = Buffer.from(newTeamKey(), 'base64url');
-    const craft = (remote: Buffer) => 'at1-' + b32(Buffer.concat([key, Buffer.from([3]), Buffer.from('abc'), remote]));
+    const craft = (remote: Buffer) => 'at1-' + b32(rawPayload(key, Buffer.from('abc'), remote));
     expect(decodeInvite(craft(Buffer.from('https://example.com/r'))).remote).toBe('https://example.com/r');
     expect(() => decodeInvite(craft(Buffer.from('http://example.com/r')))).toThrow(/unsupported remote/);
     expect(() => decodeInvite(craft(Buffer.from('ext::sh -c id')))).toThrow(/unsupported remote/);
@@ -99,7 +106,7 @@ describe('invite', () => {
   it('keeps and rejects a BOM at the start of the remote', () => {
     const key = Buffer.from(newTeamKey(), 'base64url');
     const remote = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('/tmp/x')]);
-    const code = 'at1-' + b32(Buffer.concat([key, Buffer.from([3]), Buffer.from('abc'), remote]));
+    const code = 'at1-' + b32(rawPayload(key, Buffer.from('abc'), remote));
     expect(() => decodeInvite(code)).toThrow(/unsupported remote/);
   });
 
@@ -112,5 +119,29 @@ describe('invite', () => {
     const idx = alphabet.indexOf(body.slice(-1));
     const bumped = 'at1-' + body.slice(0, -1) + alphabet[idx | 1];
     if (idx % 2 === 0) expect(() => decodeInvite(bumped)).toThrow();
+  });
+
+  it('carries the creator, and decodes strictly (version, creator id, tampering)', () => {
+    const key = Buffer.from(newTeamKey(), 'base64url');
+    const ok = 'at1-' + b32(rawPayload(key, Buffer.from('abc'), Buffer.from('/tmp/r')));
+    expect(decodeInvite(ok).creator).toEqual(creator);
+    expect(ok.length).toBeLessThanOrEqual(MAX_INVITE_LENGTH);
+    expect(() => decodeInvite('at1-' + b32(rawPayload(key, Buffer.from('abc'), Buffer.from('/tmp/r'), 2)))).toThrow(/unsupported version/);
+    // a creator id with a bad character, or of length 0
+    const bad = rawPayload(key, Buffer.from('abc'), Buffer.from('/tmp/r'));
+    bad[1 + 32 + 32 + 1] = 0x2d; // '-'
+    expect(() => decodeInvite('at1-' + b32(bad))).toThrow(/creator id/);
+    const zero = Buffer.concat([Buffer.from([1]), key, Buffer.from(creator.publicKey, 'base64url'), Buffer.from([0, 3]), Buffer.from('abc/tmp/r')]);
+    expect(() => decodeInvite('at1-' + b32(zero))).toThrow(/truncated or corrupt/);
+    // flipping a bit of the creator key changes the decoded creator (join then refuses the team: see gitTeam tests)
+    const flipped = rawPayload(key, Buffer.from('abc'), Buffer.from('/tmp/r'));
+    flipped[1 + 32] ^= 1;
+    expect(decodeInvite('at1-' + b32(flipped)).creator.publicKey).not.toBe(creator.publicKey);
+  });
+
+  it('refuses to encode an invalid creator', () => {
+    const key = newTeamKey();
+    expect(() => encodeInvite({ remote: '/x', teamId: 'abc', key, creator: { ...creator, publicKey: 'short' } })).toThrow(/creator public key/);
+    expect(() => encodeInvite({ remote: '/x', teamId: 'abc', key, creator: { ...creator, agentId: 'bad id' } })).toThrow(/creator agent id/);
   });
 });
