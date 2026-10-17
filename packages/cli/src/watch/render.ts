@@ -59,7 +59,7 @@ function layout(st: WatchState, o: RenderOpts, p: Palette): Layout {
   const header = [headerLine(st, o, p), ...notices(st, o, p)].slice(0, Math.max(1, o.height - 6));
   const bodyH = o.height - header.length - 1;
   if (o.width >= WIDE_WIDTH) {
-    const leftW = Math.floor((o.width - SEPARATOR.length) * 0.55);
+    const leftW = Math.floor((o.width - SEPARATOR.length) * 0.6);
     const agentRows = Math.max(1, visibleAgents(st).length + 1);
     const agentsH = Math.min(agentRows + 1, Math.max(4, Math.floor(bodyH * 0.6)));
     return {

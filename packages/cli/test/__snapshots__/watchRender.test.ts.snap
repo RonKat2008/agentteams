@@ -29,44 +29,44 @@ exports[`renderFrame > 80x24: header, agents, tasks, feed and footer, every line
 
 exports[`renderFrame > 120x40: side-by-side panels with whole message bodies wrapped in the feed 1`] = `
 " shop-api · shared via /tmp/remote.git · synced 4s ago · ★ alice-claude                                        12:00:00 
-── Agents · 4 ────────────────────────────────────────────────── │ ── Activity · newest first ──────────────────────────
-  AGENT         TOOL    STATE      TASK              LAST        │ 11:59:30 alice-claude command → sam-gemini: "Yes,    
-● alice-claude  claude  active     —                  30s  ★ you │                       in-memory.                     
-● jamie-claude  claude  ⠋ working  #1 Rate-limit P…    1m        │                       Real DB only in CI."           
-◐ kai-cursor    cursor  idle       #2 Show order t…    5s        │ 11:59:00 sam-gemini   question → alice-claude:       
-○ sam-gemini    gemini  offline    —                   1m        │                       "Should order tests use the    
-── Tasks · open 1 · in progress 2 · done 1 · merged 1 ────────── │                       in-memory store? Or the real   
-▶ #1 Rate-limit POST /login                         jamie-claude │                       database we run in CI on every 
-▶ #2 Show order total on checkout                   kai-cursor   │                       push?"                         
-○ #3 Tests for the orders API                       sam-gemini   │ 11:58:30 jamie-claude started #1 "Rate-limit POST    
-                                                                 │                       /login"                        
-                                                                 │ 11:58:00 alice-claude created #1 "Rate-limit POST    
-                                                                 │                       /login" → jamie-claude         
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
-                                                                 │                                                      
+── Agents · 4 ──────────────────────────────────────────────────────── │ ── Activity · newest first ────────────────────
+  AGENT         TOOL    STATE      TASK                    LAST        │ 11:59:30 alice-claude command → sam-gemini:    
+● alice-claude  claude  active     —                        30s  ★ you │                       "Yes, in-memory.         
+● jamie-claude  claude  ⠋ working  #1 Rate-limit POST /l…    1m        │                       Real DB only in CI."     
+◐ kai-cursor    cursor  idle       #2 Show order total o…    5s        │ 11:59:00 sam-gemini   question → alice-claude: 
+○ sam-gemini    gemini  offline    —                         1m        │                       "Should order tests use  
+── Tasks · open 1 · in progress 2 · done 1 · merged 1 ──────────────── │                       the in-memory store? Or  
+▶ #1 Rate-limit POST /login                               jamie-claude │                       the real database we run 
+▶ #2 Show order total on checkout                         kai-cursor   │                       in CI on every push?"    
+○ #3 Tests for the orders API                             sam-gemini   │ 11:58:30 jamie-claude started #1 "Rate-limit   
+                                                                       │                       POST /login"             
+                                                                       │ 11:58:00 alice-claude created #1 "Rate-limit   
+                                                                       │                       POST /login" →           
+                                                                       │                       jamie-claude             
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
+                                                                       │                                                
  q quit  ↑↓ scroll  r refresh  a only active  ? help                                                     updated 1s ago "
 `;
 
