@@ -56,7 +56,7 @@ export interface SyncSummary {
   skipped?: 'locked' | 'queued';
   fetched: boolean;
   pushed: boolean;
-  /** Ops newly verified from the team's refs (including our own log). */
+  /** Ops newly verified from the team's refs (teammates' logs, and our own only when it came from elsewhere). */
   ingested: number;
   /** Own pending ops appended to our log. */
   published: number;
@@ -134,10 +134,9 @@ async function verifiedOwnTip(deps: Deps, repo: string, view: GitView, lock: Syn
   const { teamId, agentId } = view.git;
   const tip = await localAgentHead(deps, repo, teamId, agentId);
   if (!tip) return null;
-  // Our own ops in this log were applied locally when they were written.
+  // Our own ops in this log were applied locally when they were written, and are not "received" either.
   const r = await ingestAgents(deps, repo, view, lock, [{ agent: agentId, tip, local: true }], null, false);
   summary.problems.push(...r.problems);
-  summary.ingested += r.ops.length;
   const state = (await view.files.readLogState()).agents[agentId];
   return state?.doneTip === tip && !state.stuck ? tip : null;
 }
@@ -570,7 +569,8 @@ export function formatSyncSummary(s: SyncSummary): string {
   const parts = [
     s.fetched ? 'fetched' : 'fetch failed',
     `${s.ingested} op${s.ingested === 1 ? '' : 's'} received`,
-    `${s.published} sent`,
+    // Published = appended to our local log; it only left this machine if the round pushed.
+    s.published > 0 && !s.pushed ? `${s.published} queued (not pushed yet)` : `${s.published} sent`,
     s.pushed ? 'pushed' : null,
     s.restored ? 'own log restored' : null,
     s.morePending ? 'more to read next round' : null,

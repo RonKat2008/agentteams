@@ -128,8 +128,11 @@ export class GitTeamClient implements TeamClient {
       const ids = peek.messages.filter((m) => !peek.notices.includes(m.id)).map((m) => m.id);
       if (ids.length > 0) await this.execute('markRead', { messageIds: ids });
       if (peek.notices.length > 0) {
-        await this.read(async (view) => view.store.ctx.db.updateTable('replica_notices').set({ delivered_at: new Date(this.now()).toISOString() })
-          .where('op_id', 'in', peek.notices).execute());
+        // Returns nothing: the UpdateResult holds a BigInt, which the JSON round trip in read() cannot serialize.
+        await this.read(async (view) => {
+          await view.store.ctx.db.updateTable('replica_notices').set({ delivered_at: new Date(this.now()).toISOString() })
+            .where('op_id', 'in', peek.notices).execute();
+        });
       }
     }
     return { agent: peek.agent, messages: peek.messages };
