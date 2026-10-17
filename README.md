@@ -333,8 +333,10 @@ pushed from other computers are found; a remote branch newer than the local one 
 
 - **Conflicts.** A branch that conflicts is skipped (its merge aborted) and the others still merge. The report names
   the conflicting files and the earlier task they conflict with, and the task's agent gets a command message asking it
-  to rebase onto the base (`--no-notify` skips the message). `--stop-on-conflict` stops at the first conflict instead,
-  lands nothing and leaves the conflicted merge in the integration worktree for you to resolve.
+  to rebase onto the base (`--no-notify` skips the message). The message is sent once the base has what the task
+  conflicts with: after landing, or right away when the conflict is with the base itself (never on `--dry-run`).
+  `--stop-on-conflict` stops at the first conflict instead, lands nothing and leaves the conflicted merge in the
+  integration worktree for you to resolve; it prints the commands to land and record it by hand afterwards.
 - **Tests.** `--test "<cmd>"` runs that command with `sh -c` in the integration worktree, without asking. Without it
   the command is detected from the base branch's files (never from a task branch) and printed: a `package.json`
   `test` script (`pnpm test`, `yarn test` or `npm test` by lockfile; the dependencies are installed first, with
@@ -353,13 +355,13 @@ pushed from other computers are found; a remote branch newer than the local one 
   quoted, length-capped data (at most 10 names), labelled as data rather than instructions. A task whose recorded
   branch is not a valid branch name is skipped.
 - **Landing.** When the tests pass, the base is fast-forwarded to the integration result, the merged tasks are recorded
-  as merged (the team log shows each one, and each assignee is told) and the integration worktree is removed. The base
-  is only moved when the main checkout is on it with no uncommitted changes; otherwise the result stays on branch
+  as merged (the team log shows each one, and each assignee is told) and the integration worktree and branch are
+  removed. The base is only moved when the main checkout is on it with no uncommitted changes; otherwise the result stays on branch
   `agentteams/merge` and the exact commands to land and record it are printed. Nothing is pushed unless you pass
   `--push`.
 - **Failures.** If the tests fail, the base is untouched, nothing is recorded, and the integration worktree is kept
   (its path is printed) so you can look; the next `agentteams merge` replaces it.
-- `--dry-run` merges and tests but never moves the base or records anything.
+- `--dry-run` merges and tests but never moves the base, records anything or messages agents.
 
 It exits 0 when every finished task merged and landed, and 1 when anything was skipped, conflicted, failed or was
 not landed.

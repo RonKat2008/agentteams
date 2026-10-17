@@ -99,6 +99,41 @@ describe('agentteams merge', () => {
     expect(inbox[0]!.body).toContain('a.txt');
   });
 
+  const rebaseAsks = async () => (await bob.ping(false)).messages.filter((m) => m.kind === 'command' && /rebase/i.test(m.body));
+
+  it('--dry-run asks nobody to rebase', async () => {
+    await finishedTask('Edit A one way', { 'a.txt': 'one\n' });
+    const t2 = await finishedTask('Edit A another way', { 'a.txt': 'two\n' });
+    expect(await run('merge', '--test', 'exit 0', '--dry-run')).toBe(1);
+    expect(await rebaseAsks()).toHaveLength(0);
+    expect(out()).toMatch(new RegExp(`#${t2}.*conflict`));
+    expect(out()).not.toMatch(/asked .* to rebase/);
+  });
+
+  it('when nothing lands, an agent whose task conflicts with an unlanded task is not asked to rebase', async () => {
+    await finishedTask('Edit A one way', { 'a.txt': 'one\n' });
+    await finishedTask('Edit A another way', { 'a.txt': 'two\n' });
+    expect(await run('merge', '--test', 'exit 1')).toBe(1);
+    expect(await rebaseAsks()).toHaveLength(0); // rebasing onto main would not help: main does not have the other task
+  });
+
+  it('when nothing lands, an agent whose task conflicts with the base itself is still asked to rebase', async () => {
+    const t1 = await finishedTask('Edit A', { 'a.txt': 'branch\n' });
+    await finishedTask('Add C', { 'c.txt': 'c\n' });
+    writeFileSync(join(r.repo, 'a.txt'), 'main moved on\n');
+    git(r.repo, 'commit', '-q', '-am', 'main edit');
+    expect(await run('merge', '--test', 'exit 1')).toBe(1);
+    const asks = await rebaseAsks();
+    expect(asks).toHaveLength(1);
+    expect(asks[0]!.body).toContain(`Task #${t1} conflicts with changes on main`);
+  });
+
+  it('removes the integration branch once the base has landed', async () => {
+    await finishedTask('Login', { 'login.txt': 'login\n' });
+    expect(await run('merge', '--test', 'exit 0')).toBe(0);
+    expect(git(r.repo, 'branch', '--list', 'agentteams/merge')).toBe('');
+  });
+
   it('--no-notify sends no message', async () => {
     await finishedTask('Edit A one way', { 'a.txt': 'one\n' });
     await finishedTask('Edit A another way', { 'a.txt': 'two\n' });
@@ -119,6 +154,9 @@ describe('agentteams merge', () => {
     expect(git(integrationDir(), 'diff', '--name-only', '--diff-filter=U')).toBe('a.txt');
     expect(existsSync(join(integrationDir(), 'c.txt'))).toBe(false);
     expect(out()).toContain(integrationDir());
+    // How to finish by hand: the next `merge` would start over and drop the resolution.
+    expect(out()).toContain('git merge --ff-only agentteams/merge');
+    expect(out()).toMatch(/agentteams merged 1 --agent claude && agentteams merged 2 --agent claude/);
   });
 
   it('failing tests leave the base untouched, mark nothing and keep the integration worktree', async () => {
