@@ -371,6 +371,25 @@ describe('found by the cross-machine smoke test', () => {
     expect((await client(worker).ping(true)).messages).toEqual([]);
   });
 
+  it('a second agent of a clone is told when another agent\'s round rejects its op', async () => {
+    const { lead, worker } = await twoAgents();
+    const codex = await bootstrap(world, worker.repo, 'join', 'bob', { tool: 'codex' });
+    expect((await sync(codex)).ok).toBe(true);
+    await client(lead).execute('createTask', { title: 'race' });
+    expect((await sync(lead)).ok).toBe(true);
+    expect((await sync(worker)).ok).toBe(true);
+    // Both claim the open task before syncing; the lead's claim is earlier and wins.
+    await client(lead).execute('claimTask', { task: 1 });
+    await client(codex).execute('claimTask', { task: 1 });
+    expect((await sync(lead)).ok).toBe(true);
+    // The worker's (claude) round replays the clone's pending ops, codex's included, and rejects the claim.
+    expect((await sync(worker)).ok).toBe(true);
+    expect((await sync(codex)).ok).toBe(true);
+    const notices = (await client(codex).ping(true)).messages.filter((m) => m.from === 'agentteams');
+    expect(notices.map((m) => m.body)).toEqual([expect.stringMatching(/Your claimTask .* was rejected/)]);
+    expect((await client(worker).ping(true)).messages.filter((m) => m.from === 'agentteams')).toEqual([]);
+  });
+
   it('counts only teammates\' ops as received, not our own ops written to our log this round', async () => {
     const { lead, worker } = await twoAgents();
     await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'one' });

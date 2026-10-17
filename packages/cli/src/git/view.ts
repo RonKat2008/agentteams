@@ -147,11 +147,13 @@ export function replayTarget(view: GitView, onCommit?: (trx: Trx) => Promise<voi
 
 /** applyOps through replayTarget (team creator from the pinned meta; throws if the meta is not pinned yet). */
 export async function applyToView(
-  view: GitView, ops: unknown[], opts: { now: () => number; creator: TeamCreator; onCommit?: (trx: Trx) => Promise<void> },
+  view: GitView, ops: unknown[],
+  opts: { now: () => number; creator: TeamCreator; onCommit?: (trx: Trx) => Promise<void>; localAgentIds?: readonly string[] },
 ): Promise<ApplySummary> {
   const { store, source } = replayTarget(view, opts.onCommit);
   return applyOps(store, ops, {
-    source, teamCreator: opts.creator, localAgentId: view.git.agentId, teamId: view.git.teamId, nowMs: opts.now(),
+    source, teamCreator: opts.creator, localAgentId: view.git.agentId, localAgentIds: opts.localAgentIds, teamId: view.git.teamId,
+    nowMs: opts.now(),
   });
 }
 
