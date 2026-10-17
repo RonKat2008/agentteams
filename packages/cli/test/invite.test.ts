@@ -63,6 +63,30 @@ describe('invite codes can be shown again (local team)', () => {
     } finally { c2.cleanup(); r2.cleanup(); }
   });
 
+  it('rotate and revoke update every credential of the team in this repo, so show never prints a stale code', async () => {
+    const r2 = makeRepo();
+    const c2 = cli(r2.repo);
+    try {
+      expect(await c2.run('create', 'acme', '--agent', 'codex', '--as', 'alice', '--no-install')).toBe(0);
+      const old = codeIn(c2.out);
+      expect(await c2.run('join', old, '--agent', 'claude', '--as', 'alice', '--no-install', '--no-clone')).toBe(0);
+      const claude = (await loadCredentials(c2.deps)).find((x) => x.tool === 'claude')!;
+      const codex = (await loadCredentials(c2.deps)).find((x) => x.tool === 'codex')!;
+      await saveCredential(c2.deps, { ...claude, invite: codex.invite! }); // e.g. copied by an older version
+      c2.out.length = 0;
+      expect(await c2.run('invite', '--rotate', '--agent', 'codex')).toBe(0);
+      const fresh = codeIn(c2.out);
+      c2.out.length = 0;
+      expect(await c2.run('invite')).toBe(0); // claude sorts first
+      expect(c2.out.join('\n')).toContain(`Invite code: ${fresh}`);
+      expect(await c2.run('invite', '--revoke', '--agent', 'codex')).toBe(0);
+      c2.out.length = 0;
+      expect(await c2.run('invite')).toBe(1);
+      expect(c2.out.join('\n')).not.toContain(fresh);
+      expect((await loadCredentials(c2.deps)).map((x) => x.invite)).toEqual([undefined, undefined]);
+    } finally { c2.cleanup(); r2.cleanup(); }
+  });
+
   it('rotate (subcommand or --rotate) replaces the stored code', async () => {
     const first = (await credOf(c)).invite!.code;
     c.out.length = 0;

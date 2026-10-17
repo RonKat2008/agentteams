@@ -61,11 +61,17 @@ export async function inviteCommand(deps: CliDeps, action: InviteAction, opts: {
   const client = clientFor(deps, cred);
   if (action === 'rotate') {
     const res = await client.rotateInvite();
-    await saveCredential(deps, withInvite(cred, { code: res.inviteCode, expiresAt: res.inviteExpiresAt }));
+    await storeInvite(deps, cred, { code: res.inviteCode, expiresAt: res.inviteExpiresAt });
     printInvite(deps, res.inviteCode, res.inviteExpiresAt, hubUrl, 'New invite code');
   } else {
     await client.revokeInvite();
-    await saveCredential(deps, withInvite(cred, undefined));
+    await storeInvite(deps, cred, undefined);
     deps.out('Invite code revoked.');
   }
+}
+
+/** Every credential of `cred`'s team in this repo gets the new invite (or loses it), so `show` never finds a stale one. */
+async function storeInvite(deps: CliDeps, cred: Credential, invite: Credential['invite']): Promise<void> {
+  const sameTeam = (await loadCredentials(deps)).filter((c) => c.repoPath === cred.repoPath && teamKey(c) === teamKey(cred));
+  for (const c of sameTeam) await saveCredential(deps, withInvite(c, invite));
 }
