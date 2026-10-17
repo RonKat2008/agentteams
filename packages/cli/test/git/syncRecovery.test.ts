@@ -1,7 +1,8 @@
-import { sql } from '@agentteams/hub/core';
+import { createSqliteDb, sql } from '@agentteams/hub/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitTeamClient } from '../../src/git/client.js';
 import { syncRound } from '../../src/git/sync.js';
+import { setStoreLockWait } from '../../src/local/store.js';
 import { bootstrap, deps, dump, makeWorld, view, type Agent, type World } from './syncHelpers.js';
 
 let world: World;
@@ -49,5 +50,23 @@ describe('apply failures', () => {
     expect(next.rebuilt).toBe(false);
     expect(next.applied).toBeGreaterThan(0);
     expect(await bodies(lead)).toContain('later');
+  });
+});
+
+describe('a busy database', () => {
+  it('reads still answer while a sync holds the write lock: presence is skipped, not waited for', async () => {
+    const { lead } = await twoAgents();
+    const { store } = await view(lead);
+    const other = createSqliteDb(store.path);
+    await setStoreLockWait(50);
+    await sql`begin immediate`.execute(other);
+    try {
+      const status = await client(lead).status();
+      expect(status.agents.length).toBe(2);
+    } finally {
+      await sql`rollback`.execute(other);
+      await other.destroy();
+      await setStoreLockWait(5000);
+    }
   });
 });

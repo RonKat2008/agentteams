@@ -14,6 +14,22 @@ export interface TeamStore {
 const STORE_DIR_MODE = 0o700;
 const STORE_FILE_MODE = 0o600;
 const stores = new Map<string, Promise<TeamStore>>();
+/** Process-wide wait for another process's write lock (undefined = the hub default, 5 s). */
+let lockWaitMs: number | undefined;
+
+/**
+ * Caps how long this process waits for another process's SQLite write lock, for stores opened from now on and
+ * stores already open. Hooks set a short wait: a long sync apply makes them give up (SQLITE_BUSY, nothing
+ * delivered this time) instead of blocking the agent for seconds.
+ */
+export async function setStoreLockWait(ms: number): Promise<void> {
+  const value = Math.max(0, Math.trunc(ms));
+  lockWaitMs = value;
+  for (const pending of stores.values()) {
+    const store = await pending.catch(() => null);
+    if (store) await store.core.sql.raw(`pragma busy_timeout = ${value}`).execute(store.ctx.db);
+  }
+}
 
 const dbPaths = new Map<string, Promise<string>>();
 const SIDECARS = ['-wal', '-shm'];
@@ -50,7 +66,7 @@ async function open(path: string): Promise<TeamStore> {
   await mkdir(dirname(path), { recursive: true, mode: STORE_DIR_MODE });
   await chmod(dirname(path), STORE_DIR_MODE);
   await ensurePrivateFile(path);
-  const db = core.createSqliteDb(path);
+  const db = core.createSqliteDb(path, lockWaitMs === undefined ? {} : { busyTimeoutMs: lockWaitMs });
   await core.migrateToLatest(db);
   // WAL sidecars appear once SQLite writes; tighten whichever exist (the 0700 directory covers the rest).
   for (const suffix of SIDECARS) await chmod(path + suffix, STORE_FILE_MODE).catch(() => undefined);

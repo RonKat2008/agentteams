@@ -23,6 +23,8 @@ type Deps = Pick<CliDeps, 'exec'>;
 type ViewModule = typeof import('./view.js');
 
 const INBOX_PAGE = 100;
+/** One presence write per client per this interval: a hook makes several reads, and each would wait on the lock. */
+const HEARTBEAT_INTERVAL_MS = 5_000;
 const NOTICE_SENDER = 'agentteams';
 
 export const GIT_INVITE_REFUSAL =
@@ -38,6 +40,7 @@ export interface GitClientOptions {
 export class GitTeamClient implements TeamClient {
   private readonly now: () => number;
   private readonly trigger: SyncTrigger;
+  private lastBeat = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: Deps, private readonly cred: Credential, opts: GitClientOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -54,13 +57,21 @@ export class GitTeamClient implements TeamClient {
     const { mod, view } = await this.open();
     try {
       const actor = await mod.requireActor(view);
-      await mod.heartbeat(view.store, actor.id, this.now());
+      await this.beat(mod, view, actor.id);
       return wire<T>(await fn(view, actor, mod));
     } catch (err) {
       throw toHubError(view.store.core, err);
     } finally {
       await this.maybeSyncForRead();
     }
+  }
+
+  /** Presence is best effort: a busy database (a sync applying) never fails or repeatedly delays a call. */
+  private async beat(mod: ViewModule, view: GitView, agentId: string): Promise<void> {
+    const now = this.now();
+    if (now - this.lastBeat < HEARTBEAT_INTERVAL_MS) return;
+    this.lastBeat = now;
+    await mod.heartbeat(view.store, agentId, now).catch(() => undefined);
   }
 
   private async maybeSyncForRead(): Promise<void> {
@@ -73,7 +84,7 @@ export class GitTeamClient implements TeamClient {
   async touch(): Promise<void> {
     try {
       const { mod, view } = await this.open();
-      await mod.heartbeat(view.store, view.git.agentId, this.now());
+      await this.beat(mod, view, view.git.agentId);
     } catch { /* presence is best effort */ }
     await this.maybeSyncForRead();
   }
@@ -86,7 +97,7 @@ export class GitTeamClient implements TeamClient {
       const { result, op } = await mod.executeOp(view, name, input, this.now);
       logged = op !== null;
       // The write is applied and queued: a presence hiccup (e.g. SQLITE_BUSY) must not turn it into an error.
-      await mod.heartbeat(view.store, view.git.agentId, this.now()).catch(() => undefined);
+      await this.beat(mod, view, view.git.agentId);
       return wire(result);
     } catch (err) {
       throw toHubError(view.store.core, err);

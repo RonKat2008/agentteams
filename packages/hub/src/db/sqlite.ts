@@ -39,9 +39,12 @@ function enableWal(sqlite: SqliteDatabase.Database): void {
   }
 }
 
-export function createSqliteDb(path: string): Kysely<Database> {
+export const DEFAULT_BUSY_TIMEOUT_MS = 5000;
+
+/** `busyTimeoutMs`: how long a statement waits for another process's write lock before SQLITE_BUSY. */
+export function createSqliteDb(path: string, opts: { busyTimeoutMs?: number } = {}): Kysely<Database> {
   const sqlite = new SqliteDatabase(path);
-  sqlite.pragma('busy_timeout = 5000');
+  sqlite.pragma(`busy_timeout = ${Math.max(0, Math.trunc(opts.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS))}`);
   enableWal(sqlite);
   return new Kysely<Database>({ dialect: new ImmediateSqliteDialect(sqlite) });
 }

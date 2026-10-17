@@ -1,6 +1,7 @@
 import type { ToolKind } from '@agentteams/shared';
 import { resolveCredentialForCwd, type Credential } from './credentials.js';
 import { takeSyncWarning } from './git/syncState.js';
+import { setStoreLockWait } from './local/store.js';
 import type { CliDeps } from './deps.js';
 import type { InboxMessage } from '@agentteams/shared';
 import { fitMessages, formatMessages, formatStatus } from './format.js';
@@ -14,6 +15,11 @@ export { HOOK_EVENTS, HOOK_EVENT_NAMES, type HookEvent };
 export interface HookResult { stdout: string; exitCode: 0 }
 
 const HOOK_TIMEOUT_MS = 2000;
+/**
+ * Local and git teams: the most a hook statement waits for the team.db write lock (a sync apply or rebuild may hold
+ * it for seconds). better-sqlite3 waits synchronously, so this, not a timer, is what bounds the hook.
+ */
+const HOOK_DB_WAIT_MS = 400;
 const NONE: HookOutcome = { type: 'none' };
 
 function parseInput(text: string): Record<string, unknown> {
@@ -108,6 +114,7 @@ export async function runHook(
   deps: Pick<CliDeps, 'env' | 'homedir' | 'cwd' | 'fetch' | 'exec'>,
 ): Promise<HookResult> {
   try {
+    await setStoreLockWait(HOOK_DB_WAIT_MS);
     const input = parseInput(stdinText);
     const dialect = getAdapter(tool).dialect;
     const outcome = await computeOutcome(event, tool, input, dialect.readCwd(input) ?? deps.cwd, deps);
