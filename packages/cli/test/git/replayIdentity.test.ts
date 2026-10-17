@@ -148,16 +148,6 @@ describe('equivocating joins prefer the pinned key', () => {
   });
 });
 
-describe('upgraded views', () => {
-  it('rebuilds once when migration 007 flagged the view', async () => {
-    const r = await replica(() => log.ops);
-    await r.apply(log.ops);
-    await r.store.ctx.db.insertInto('replica_state').values({ key: 'needs_rebuild', value: '1' }).execute();
-    expect(await r.apply([])).toMatchObject({ rebuilt: true });
-    expect(await r.apply([])).toMatchObject({ rebuilt: false });
-  });
-});
-
 describe('competing createTeam variants', () => {
   it('prefer the variant whose key matches the pinned creator, whatever the hashes', async () => {
     const real = log.ops[0]!;

@@ -4,8 +4,6 @@ import type { Database } from './schema.js';
 
 // Only portable column types (text, integer) so the same migrations run on SQLite and Postgres.
 // Keys are sorted as strings. The next key must be `003_...`; use 3-digit prefixes from here on.
-const NOTICE_COPY_CHUNK = 500;
-
 const migrations: Record<string, Migration> = {
   '0001_init': {
     async up(db: Kysely<any>) {
@@ -135,8 +133,14 @@ const migrations: Record<string, Migration> = {
     },
   },
   '006_replication': {
-    // Bookkeeping for the git transport's op-log replay. Created on both dialects (portable types) but only
-    // the CLI's SQLite replicas write to them.
+    // Bookkeeping for the git transport's op-log replay. Created on both dialects (portable types) but only the CLI's
+    // SQLite replicas write to the replica tables.
+    // - applied_ops: one row per evaluated op, keyed by (agent, op_id, hash): op identity is (agent, id), and an
+    //   equivocation loser gets its own row.
+    // - agent_key_pins / team_meta_pins: local trust-on-first-use pins that rebuilds never touch.
+    // - replica_pending: this agent's ops not yet in its published log, local like the pins; written in the same
+    //   transaction as the op's local apply, so an op is either applied and queued, or neither.
+    // - commits are unique per (team, agent, sha, branch): each agent's record stands on its own.
     async up(db: Kysely<any>) {
       await db.schema.createTable('agent_keys')
         .addColumn('agent_id', 'text', (c) => c.primaryKey())
@@ -145,41 +149,6 @@ const migrations: Record<string, Migration> = {
         .addColumn('registered_op_id', 'text', (c) => c.notNull())
         .execute();
 
-      await db.schema.createTable('applied_ops')
-        .addColumn('op_id', 'text', (c) => c.primaryKey())
-        .addColumn('ts', 'text')
-        .addColumn('agent', 'text')
-        .addColumn('status', 'text', (c) => c.notNull())
-        .addColumn('error', 'text')
-        .addColumn('hash', 'text', (c) => c.notNull())
-        .execute();
-      await db.schema.createIndex('applied_ops_order_idx').on('applied_ops').columns(['ts', 'agent', 'op_id']).execute();
-
-      await db.schema.createTable('replica_state')
-        .addColumn('key', 'text', (c) => c.primaryKey())
-        .addColumn('value', 'text', (c) => c.notNull())
-        .execute();
-
-      await db.schema.createTable('replica_notices')
-        .addColumn('op_id', 'text', (c) => c.primaryKey())
-        .addColumn('agent_id', 'text', (c) => c.notNull())
-        .addColumn('body', 'text', (c) => c.notNull())
-        .addColumn('created_at', 'text', (c) => c.notNull())
-        .addColumn('delivered_at', 'text')
-        .execute();
-      await db.schema.createIndex('replica_notices_agent_idx').on('replica_notices').columns(['agent_id', 'op_id']).execute();
-    },
-  },
-  '007_replication_v2': {
-    // Replay hardening (Task 5 review rounds 1-2):
-    // - applied_ops keyed by (agent, op_id, hash): op identity is (agent, id); equivocation losers get their own row.
-    //   A replica that already replayed under 006 used the old row-id scheme, so its view is flagged for a rebuild.
-    // - replica_notices keyed by (agent_id, op_id).
-    // - agent_key_pins / team_meta_pins: local trust-on-first-use pins that rebuilds never touch.
-    // - commits are unique per (team, agent, sha, branch): each agent's record stands on its own.
-    async up(db: Kysely<any>) {
-      const evaluated = await db.selectFrom('applied_ops').select((eb) => eb.fn.countAll().as('n')).executeTakeFirst();
-      await db.schema.dropTable('applied_ops').execute();
       await db.schema.createTable('applied_ops')
         .addColumn('agent', 'text', (c) => c.notNull())
         .addColumn('op_id', 'text', (c) => c.notNull())
@@ -191,13 +160,12 @@ const migrations: Record<string, Migration> = {
         .execute();
       await db.schema.createIndex('applied_ops_order_idx').on('applied_ops').columns(['ts', 'agent', 'op_id']).execute();
       await db.schema.createIndex('applied_ops_id_idx').on('applied_ops').columns(['op_id']).execute();
-      if (Number(evaluated?.n ?? 0) > 0) {
-        await db.insertInto('replica_state').values({ key: 'needs_rebuild', value: '1' })
-          .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: '1' })).execute();
-      }
 
-      const notices = await db.selectFrom('replica_notices').selectAll().execute();
-      await db.schema.dropTable('replica_notices').execute();
+      await db.schema.createTable('replica_state')
+        .addColumn('key', 'text', (c) => c.primaryKey())
+        .addColumn('value', 'text', (c) => c.notNull())
+        .execute();
+
       await db.schema.createTable('replica_notices')
         .addColumn('agent_id', 'text', (c) => c.notNull())
         .addColumn('op_id', 'text', (c) => c.notNull())
@@ -206,31 +174,18 @@ const migrations: Record<string, Migration> = {
         .addColumn('delivered_at', 'text')
         .addPrimaryKeyConstraint('replica_notices_pk', ['agent_id', 'op_id'])
         .execute();
-      // Chunked: one multi-row INSERT per 500 rows stays well under SQLite's bound-variable limit.
-      for (let i = 0; i < notices.length; i += NOTICE_COPY_CHUNK) {
-        await db.insertInto('replica_notices').values(notices.slice(i, i + NOTICE_COPY_CHUNK)).execute();
-      }
 
-      await db.schema.createTable('agent_key_pins').ifNotExists()
+      await db.schema.createTable('agent_key_pins')
         .addColumn('agent_id', 'text', (c) => c.primaryKey())
         .addColumn('public_key', 'text', (c) => c.notNull())
         .addColumn('pinned_at', 'text', (c) => c.notNull())
         .execute();
-      await db.schema.createTable('team_meta_pins').ifNotExists()
+      await db.schema.createTable('team_meta_pins')
         .addColumn('team_id', 'text', (c) => c.primaryKey())
         .addColumn('meta_json', 'text', (c) => c.notNull())
         .addColumn('pinned_at', 'text', (c) => c.notNull())
         .execute();
 
-      await db.schema.dropIndex('commits_team_sha_branch_unique').execute();
-      await db.schema.createIndex('commits_team_agent_sha_branch_unique').unique().on('commits')
-        .columns(['team_id', 'agent_id', 'sha', 'branch']).execute();
-    },
-  },
-  '008_replica_pending': {
-    // Git transport: this agent's ops not yet in its published log. Local like the pins (a rebuild never touches it);
-    // written in the same transaction as the op's local apply, so an op is either applied and queued, or neither.
-    async up(db: Kysely<any>) {
       await db.schema.createTable('replica_pending')
         .addColumn('agent_id', 'text', (c) => c.notNull())
         .addColumn('op_id', 'text', (c) => c.notNull())
@@ -239,6 +194,10 @@ const migrations: Record<string, Migration> = {
         .addColumn('created_at', 'text', (c) => c.notNull())
         .addPrimaryKeyConstraint('replica_pending_pk', ['agent_id', 'op_id'])
         .execute();
+
+      await db.schema.dropIndex('commits_team_sha_branch_unique').execute();
+      await db.schema.createIndex('commits_team_agent_sha_branch_unique').unique().on('commits')
+        .columns(['team_id', 'agent_id', 'sha', 'branch']).execute();
     },
   },
 };

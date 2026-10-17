@@ -13,7 +13,7 @@
  *                            processed; plus the round-robin offset of the ingest budget
  *   deferred.json            verified ops held back from replay for now (future-dated), offered every round
  */
-import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Database, Kysely } from '@agentteams/hub/core';
 import type { Op } from './segment.js';
@@ -21,7 +21,6 @@ import { readJson, syncDir, writeJsonAtomic } from './syncState.js';
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
-const OP_ID_FILE_RE = /^[0-9A-Z]{26}\.json$/;
 const AGENT_FILE_RE = /^([0-9A-Za-z]{10,40})\.jsonl$/;
 
 type Db = Kysely<Database>;
@@ -78,8 +77,6 @@ export interface ReplicaFiles {
   acceptedOps(): Promise<Op[]>;
   readDeferred(): Promise<Op[]>;
   writeDeferred(ops: Op[]): Promise<void>;
-  /** One-time migration from the first Task 7 layout: pins kept in log-state.json, pending ops as files. */
-  takeLegacy(): Promise<{ pins: Record<string, string>; pending: Op[] }>;
 }
 
 async function listDir(dir: string): Promise<string[]> {
@@ -95,13 +92,12 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
   if (!/^[0-9A-Za-z]{10,40}$/.test(teamId)) throw new Error(`invalid team id: ${JSON.stringify(teamId)}`);
   const dir = join(agentteamsDir, 'replica', teamId);
   const acceptedDir = join(dir, 'accepted');
-  const legacyPendingDir = join(dir, 'pending');
   const statePath = join(dir, 'log-state.json');
   const deferredPath = join(dir, 'deferred.json');
   const ensure = (d: string) => mkdir(d, { recursive: true, mode: DIR_MODE });
 
   const readRaw = () => readJson<{
-    agents?: Record<string, AgentLogState>; rotation?: number; ignoredRefs?: unknown[]; unapplied?: unknown; pins?: Record<string, string>;
+    agents?: Record<string, AgentLogState>; rotation?: number; ignoredRefs?: unknown[]; unapplied?: unknown;
   }>(statePath, {});
 
   const files: ReplicaFiles = {
@@ -191,31 +187,8 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
       await ensure(dir);
       await writeJsonAtomic(deferredPath, ops);
     },
-    async takeLegacy() {
-      const raw = await readRaw();
-      const pins = raw.pins ?? {};
-      const pending: Op[] = [];
-      const names = (await listDir(legacyPendingDir)).filter((n) => OP_ID_FILE_RE.test(n));
-      for (const name of names) {
-        try {
-          pending.push(JSON.parse(await readFile(join(legacyPendingDir, name), 'utf8')) as Op);
-        } catch { /* torn: never acknowledged */ }
-      }
-      return { pins, pending }; // the caller stores both in team.db, then calls dropLegacy
-    },
   };
   return files;
-}
-
-/** Removes the legacy pins and pending files once they are stored in team.db. */
-export async function dropLegacy(files: ReplicaFiles, migratedPendingIds: string[]): Promise<void> {
-  const statePath = join(files.dir, 'log-state.json');
-  const raw = await readJson<{ agents?: Record<string, AgentLogState>; rotation?: number; pins?: Record<string, string> }>(statePath, {});
-  if (raw.pins !== undefined) {
-    const { pins: _dropped, ...rest } = raw;
-    await writeJsonAtomic(statePath, rest);
-  }
-  for (const id of migratedPendingIds) await unlink(join(files.dir, 'pending', `${id}.json`)).catch(() => undefined);
 }
 
 // ---- Pending ops in team.db --------------------------------------------------------------------------

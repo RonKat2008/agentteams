@@ -29,9 +29,9 @@ import {
   appendSegment, deleteRemoteRefs, fetchTeam, fetchedMetaObject, fetchedTips, localAgentHead, localTips, pushMeta, pushOwn, readFetchedMeta,
   readLocalMeta, restoreMeta, setFetchedAgentHead, setPresence, treeOf, writeMeta, type RemoteRef,
 } from './refs.js';
-import { dropLegacy, insertPending, listPending, opKey, removePending } from './replicaStore.js';
+import { listPending, opKey, removePending } from './replicaStore.js';
 import {
-  deferFutureOps, getPinnedTeamMeta, pinAgentKey, pinTeamMeta, rebuildView, type PinResult, type ReplayStore, type TeamCreator,
+  deferFutureOps, getPinnedTeamMeta, pinTeamMeta, rebuildView, type PinResult, type ReplayStore, type TeamCreator,
 } from './replay.js';
 import { MAX_OPS_PER_SEGMENT, encodeSegment } from './segment.js';
 import {
@@ -357,17 +357,6 @@ async function writePresence(deps: Deps, repo: string, view: GitView, lock: Sync
   status.lastPresenceAt = new Date(now).toISOString();
 }
 
-// ---- Migration from the first Task 7 layout -----------------------------------------------------------
-
-async function migrateLegacy(view: GitView): Promise<void> {
-  const { pins, pending } = await view.files.takeLegacy();
-  if (Object.keys(pins).length === 0 && pending.length === 0) return;
-  for (const [agent, key] of Object.entries(pins)) await pinAgentKey(view.store, agent, key).catch(() => undefined);
-  const nowIso = new Date().toISOString();
-  for (const op of pending) await insertPending(view.store.ctx.db, op, nowIso);
-  await dropLegacy(view.files, pending.map((o) => o.id));
-}
-
 // ---- Unexpected remote refs ---------------------------------------------------------------------------
 
 const MAX_IGNORED_REMEMBERED = 200;
@@ -399,7 +388,6 @@ async function runRound(
   deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, now: () => number, opts: SyncOptions, summary: SyncSummary,
 ): Promise<void> {
   const { teamId, remote, agentId } = view.git;
-  await migrateLegacy(view);
   const unapplied = (await view.files.readLogState()).unapplied === true;
   // The creator named by our credential is pinned before anything is fetched (review L5).
   const creator = view.git.creator;

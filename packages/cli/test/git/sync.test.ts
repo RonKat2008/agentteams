@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, existsSync, utimesSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitTeamClient } from '../../src/git/client.js';
@@ -8,7 +8,7 @@ import { createHlc } from '../../src/git/hlc.js';
 import { captureOp } from '../../src/git/ops.js';
 import { appendSegment } from '../../src/git/refs.js';
 import { listPending } from '../../src/git/replicaStore.js';
-import { getPinnedKey, loadAgentDirectory, pinAgentKey, rebuildView } from '../../src/git/replay.js';
+import { getPinnedKey, pinAgentKey, rebuildView } from '../../src/git/replay.js';
 import { MAX_SEGMENT_BYTES, encodeSegment } from '../../src/git/segment.js';
 import { syncRound } from '../../src/git/sync.js';
 import { acquireLock, readStatus, takeSyncWarnings } from '../../src/git/syncState.js';
@@ -90,20 +90,14 @@ describe('sync round', () => {
     expect(await pending(worker)).toEqual([]);
   });
 
-  it('a queued op survives a crash before the push (and legacy pending files are migrated once)', async () => {
+  it('a queued op survives a crash before the push', async () => {
     const { lead, worker } = await twoAgents();
     await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'survivor' });
-    // A pending file left by the first Task 7 layout.
-    const v = await view(lead);
-    const legacy = captureOp(createHlc(), lead.id, 'sendMessage', { to: 'all', kind: 'fyi', body: 'legacy' }, await loadAgentDirectory(v.store, TEAM));
-    mkdirSync(join(v.files.dir, 'pending'), { recursive: true });
-    writeFileSync(join(v.files.dir, 'pending', `${legacy.id}.json`), JSON.stringify(legacy));
     const s = await sync(lead);
     expect(s.ok).toBe(true);
-    expect(s.published).toBe(2);
-    expect(existsSync(join(v.files.dir, 'pending', `${legacy.id}.json`))).toBe(false);
+    expect(s.published).toBe(1);
     await sync(worker);
-    expect(await bodies(worker)).toEqual(expect.arrayContaining(['survivor', 'legacy']));
+    expect(await bodies(worker)).toContain('survivor');
   });
 
   it('a crash after appendSegment and before pending removal never publishes an op twice', async () => {

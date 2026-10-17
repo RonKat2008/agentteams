@@ -389,14 +389,6 @@ async function loadPins(db: Db): Promise<Map<string, string>> {
   return new Map(rows.map((r) => [r.agent_id, r.public_key]));
 }
 
-/** Migration 007 flags views built under the old row-id scheme; the next apply rebuilds them. */
-async function takeRebuildFlag(trx: Trx): Promise<boolean> {
-  const row = await trx.selectFrom('replica_state').select('value').where('key', '=', 'needs_rebuild').executeTakeFirst();
-  if (!row) return false;
-  await trx.deleteFrom('replica_state').where('key', '=', 'needs_rebuild').execute();
-  return row.value === '1';
-}
-
 // ---- Entry points ---------------------------------------------------------------------------------
 
 /**
@@ -416,7 +408,7 @@ export async function applyOps(store: ReplayStore, ops: unknown[], opts: ApplyOp
     const newLosers: Candidate[] = [];
     let duplicates = copies;
     let backdated = 0;
-    let rebuild = await takeRebuildFlag(trx);
+    let rebuild = false;
     for (const [key, group] of groups) {
       const rows = known.get(key);
       if (!rows) {
@@ -506,7 +498,6 @@ async function replayAll(
 ): Promise<ApplySummary> {
   const { ready, deferred } = deferFutureOps(raws, opts.nowMs);
   const { groups, unrecordable } = groupCandidates(ready, await loadPins(trx), opts.teamCreator);
-  await takeRebuildFlag(trx);
   const namesBefore = await agentNamesById(trx);
   await wipe(trx);
   await bumpRebuilds(trx);
