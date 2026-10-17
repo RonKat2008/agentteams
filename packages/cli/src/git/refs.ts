@@ -53,12 +53,17 @@ export function validateRemote(remote: string): void {
   if (/^(ext|fd)::/i.test(remote)) throw new Error('invalid remote: transport not allowed');
 }
 
-function networkEnv(): Record<string, string> {
-  return {
-    GIT_ALLOW_PROTOCOL: ALLOWED_PROTOCOLS,
-    GIT_TERMINAL_PROMPT: '0',
-    ...(process.env.GIT_SSH_COMMAND ? {} : { GIT_SSH_COMMAND: 'ssh -oBatchMode=yes' }),
-  };
+/**
+ * Environment for network git calls: no terminal prompt, the protocol allowlist, and ssh BatchMode, the latter only
+ * when the user configured no ssh command of their own (GIT_SSH_COMMAND, GIT_SSH or core.sshCommand): setting
+ * GIT_SSH_COMMAND would override theirs (e.g. a per-repo key) and break authentication.
+ */
+export async function networkEnv(deps: GitDeps, repo: string, env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
+  const base = { GIT_ALLOW_PROTOCOL: ALLOWED_PROTOCOLS, GIT_TERMINAL_PROMPT: '0' };
+  if (env.GIT_SSH_COMMAND || env.GIT_SSH) return base;
+  const configured = await git(deps, repo, ['config', '--get', 'core.sshCommand']);
+  if (configured.code === 0 && configured.stdout.trim() !== '') return base;
+  return { ...base, GIT_SSH_COMMAND: 'ssh -oBatchMode=yes' };
 }
 
 function git(deps: GitDeps, repo: string, args: string[], opts: RunOpts = {}) {
@@ -273,7 +278,7 @@ export async function fetchTeam(deps: GitDeps, repo: string, remote: string, tea
   validateRemote(remote);
   const base = `refs/agentteams/${teamId}`;
   const ls = await git(deps, repo, ['ls-remote', '--', remote, base, `${base}/*`],
-    { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS, maxBytes: LS_REMOTE_MAX_BYTES });
+    { env: await networkEnv(deps, repo), timeoutMs: NETWORK_TIMEOUT_MS, maxBytes: LS_REMOTE_MAX_BYTES });
   if (ls.code !== 0) return failure(ls);
   const wanted = new Map<string, string>();
   const ignored: RemoteRef[] = [];
@@ -290,7 +295,7 @@ export async function fetchTeam(deps: GitDeps, repo: string, remote: string, tea
   if (changed.length > 0) {
     const input = changed.map(([name]) => `+${base}/${name}:refs/agentteams-remote/${teamId}/${name}\n`).join('');
     const f = await git(deps, repo, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--stdin', '--', remote],
-      { input, env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+      { input, env: await networkEnv(deps, repo), timeoutMs: NETWORK_TIMEOUT_MS });
     if (f.code !== 0) return failure(f);
   }
   const pruned = [...have.keys()].filter((name) => !wanted.has(name));
@@ -312,7 +317,7 @@ export async function deleteRemoteRefs(deps: GitDeps, repo: string, remote: stri
     if (!SHA_RE.test(r.oid) || !r.ref.startsWith('refs/agentteams/') || /[\s\0:~^?*[\\]/.test(r.ref)) throw new Error('deleteRemoteRefs: invalid ref');
   }
   const r = await git(deps, repo, ['push', '--quiet', ...refs.map((x) => `--force-with-lease=${x.ref}:${x.oid}`), '--', remote, ...refs.map((x) => `:${x.ref}`)],
-    { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+    { env: await networkEnv(deps, repo), timeoutMs: NETWORK_TIMEOUT_MS });
   return r.code === 0 ? { ok: true } : failure(r);
 }
 
@@ -323,7 +328,7 @@ async function pushRef(deps: GitDeps, repo: string, remote: string, local: strin
   // Without a lease: no leading '+', so non-fast-forward updates are rejected. With one: the remote must still be at
   // `lease` (empty = must not exist), so a concurrent update is never overwritten.
   const leaseArg = lease === undefined ? [] : [`--force-with-lease=${dest}:${lease ?? ''}`];
-  const r = await git(deps, repo, ['push', '--quiet', ...leaseArg, '--', remote, `${local}:${dest}`], { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+  const r = await git(deps, repo, ['push', '--quiet', ...leaseArg, '--', remote, `${local}:${dest}`], { env: await networkEnv(deps, repo), timeoutMs: NETWORK_TIMEOUT_MS });
   return r.code === 0 ? { ok: true } : failure(r);
 }
 
