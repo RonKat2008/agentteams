@@ -360,6 +360,10 @@ async function writePresence(deps: Deps, repo: string, view: GitView, lock: Sync
 // ---- Unexpected remote refs ---------------------------------------------------------------------------
 
 const MAX_IGNORED_REMEMBERED = 200;
+/** Ref names are chosen by anyone with push access: shown capped, quoted and labelled as untrusted. */
+const REF_NAME_SHOWN = 80;
+export const ignoredRefProblem = (name: string): string =>
+  `ignored an unexpected team ref on the remote (name, untrusted: ${JSON.stringify(oneLine(name, REF_NAME_SHOWN))})`;
 
 /**
  * Refs under the team prefix that are not `meta` or `agents/<canonical id>` are never fetched; each is warned about
@@ -370,7 +374,7 @@ async function noteIgnoredRefs(view: GitView, lock: SyncLock, ignored: RemoteRef
   const { teamId, agentId, publicKey } = view.git;
   const seen = new Set((await view.files.readLogState()).ignoredRefs ?? []);
   const fresh = ignored.map((r) => oneLine(r.ref, 160)).filter((n) => !seen.has(n));
-  for (const n of fresh) summary.problems.push(`ignored an unexpected team ref on the remote: ${JSON.stringify(n)}`);
+  for (const n of fresh) summary.problems.push(ignoredRefProblem(n));
   if (fresh.length > 0) {
     await lock.assertOwned();
     await view.files.setIgnoredRefs([...seen, ...fresh].slice(-MAX_IGNORED_REMEMBERED));

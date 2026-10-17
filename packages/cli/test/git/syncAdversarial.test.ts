@@ -10,7 +10,7 @@ import { captureOp } from '../../src/git/ops.js';
 import { appendSegment, writeMeta } from '../../src/git/refs.js';
 import { encodeSegment } from '../../src/git/segment.js';
 import { listPending } from '../../src/git/replicaStore.js';
-import { pinTeamMetaFromInvite, syncRound } from '../../src/git/sync.js';
+import { ignoredRefProblem, pinTeamMetaFromInvite, syncRound } from '../../src/git/sync.js';
 import { teamCreatorOf } from '../../src/git/view.js';
 import {
   TEAM, appendMany, bootstrap, deps, dump, git, makeWorld, ownSeqs, remoteHead, view, type Agent, type World,
@@ -493,7 +493,7 @@ describe('fix round 4 (re-review 3)', () => {
     const w1 = await sync(worker);
     expect(w1.ok).toBe(true);
     expect(w1.fetched).toBe(true);
-    expect(w1.problems.join('\n')).toMatch(/ignored an unexpected team ref on the remote: ".*agents\/\w+\/x"/);
+    expect(w1.problems.join('\n')).toMatch(/ignored an unexpected team ref on the remote \(name, untrusted: ".*agents\/\w+\/x"\)/);
     await client(lead).execute('sendMessage', { to: 'all', kind: 'fyi', body: 'after the conflict' });
     const l = await sync(lead);
     expect(l.ok).toBe(true);
@@ -535,7 +535,7 @@ describe('fix round 4 (re-review 3)', () => {
     writeFileSync(packed, `${[header, ...all].join('\n')}\n`);
     const w = await sync(worker);
     expect(w.ok).toBe(true);
-    expect(w.problems).toEqual([`ignored an unexpected team ref on the remote: ${JSON.stringify(`refs/agentteams/${TEAM}/agents/${variant}`)}`]);
+    expect(w.problems).toEqual([ignoredRefProblem(`refs/agentteams/${TEAM}/agents/${variant}`)]);
     const l = await sync(lead);
     expect(l.problems).toEqual([expect.stringMatching(/ignored an unexpected team ref/)]);
     expect(l.restored).toBe(false);
