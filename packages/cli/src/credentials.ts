@@ -37,7 +37,14 @@ export interface Credential {
   transport?: 'http' | 'local' | 'git';
   /** Required when transport is 'git'. */
   git?: GitCredential;
+  /**
+   * The creator's current hub/local invite code in plaintext (the hub stores only a hash), so `agentteams invite`
+   * can show it again. A secret like the API key: credentials.json is 0600 and never committed.
+   */
+  invite?: StoredInvite;
 }
+
+export interface StoredInvite { code: string; expiresAt: string }
 
 interface CredentialsFile { version: 1; credentials: Credential[] }
 

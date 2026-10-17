@@ -40,6 +40,26 @@ export function defaultMemberName(username: string): string {
   return cleaned || 'user';
 }
 
+/** Names an agent environment commonly reports as the OS user or git name; never a person. */
+const GENERIC_NAMES: ReadonlySet<string> = new Set([
+  'root', 'user', 'admin', 'administrator', 'me', 'runner', 'ubuntu', 'node', 'agent', 'default', 'unknown', 'nobody',
+  'claude', 'claude_code', 'claudecode', 'chatgpt', 'openai', 'anthropic', 'agentteams',
+  ...ToolKind.options,
+]);
+
+/**
+ * The person part of an agent name, from candidates in priority order (e.g. git user.name, then the OS username).
+ * A candidate that slugifies to nothing, is generic (root, user, ...) or is a tool name (codex, claude, ...) is
+ * skipped, so agent names never come out as `<tool>-<tool>`; with none left the name is "me".
+ */
+export function pickMemberName(candidates: readonly string[]): string {
+  for (const raw of candidates) {
+    const slug = raw.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, MEMBER_NAME_MAX).replace(/^_+|_+$/g, '');
+    if (slug !== '' && !GENERIC_NAMES.has(slug)) return slug;
+  }
+  return 'me';
+}
+
 export const AgentName = z
   .string().trim().toLowerCase()
   .regex(/^[a-z0-9_]{1,24}-[a-z0-9-]{1,30}$/, 'agent names look like <member>-<tool>, e.g. ronit-claude');

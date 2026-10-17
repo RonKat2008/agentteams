@@ -2,8 +2,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { writeInstructionFile } from '../instructions.js';
+import { linkInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand, shellQuote } from '../paths.js';
+import { isTracked } from '../git.js';
 import { addToGitExclude } from '../tools/gitExclude.js';
 import type { InstallReport } from '../tools/types.js';
 import { mergeManagedHooks, type HooksJson } from './hooksConfig.js';
@@ -12,6 +13,11 @@ export type { InstallReport };
 
 type CliArgv = ReturnType<typeof cliArgv>;
 
+/**
+ * Per-user (hook commands embed this machine's paths) and written by us before Claude Code ever creates it, so Claude's
+ * own auto-ignore may not apply. Ignored via .git/info/exclude, not .gitignore: that file is shared and committed, so
+ * editing it would dirty the user's tree for a rule only this clone needs; info/exclude is per-clone and also covers worktrees.
+ */
 const EXCLUDE_LINE = '.claude/settings.local.json';
 
 async function readText(path: string): Promise<string | null> {
@@ -59,6 +65,9 @@ async function installHooks(repo: string, cli: string, report: InstallReport): P
 async function gitExclude(deps: Pick<CliDeps, 'exec'>, repo: string, report: InstallReport): Promise<void> {
   const warning = await addToGitExclude(deps, repo, EXCLUDE_LINE);
   if (warning) report.warnings.push(warning);
+  if (await isTracked(deps, repo, EXCLUDE_LINE)) {
+    report.warnings.push(`${EXCLUDE_LINE} is tracked by git, so it is not ignored and holds machine-specific hook paths; run: git rm --cached ${EXCLUDE_LINE}`);
+  }
 }
 
 export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli?: string; argv?: CliArgv } = {}): Promise<InstallReport> {
@@ -67,8 +76,8 @@ export async function installClaude(deps: CliDeps, cred: Credential, opts: { cli
   await registerMcp(deps, cred, report, opts.argv ?? cliArgv());
   await installHooks(repo, opts.cli ?? cliCommand(), report);
   await gitExclude(deps, repo, report);
-  await writeInstructionFile(join(repo, 'CLAUDE.md'), cred.teamName);
-  report.done.push('updated CLAUDE.md');
+  await linkInstructionFile(repo, 'CLAUDE.md', cred.teamName, '@AGENTS.md');
+  report.done.push('updated AGENTS.md (the team instructions) and CLAUDE.md (imports AGENTS.md)');
   return report;
 }
 

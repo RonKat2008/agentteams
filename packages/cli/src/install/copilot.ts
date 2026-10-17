@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { HOOK_EVENT_NAMES, type HookEvent } from '../hookEvents.js';
-import { writeInstructionFile } from '../instructions.js';
+import { pointerBlock, writeInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand } from '../paths.js';
 import { InvalidConfigShape, isPlainObject as isObject, isWritten, setMcpEntry } from '../tools/jsonConfig.js';
 import { upsertRepoJson } from '../tools/projectMcp.js';
@@ -77,8 +77,9 @@ export async function installCopilot(deps: CliDeps, cred: Credential, opts: Copi
   const repo = cred.repoPath;
   await installFiles(deps, repo, opts.cli ?? cliCommand(), opts.argv ?? cliArgv(), report);
   // Committable, no absolute paths: not git-excluded.
-  await writeInstructionFile(join(repo, INSTRUCTIONS_REL), cred.teamName);
+  // Copilot reads AGENTS.md too and has no import syntax: its own file only points there, so the steps live once.
   await writeInstructionFile(join(repo, 'AGENTS.md'), cred.teamName);
+  await writeInstructionFile(join(repo, INSTRUCTIONS_REL), cred.teamName, pointerBlock(cred.teamName));
   report.done.push(`updated ${INSTRUCTIONS_REL} and AGENTS.md`);
   report.done.push('Copilot CLI: trust the folder to load project MCP servers; per-prompt injection is unsupported there (hooks inject on session start and after tools)');
   return report;

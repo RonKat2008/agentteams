@@ -52,6 +52,8 @@ export async function installCursor(deps: CliDeps, cred: Credential, opts: { cli
     ['description: agentteams multi-agent coordination', 'alwaysApply: true'],
     cred.teamName,
     report,
+    '',
+    { pointer: true }, // Cursor reads AGENTS.md itself: no second copy of the steps to drift
   );
   await writeInstructionFile(join(cred.repoPath, 'AGENTS.md'), cred.teamName);
   report.done.push('updated AGENTS.md');

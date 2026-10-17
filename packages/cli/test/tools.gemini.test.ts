@@ -49,6 +49,8 @@ describe('gemini install', () => {
     });
     expect(s.hooks.BeforeAgent[0].hooks[0].command).toContain('hook user-prompt-submit --tool gemini');
     expect(readFileSync(join(repo, 'GEMINI.md'), 'utf8')).toContain('agentteams:start');
+    expect(readFileSync(join(repo, 'GEMINI.md'), 'utf8')).toContain('@./AGENTS.md');
+    expect(readFileSync(join(repo, 'AGENTS.md'), 'utf8')).toContain('claim_files');
     expect(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8')).toContain('.gemini/settings.json');
     expect(readFileSync(settingsPath(), 'utf8')).not.toContain('at_SECRET');
   });

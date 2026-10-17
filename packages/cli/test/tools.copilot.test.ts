@@ -137,6 +137,9 @@ describe('user entries preserved', () => {
     const md = read('.github/copilot-instructions.md');
     expect(md.startsWith('# Mine\nuse tabs\n')).toBe(true);
     expect(md).toContain('<!-- agentteams:end -->');
+    expect(md).toContain('AGENTS.md');
+    expect(md).not.toContain('claim_files'); // Copilot reads AGENTS.md: this file only points there
+    expect(read('AGENTS.md')).toContain('claim_files');
   });
 });
 

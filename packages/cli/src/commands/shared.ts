@@ -22,7 +22,7 @@ export async function requireCredential(deps: CliDeps, agent?: ToolKind): Promis
 /** One team this repo has credentials for: a credential that can read it, and every local agent that belongs to it. */
 export interface TeamAccess { cred: Credential; mine: string[] }
 
-const teamKey = (c: Credential): string => (c.transport === 'git' && c.git ? `git:${c.git.teamId}` : `${c.transport ?? 'http'}:${c.hubUrl}:${c.teamName}`);
+export const teamKey = (c: Credential): string => (c.transport === 'git' && c.git ? `git:${c.git.teamId}` : `${c.transport ?? 'http'}:${c.hubUrl}:${c.teamName}`);
 
 /**
  * Credentials for reading team state, which every agent of a team sees identically: no --agent needed.

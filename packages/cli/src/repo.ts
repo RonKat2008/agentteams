@@ -1,5 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { parse } from 'node:path';
+import { pickMemberName } from '@agentteams/shared';
 import type { CliDeps } from './deps.js';
 
 type ExecDeps = Pick<CliDeps, 'exec'>;
@@ -25,6 +26,12 @@ export async function checkTeamDir(deps: Pick<CliDeps, 'exec' | 'homedir' | 'err
   if (!(await isGitRepo(deps, cwd))) {
     deps.err(`warning: ${dir} is not a git repository; the team will be tied to this directory`);
   }
+}
+
+/** Default member name: the configured git user.name, then the OS username; generic or tool-like names are skipped. */
+export async function resolveMemberName(deps: Pick<CliDeps, 'exec' | 'username'>, cwd: string): Promise<string> {
+  const res = await deps.exec('git', ['config', 'user.name'], { cwd }).catch(() => null);
+  return pickMemberName([res?.code === 0 ? res.stdout.trim() : '', deps.username]);
 }
 
 export async function detectGithubSlug(deps: ExecDeps, cwd: string): Promise<string | null> {

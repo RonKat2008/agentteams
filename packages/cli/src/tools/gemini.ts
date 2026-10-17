@@ -1,7 +1,6 @@
-import { join } from 'node:path';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
-import { writeInstructionFile } from '../instructions.js';
+import { linkInstructionFile } from '../instructions.js';
 import { cliArgv, cliCommand } from '../paths.js';
 import type { HookEvent } from '../hookEvents.js';
 import { isCommonStopLoop, readStringCwd } from './dialects.js';
@@ -72,8 +71,8 @@ export async function installGemini(
   const argv = opts.argv ?? cliArgv();
   const cli = opts.cli ?? cliCommand();
   await installSettings(deps, repo, cli, argv, report);
-  await writeInstructionFile(join(repo, 'GEMINI.md'), cred.teamName);
-  report.done.push('updated GEMINI.md');
+  await linkInstructionFile(repo, 'GEMINI.md', cred.teamName, '@./AGENTS.md');
+  report.done.push('updated AGENTS.md (the team instructions) and GEMINI.md (imports AGENTS.md)');
   return report;
 }
 

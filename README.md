@@ -103,7 +103,8 @@ Then open the agents in the repo. In Codex, run `/hooks` once and approve the ag
 
 `create` and `join` install everything (MCP server, hooks, instruction block). Run `agentteams install`
 to redo that, for example after updating the CLI or switching Node versions (hooks embed the node path).
-`agentteams invite show` prints a git team's code again.
+`agentteams invite` prints the code again (git teams derive it from the team key; for local and hub teams the creator's
+credential file keeps it, see below).
 
 <details>
 <summary><b>Install from source (not on npm yet)</b></summary>
@@ -127,11 +128,11 @@ rules file tells it to.
 
 | Agent | `--agent` | How messages arrive | Files written |
 |---|---|---|---|
-| Claude Code | `claude` | Live: session start, every prompt, after tools, stop gate | local-scope stdio-proxy MCP entry via `claude mcp add` (in `~/.claude.json`, no key stored), `.claude/settings.local.json`, `CLAUDE.md` |
+| Claude Code | `claude` | Live: session start, every prompt, after tools, stop gate | local-scope stdio-proxy MCP entry via `claude mcp add` (in `~/.claude.json`, no key stored), `.claude/settings.local.json`, `CLAUDE.md` (imports `AGENTS.md`), `AGENTS.md` |
 | Codex | `codex` | Live: same four events | `~/.codex/config.toml`, `~/.codex/hooks.json`, `AGENTS.md` |
-| Cursor | `cursor` | Live: session start, after tools, stop gate (no per-prompt) | `.cursor/mcp.json`, `.cursor/hooks.json`, `.cursor/rules/agentteams.mdc`, `AGENTS.md` |
-| Gemini CLI | `gemini` | Live: session start, before agent, after tools, after agent | `.gemini/settings.json`, `GEMINI.md` |
-| GitHub Copilot (CLI and VS Code) | `copilot` | Live: session start and after tools; the prompt hook is a heartbeat only | `.github/hooks/agentteams.json`, `.github/mcp.json`, `.vscode/mcp.json`, `.github/copilot-instructions.md`, `AGENTS.md` |
+| Cursor | `cursor` | Live: session start, after tools, stop gate (no per-prompt) | `.cursor/mcp.json`, `.cursor/hooks.json`, `.cursor/rules/agentteams.mdc` (points at `AGENTS.md`), `AGENTS.md` |
+| Gemini CLI | `gemini` | Live: session start, before agent, after tools, after agent | `.gemini/settings.json`, `GEMINI.md` (imports `AGENTS.md`), `AGENTS.md` |
+| GitHub Copilot (CLI and VS Code) | `copilot` | Live: session start and after tools; the prompt hook is a heartbeat only | `.github/hooks/agentteams.json`, `.github/mcp.json`, `.vscode/mcp.json`, `.github/copilot-instructions.md` (points at `AGENTS.md`), `AGENTS.md` |
 | Factory Droid | `droid` | Live: same four events as Claude | `.factory/mcp.json`, `.factory/hooks.json`, `AGENTS.md` |
 | OpenCode | `opencode` | Live: managed plugin (session created, tool calls, idle re-prompt) | `opencode.json`, `.opencode/plugins/agentteams.js`, `AGENTS.md` |
 | Windsurf / Devin | `windsurf` | Pull | `~/.config/devin/mcp_config.json` (plus `~/.codeium/windsurf/mcp_config.json` if that dir exists), `.devin/rules/agentteams.md`, `.windsurf/rules/agentteams.md` |
@@ -147,7 +148,14 @@ Caveats worth knowing:
 - **Copilot CLI** must trust the folder to load project MCP servers, and drops per-prompt injection.
 - **OpenCode**'s plugin relies on event payload fields that its docs do not specify; verify on your version.
 - **Cline** has one global MCP entry, so it points at the last repo you installed.
-- Files that embed absolute paths from your machine are added to `.git/info/exclude`, so they are not committed.
+- Files that embed absolute paths from your machine (including `.claude/settings.local.json`) are added to `.git/info/exclude`,
+  so they are not committed. That file is per clone and is not shared like `.gitignore`, so your tracked files stay
+  untouched. If such a file is already tracked, install warns and tells you to `git rm --cached` it.
+- **One copy of the team instructions.** `AGENTS.md` holds the block. `CLAUDE.md` and `GEMINI.md` only contain an
+  import line (`@AGENTS.md`, `@./AGENTS.md`) inside the agentteams markers; Cursor's rule and Copilot's instructions
+  file hold a two-line pointer. Re-running install upgrades older copies in place and keeps your own text. If your
+  `CLAUDE.md` is a link to `AGENTS.md`, or already imports it, nothing is added. Windsurf, Cline and Roo (no
+  `AGENTS.md`) keep their own full rules file.
 - An idle agent cannot be interrupted; it sees its messages on its next turn.
 
 <details>
@@ -310,7 +318,8 @@ fi
 | `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only |
 | `agentteams join <invite-code>` | Join a team and install the agent integration. `at1-` codes clone the repo (or use the current clone) |
 | `agentteams sync` | Exchange team state with the git remote now. Normally runs in the background from hooks and MCP; run it to make a recording or a debugging session deterministic |
-| `agentteams invite show` | Print a git team's invite code again (`rotate` and `revoke` apply to hub and local teams; a git team is gated by repo access) |
+| `agentteams invite [show]` | Print the invite code again. Git teams derive it; for local and hub teams the creator's credential file (0600) keeps it until it expires. Teams created by an older version, and joiners, do not have it: run `agentteams invite --rotate` |
+| `agentteams invite --rotate` / `--revoke` | New code (stored the same way) or revoke it (hub and local teams; a git team is gated by repo access). `rotate` and `revoke` also work as subcommands |
 | `agentteams install [--agent <tool>\|all]` | (Re)configure agents for this repo |
 | `agentteams status` | Show the team, its agents and when it last synced |
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
@@ -327,7 +336,8 @@ fi
 <details>
 <summary><b>Options</b></summary>
 
-- `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name), `--no-install` (skip tool setup),
+- `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name; default: your git `user.name`,
+  then your OS username, skipping generic names like `root` and tool names like `codex`, finally `me`), `--no-install` (skip tool setup),
   `--hub <url>` (or `local` for http://127.0.0.1:4747) to use a hub server instead (advanced).
   Without `--hub` or `$AGENTTEAMS_HUB`, `create` makes a team stored in this repo (`.git/agentteams`): a git team
   shared through the repo's remote (`origin`, or `--remote <name>`) when it has one, otherwise a team for this
@@ -382,7 +392,7 @@ For each team a hub stores: team name, member and agent names and the tool each 
 numeric id (from `gh`) and the linked repo slug; messages, tasks (title, description, status,
 branch, summary) and the activity log; file claim globs; and commit summaries (sha, branch, message, file names and
 insertion/deletion counts). It never receives your code or diffs. Your GitHub token is sent once to verify your
-identity and is never stored or logged; API keys and invite codes are stored hashed. Unlike git teams, a hub sees
+identity and is never stored or logged; API keys and invite codes are stored hashed on the hub (the creator's local credential file keeps the code itself, 0600). Unlike git teams, a hub sees
 this in plaintext, so only use a hub you run or trust.
 
 ### Hub security notes
