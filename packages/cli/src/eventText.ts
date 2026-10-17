@@ -1,5 +1,5 @@
 import type { ActivityEvent } from '@agentteams/shared';
-import { oneLine } from './format.js';
+import { oneLine, plainText } from './format.js';
 
 const MAX_VALUE = 40;
 const MAX_TEXT = 60;
@@ -13,6 +13,12 @@ function str(v: unknown, max = MAX_TEXT): string | undefined {
   if (typeof v === 'string') return clip(oneLine(v), max);
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   return undefined;
+}
+
+/** Free text (message bodies, notes, summaries) shown whole: line breaks kept, control characters dropped. */
+function full(v: unknown): string | undefined {
+  if (typeof v !== 'string') return str(v);
+  return plainText(v).trim() || undefined;
 }
 
 function list(v: unknown): string | undefined {
@@ -73,13 +79,13 @@ const DESCRIBERS: Record<ActivityEvent['type'], Describer> = {
     const t = task(d);
     if (!t) return undefined;
     const status = str(d.status);
-    const note = str(d.note);
+    const note = full(d.note);
     return `updated ${t}${status ? ` → ${status}` : ''}${note ? `: ${note}` : ''}`;
   },
   task_completed: (d) => {
     const t = task(d);
     if (!t) return undefined;
-    const summary = str(d.summary);
+    const summary = full(d.summary);
     return summary ? `finished ${t}: ${summary}` : `finished ${t}`;
   },
   files_claimed: (d) => (list(d.globs) ? `claimed ${list(d.globs)}${d.exclusive === false ? ' (shared)' : ''}` : undefined),
@@ -95,8 +101,8 @@ const DESCRIBERS: Record<ActivityEvent['type'], Describer> = {
     const kind = str(d.kind);
     const to = str(d.to);
     if (!kind || !to) return undefined;
-    const preview = str(d.preview);
-    return `${kind} → ${to}${preview ? `: "${preview}"` : ''}`;
+    const text = full(d.body ?? d.preview); // events logged before `body` existed carry only the short preview
+    return `${kind} → ${to}${text ? `: "${text}"` : ''}`;
   },
   merged: (d) => {
     const t = task(d);

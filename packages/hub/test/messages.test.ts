@@ -106,4 +106,11 @@ describe('permissions and validation', () => {
     expect(last.data).toMatchObject({ to: 'all', kind: 'fyi' });
     expect((last.data.preview as string).length).toBeLessThanOrEqual(80);
   });
+
+  it('logs the full body so the activity log can show long messages whole', async () => {
+    const { ronit, dylan } = await seedTeam(env);
+    const body = 'y'.repeat(900);
+    await sendMessage(env.ctx, dylan, { to: 'all', body });
+    expect((await getActivity(env.ctx, ronit)).at(-1)!.data.body).toBe(body);
+  });
 });

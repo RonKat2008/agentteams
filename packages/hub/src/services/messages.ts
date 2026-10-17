@@ -32,7 +32,7 @@ export async function sendMessage(ctx: HubContext, actor: Actor, input: SendMess
   const id = await withTx(ctx, async (tx) => {
     const messageId = await insertMessage(tx, { teamId: actor.teamId, fromId: actor.id, toId, kind: p.kind, body: p.body });
     await logEvent(tx, actor.teamId, actor.id, 'message_sent', {
-      to: p.to, kind: p.kind, preview: p.body.slice(0, PREVIEW_LENGTH),
+      to: p.to, kind: p.kind, preview: p.body.slice(0, PREVIEW_LENGTH), body: p.body,
     });
     return messageId;
   });

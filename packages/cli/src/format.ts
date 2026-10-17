@@ -9,6 +9,15 @@ export function oneLine(value: string): string {
   return value.replace(/\p{Cf}/gu, '').replace(/[\s\p{Cc}\u2028\u2029]+/gu, (run) => (/[\p{Cc}\u2028\u2029]/u.test(run) ? ' ' : run));
 }
 
+/** Like oneLine but keeps line breaks (as \n) and tabs (as a space): invisible and control characters are dropped. */
+export function plainText(value: string): string {
+  return value
+    .replace(/\r\n|[\r\u0085\u2028\u2029]/g, '\n')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/\t/g, ' ')
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, '');
+}
+
 /** Normalise every line terminator to \n and drop non-printing control chars (keeps \n and \t). */
 function normaliseBody(body: string): string {
   return body
@@ -79,7 +88,37 @@ function colorDescription(e: ActivityEvent, text: string, p: Palette): string {
   return p.bold(p.yellow('command')) + text.slice('command'.length);
 }
 
+const LINE_WIDTH = 100;
+const TIME_WIDTH = 8;
+const GUTTER = 2;
+const CONTINUATION_INDENT = ' '.repeat(TIME_WIDTH + GUTTER + AGENT_COLUMN_WIDTH + GUTTER);
+
+/** Word-wrap one paragraph to `width` columns; a word longer than the line is split. */
+function wrapParagraph(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(/ +/)) {
+    for (let rest = word; ; ) {
+      const chunk = [...rest].slice(0, width).join('');
+      const fits = line === '' ? chunk.length === rest.length : line.length + 1 + rest.length <= width;
+      if (fits) { line = line === '' ? rest : `${line} ${rest}`; break; }
+      if (line !== '') { lines.push(line); line = ''; continue; }
+      lines.push(chunk);
+      rest = rest.slice(chunk.length);
+    }
+  }
+  return [...lines, line];
+}
+
+/** The description wrapped to the terminal-ish width, continuation lines indented under it; blank lines dropped. */
+function wrapDescription(text: string, firstWidth: number): string[] {
+  const paragraphs = text.split('\n').filter((l) => l.trim() !== '');
+  return paragraphs.flatMap((para, i) => wrapParagraph(para, i === 0 ? firstWidth : LINE_WIDTH - CONTINUATION_INDENT.length));
+}
+
 export function formatEvent(e: ActivityEvent, p: Palette = makePalette(false)): string {
   const agent = padVisible(p.agent(oneLine(e.agent ?? '-')), AGENT_COLUMN_WIDTH);
-  return `${p.dim(localTime(e.createdAt))}  ${agent}  ${colorDescription(e, describeEvent(e), p)}`;
+  const head = `${p.dim(localTime(e.createdAt))}  ${agent}  `;
+  const [first = '', ...more] = wrapDescription(describeEvent(e), LINE_WIDTH - CONTINUATION_INDENT.length);
+  return [`${head}${colorDescription(e, first, p)}`, ...more.map((l) => CONTINUATION_INDENT + l)].join('\n');
 }
