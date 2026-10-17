@@ -428,8 +428,11 @@ fi
   another). `--agent <tool>` still selects a specific credential.
 - `invite rotate|revoke`, `orchestrator`, `worktree`, `done`, `merged` act as an agent: when the repo has more than one,
   pass `--agent <tool>` (for example both Claude and Codex).
-- `log` prints whole message bodies, task notes and summaries, word-wrapped under the event with control characters
-  stripped (only the `status` table shortens long values). Events from older hubs carry only an 80-character preview.
+- `log` prints whole broadcast messages (`to: all`), task notes and summaries, word-wrapped under the event with
+  control characters stripped (only the `status` table shortens long values). The activity log is visible to the whole
+  team, so a direct message to one agent appears there only as an 80-character preview; the recipient reads the whole
+  message in its inbox. (On a git team every member's replica holds the encrypted op log, which includes direct
+  messages.) Events from older hubs carry only the preview.
 
 `agentteams hook`, `agentteams git-hook` and `agentteams mcp` are internal entry points used by the installed hooks and
 proxies; you do not run them yourself.

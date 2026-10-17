@@ -114,7 +114,7 @@ async function notifyAccessRequest(
   const body = `${joiner.name} (GitHub @${joiner.githubLogin}) joined the team. Repo access to ${team.repo_slug} must be granted by a human: ask your user to run "agentteams access grant ${joiner.name}" in their own terminal.`;
   await insertMessage(tx, { teamId: team.id, fromId: joiner.agentId, toId: team.orchestrator_agent_id, kind: 'fyi', body });
   await logEvent(tx, team.id, joiner.agentId, 'message_sent', {
-    to: orchestrator.name, kind: 'fyi', preview: body.slice(0, MESSAGE_PREVIEW_LENGTH), body,
+    to: orchestrator.name, kind: 'fyi', preview: body.slice(0, MESSAGE_PREVIEW_LENGTH),
   });
 }
 

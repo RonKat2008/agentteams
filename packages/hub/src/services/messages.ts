@@ -31,8 +31,9 @@ export async function sendMessage(ctx: HubContext, actor: Actor, input: SendMess
   }
   const id = await withTx(ctx, async (tx) => {
     const messageId = await insertMessage(tx, { teamId: actor.teamId, fromId: actor.id, toId, kind: p.kind, body: p.body });
+    // The activity log is team-wide: a broadcast is logged whole, a direct message only as a short preview.
     await logEvent(tx, actor.teamId, actor.id, 'message_sent', {
-      to: p.to, kind: p.kind, preview: p.body.slice(0, PREVIEW_LENGTH), body: p.body,
+      to: p.to, kind: p.kind, preview: p.body.slice(0, PREVIEW_LENGTH), ...(p.to === 'all' ? { body: p.body } : {}),
     });
     return messageId;
   });
