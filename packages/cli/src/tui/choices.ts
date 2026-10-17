@@ -22,7 +22,7 @@ export function validateTeamName(v: string): string | undefined {
 }
 
 /** Git-team codes: `at1-` and lowercase base32 (fully checked by the join command). */
-const GIT_INVITE_RE = /^at1-[a-z2-7]{20,}$/;
+const GIT_INVITE_RE = /^at1-[a-z2-7]{20,}$/i;
 
 export const isGitInviteCode = (v: string): boolean => GIT_INVITE_RE.test(v.trim());
 
@@ -50,18 +50,28 @@ export function agentChoices(tools: ToolChoice[], exclude: readonly ToolKind[] =
  * `remoteUrl`: this repo's git remote (credentials stripped), or null. `newRepo`: a GitHub repo ./<name> can be
  * created with gh here (gh present, not inside a git repo, valid name).
  */
-export interface TeamKindContext { remoteUrl: string | null; newRepo?: boolean; teamName?: string }
+export interface TeamKindContext {
+  remoteUrl: string | null; newRepo?: boolean; teamName?: string;
+  /** Several remotes and none is origin: the git option stays available and a remote is picked next. */
+  severalRemotes?: boolean;
+}
+
+/** The default answer to "Who will be on this team?": a git team when the repo has a remote, as the CLI does. */
+export const defaultTeamKind = (ctx: TeamKindContext): TeamKind => (ctx.remoteUrl || ctx.severalRemotes ? 'git' : 'local');
 
 export const GIT_NO_REMOTE_HINT = 'add a git remote first (e.g. a GitHub repo)';
 
 export function teamKindChoices(ctx: TeamKindContext = { remoteUrl: null }): Choice<TeamKind>[] {
+  const label = "People on other computers (through this repo's git remote)";
   const git: Choice<TeamKind> = ctx.remoteUrl
-    ? { value: 'git', label: "People on other computers (through this repo's git remote)", hint: ctx.remoteUrl }
-    : { value: 'git', label: "People on other computers (through this repo's git remote)", hint: GIT_NO_REMOTE_HINT, disabled: true };
+    ? { value: 'git', label, hint: ctx.remoteUrl }
+    : ctx.severalRemotes
+      ? { value: 'git', label, hint: 'several remotes: pick one next' }
+      : { value: 'git', label, hint: GIT_NO_REMOTE_HINT, disabled: true };
   return [
     { value: 'local', label: 'Just my agents on this computer' },
     git,
-    ...(!ctx.remoteUrl && ctx.newRepo
+    ...(!ctx.remoteUrl && !ctx.severalRemotes && ctx.newRepo
       ? [{ value: 'newRepo' as const, label: `People on other computers (create a new GitHub repo ./${ctx.teamName ?? '<name>'})`, hint: 'uses gh' }]
       : []),
     { value: 'hub', label: 'A hub server (advanced)' },
@@ -97,6 +107,8 @@ export function repoChoices(ctx: RepoContext, teamName: string): Choice<RepoChoi
  */
 export interface CreateAnswers {
   name: string; agent: ToolKind; repo: RepoChoice; visibility?: 'private' | 'public'; hub?: string; as?: string; kind?: TeamKind;
+  /** The git remote picked when there are several (none named origin). */
+  remote?: string;
 }
 
 /** Menu answers → the options object `agentteams create` builds from its flags. */
@@ -105,6 +117,7 @@ export function createOptions(a: CreateAnswers): CreateOpts {
     agent: a.agent, ...(a.hub ? { hub: a.hub } : {}), install: true,
     ...(a.as ? { as: a.as } : {}),
     ...(a.kind === 'local' ? { thisComputer: true } : {}),
+    ...(a.remote ? { remote: a.remote } : {}),
     ...(a.repo === 'local' ? { local: true } : {}),
     ...(a.repo === 'new' ? { newRepo: true, visibility: a.visibility ?? 'private' } : {}),
   };

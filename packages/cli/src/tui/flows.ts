@@ -8,16 +8,16 @@ import type { UpOptions } from '../commands/up.js';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { decodeInvite } from '../git/invite.js';
-import { findRemoteFor, pickRemote, remoteFetchUrl, repoNameOf, stripCredentials } from '../git/remoteUrl.js';
+import { findRemoteFor, pickRemote, remoteFetchUrl, remoteNames, repoNameOf, stripCredentials } from '../git/remoteUrl.js';
 import { INVITE_WARNING, inviteCodeOf } from '../git/setup.js';
 import { hubUrlFrom } from '../paths.js';
 import { detectGithubSlug, isGitRepo, repoRoot } from '../repo.js';
 import {
-  agentChoices, createOptions, isGitInviteCode, joinOptions, repoChoices, teamKindChoices,
+  agentChoices, createOptions, defaultTeamKind, isGitInviteCode, joinOptions, repoChoices, teamKindChoices,
   validateHubTarget, validateInviteCode, validateMemberName, validateTeamName, type RepoChoice, type TeamKind,
 } from './choices.js';
 import type { ToolChoice } from './detect.js';
-import type { Prompter } from './prompter.js';
+import type { Choice, Prompter } from './prompter.js';
 
 /** The command functions the menu drives: the same ones the subcommands call. Tests inject fakes. */
 export interface TuiCommands {
@@ -85,14 +85,24 @@ async function pickHubServer(ctx: TuiContext): Promise<{ hub: string; as?: strin
   return { hub, as: await memberName(ctx) };
 }
 
-/** This repo's git remote for a new team, credentials stripped, or null (none, or several and none is origin). */
-async function remoteHere(deps: CliDeps): Promise<string | null> {
+interface RemoteHere { url: string | null; several: Choice<string>[] }
+
+/**
+ * This repo's git remote for a new team (credentials stripped), or, when there are several and none is origin,
+ * every remote to pick from.
+ */
+async function remoteHere(deps: CliDeps): Promise<RemoteHere> {
+  const names = await remoteNames(deps, deps.cwd);
+  const urlOf = async (name: string) => {
+    const url = await remoteFetchUrl(deps, deps.cwd, name);
+    return url ? stripCredentials(url) : null;
+  };
   try {
     const name = await pickRemote(deps, deps.cwd);
-    const url = name ? await remoteFetchUrl(deps, deps.cwd, name) : null;
-    return url ? stripCredentials(url) : null;
+    return { url: name ? await urlOf(name) : null, several: [] };
   } catch {
-    return null;
+    const several = await Promise.all(names.map(async (n) => ({ value: n, label: n, hint: (await urlOf(n)) ?? undefined })));
+    return { url: null, several };
   }
 }
 
@@ -137,16 +147,19 @@ export async function createFlow(ctx: TuiContext): Promise<void> {
   const name = await p.text('Team name', { placeholder: 'my-team', validate: validateTeamName });
   const agent = (await pickAgent(ctx, 'Which agent do you want to link?'))!;
   const isGit = await isGitRepo(deps, deps.cwd);
-  const remoteUrl = isGit ? await remoteHere(deps) : null;
-  const kinds = teamKindChoices({ remoteUrl, newRepo: ctx.hasGh && !isGit && canCreateRepo(name), teamName: name });
-  const kind = await p.select<TeamKind>('Who will be on this team?', kinds, 'local');
+  const here = isGit ? await remoteHere(deps) : { url: null, several: [] };
+  const kindCtx = { remoteUrl: here.url, severalRemotes: here.several.length > 0, newRepo: ctx.hasGh && !isGit && canCreateRepo(name), teamName: name };
+  const kind = await p.select<TeamKind>('Who will be on this team?', teamKindChoices(kindCtx), defaultTeamKind(kindCtx));
+  const remote = kind === 'git' && here.several.length > 0
+    ? await p.select('Which git remote should the team be shared through?', here.several)
+    : undefined;
   // A git team is for this repo (its remote), or for the GitHub repo created for it.
   const repo: RepoChoice = kind === 'git' ? 'link' : kind === 'newRepo' ? 'new' : await pickRepo(ctx, name, kind, isGit);
   const visibility = repo === 'new' ? await pickVisibility(p) : undefined;
   const { hub, as } = kind === 'hub' ? await pickHubServer(ctx) : { hub: undefined, as: await memberName(ctx) };
   // Without a hub the choice is explicit even when AGENTTEAMS_HUB is set in the environment.
   const createDeps = hub ? deps : { ...deps, env: { ...deps.env, AGENTTEAMS_HUB: '' } };
-  const opts = createOptions({ name, agent, repo, visibility, hub, as, kind });
+  const opts = createOptions({ name, agent, repo, visibility, hub, as, kind, remote });
   createdBox(p, await ctx.commands.create(createDeps, name, opts));
 }
 
@@ -154,7 +167,7 @@ export async function createFlow(ctx: TuiContext): Promise<void> {
 async function pickCloneTarget(ctx: TuiContext, code: string): Promise<{ clone: boolean; dir?: string }> {
   const { deps, p } = ctx;
   let url: string;
-  try { url = decodeInvite(code.trim()).remote; } catch (e) { throw new Error(`invalid invite code: ${(e as Error).message}`); }
+  try { url = decodeInvite(code.trim().toLowerCase()).remote; } catch (e) { throw new Error(`invalid invite code: ${(e as Error).message}`); }
   const isGit = await isGitRepo(deps, deps.cwd);
   if (isGit && (await findRemoteFor(deps, await repoRoot(deps, deps.cwd), url))) return { clone: false };
   const name = repoNameOf(url) ?? 'team-repo';

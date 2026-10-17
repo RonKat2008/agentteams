@@ -61,7 +61,8 @@ describe('choices', () => {
   it('accepts git invite codes as well as hub codes', () => {
     expect(validateInviteCode('at1-' + 'a'.repeat(120))).toBeUndefined();
     expect(validateInviteCode('at1-short')).toBeDefined();
-    expect(validateInviteCode('at1-' + 'A'.repeat(120))).toBeDefined();
+    expect(validateInviteCode('AT1-' + 'A'.repeat(120))).toBeUndefined(); // base32 is case-insensitive
+    expect(validateInviteCode('at1-' + '1'.repeat(120))).toBeDefined();
   });
 
   it('a hub server answer is an http(s) URL or "local"', () => {

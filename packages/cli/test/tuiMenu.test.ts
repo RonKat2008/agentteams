@@ -17,7 +17,7 @@ import { makeTestCli, type TestCli } from './helpers.js';
 const CANCEL = Symbol('cancel');
 type Answer = string | boolean | typeof CANCEL;
 
-interface Scripted extends Prompter { log: string[]; asked: { message: string; choices?: Choice<string>[] }[] }
+interface Scripted extends Prompter { log: string[]; asked: { message: string; choices?: Choice<string>[]; initial?: string }[] }
 
 /** A Prompter that answers from a script, records everything shown, and fails on an invalid or unexpected answer. */
 function scripted(answers: Answer[]): Scripted {
@@ -35,8 +35,8 @@ function scripted(answers: Answer[]): Scripted {
     intro: (t) => log.push(`intro: ${t}`),
     outro: (t) => log.push(`outro: ${t}`),
     cancelled: () => log.push('cancel: Cancelled.'),
-    select: async <T extends string>(message: string, choices: Choice<T>[]) => {
-      asked.push({ message, choices });
+    select: async <T extends string>(message: string, choices: Choice<T>[], initial?: T) => {
+      asked.push({ message, choices, initial });
       const a = next(message) as T;
       const hit = choices.find((c) => c.value === a);
       if (!hit || hit.disabled) throw new Error(`"${String(a)}" is not selectable for: ${message}`);
@@ -355,5 +355,36 @@ describe('guided menu: git teams', () => {
     expect(await run()).toBe(0);
     expect(p.asked.some((a) => a.message.startsWith('Where'))).toBe(false);
     expect(calls.join).toEqual([[gitCode, { agent: 'codex', install: true, clone: false, as: 'bob' }]]);
+  });
+
+  it('defaults "Who will be on this team?" to the git option when the repo has a remote', async () => {
+    const { p, run } = setup(['create', 'squad', 'claude', CANCEL], { table: withRemote(remoteUrl) });
+    expect(await run()).toBe(0);
+    expect(p.asked.find((a) => a.message === 'Who will be on this team?')!.initial).toBe('git');
+  });
+
+  it('with several remotes and no origin, offers a remote picker', async () => {
+    const created: CreateOpts[] = [];
+    const { p, run } = setup(['create', 'squad', 'claude', 'git', 'fork', 'ada'], {
+      table: {
+        'git remote': { stdout: 'up\nfork\n' },
+        'git remote get-url -- up': { stdout: 'git@github.com:org/app.git\n' },
+        'git remote get-url -- fork': { stdout: 'https://tok@github.com/me/app.git\n' },
+      },
+      commands: { create: async (_d, name, o) => { created.push(o); return { teamName: name, inviteCode: gitCode, inviteExpiresAt: '', hubUrl: '', remoteUrl }; } },
+    });
+    expect(await run()).toBe(0);
+    const who = p.asked.find((a) => a.message === 'Who will be on this team?')!;
+    expect(who.choices!.find((c) => c.value === 'git')!.disabled).toBeFalsy();
+    const pick = p.asked.find((a) => a.message.startsWith('Which git remote'))!;
+    expect(pick.choices!.map((c) => [c.value, c.hint])).toEqual([['up', 'git@github.com:org/app.git'], ['fork', 'https://github.com/me/app.git']]);
+    expect(created).toEqual([{ agent: 'claude', install: true, as: 'ada', remote: 'fork' }]);
+  });
+
+  it('an at1- code that does not decode is reported and nothing is joined', async () => {
+    const { p, calls, run } = setup(['join', 'at1-' + 'a'.repeat(40), 'codex', 'quit']);
+    expect(await run()).toBe(0);
+    expect(calls.join).toEqual([]);
+    expect(p.log.some((l) => l.startsWith('error:') && l.includes('invalid invite code'))).toBe(true);
   });
 });
