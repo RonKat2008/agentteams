@@ -58,10 +58,10 @@ function scripted(answers: Answer[]): Scripted {
   };
 }
 
-interface Calls { create: [string, CreateOpts][]; join: [string, JoinOpts][]; status: unknown[]; log: unknown[]; up: unknown[] }
+interface Calls { create: [string, CreateOpts][]; join: [string, JoinOpts][]; status: unknown[]; log: unknown[]; watch: unknown[]; up: unknown[] }
 
 function fakeCommands(over: Partial<TuiCommands> = {}): { commands: TuiCommands; calls: Calls } {
-  const calls: Calls = { create: [], join: [], status: [], log: [], up: [] };
+  const calls: Calls = { create: [], join: [], status: [], log: [], watch: [], up: [] };
   const commands: TuiCommands = {
     create: async (deps, name, opts) => {
       calls.create.push([name, opts]);
@@ -71,6 +71,7 @@ function fakeCommands(over: Partial<TuiCommands> = {}): { commands: TuiCommands;
     join: async (_d, code, opts) => { calls.join.push([code, opts]); },
     status: async (_d, opts) => { calls.status.push(opts); },
     log: async (_d, opts) => { calls.log.push(opts); },
+    watch: async (_d, opts) => { calls.watch.push(opts); },
     up: async (_d, opts) => { calls.up.push(opts); },
     ...over,
   };
@@ -280,6 +281,7 @@ describe('guided menu', () => {
     expect(await run()).toBe(0);
     const menu = p.asked[0]!.choices!;
     expect(menu.map((c) => c.value)).not.toContain('link');
+    expect(menu.map((c) => c.value)).not.toContain('watch');
     expect(menu.find((c) => c.value === 'status')!.disabled).toBe(true);
     expect(p.log.at(-1)).toBe('outro: Bye.');
   });
@@ -301,6 +303,15 @@ describe('guided menu', () => {
     expect(await run()).toBe(0);
     expect(calls.status).toEqual([{ agent: 'claude' }]);
     expect(calls.log).toEqual([{ agent: 'codex', follow: false, limit: 20 }]);
+  });
+
+  it('opens the live dashboard and returns to the menu when it is closed', async () => {
+    const { calls, p, run } = setup(['watch', 'quit']);
+    await link('claude');
+    expect(await run()).toBe(0);
+    expect(p.asked[0]!.choices!.find((c) => c.value === 'watch')!.label).toBe('Watch the team live');
+    expect(calls.watch).toEqual([{ agent: undefined }]);
+    expect(p.log.at(-1)).toBe('outro: Bye.');
   });
 
   it('starts a shared hub', async () => {

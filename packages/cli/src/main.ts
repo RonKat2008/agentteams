@@ -13,6 +13,7 @@ import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
 import type { MergeOpts } from './commands/merge.js';
 import type { RunEntryOpts } from './commands/run.js';
+import type { WatchOpts } from './commands/watch.js';
 import { realDeps, type CliDeps } from './deps.js';
 import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
@@ -20,6 +21,7 @@ import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
 const DEFAULT_WATCH_INTERVAL_SEC = 30;
+const DASHBOARD_INTERVAL_SEC = 2;
 const TRUST_HUB_HELP = 'send your GitHub token to a non-official hosted hub without asking (required when not interactive)';
 
 function parsePositive(name: string) {
@@ -28,6 +30,12 @@ function parsePositive(name: string) {
     if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a positive integer`);
     return n;
   };
+}
+
+function parseSeconds(v: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1) throw new Error('--interval must be a number of seconds, at least 1');
+  return n;
 }
 
 function parseLimit(v: string): number {
@@ -86,6 +94,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((o) => installCommand(deps, o));
   sub('status').description('Show team status').addOption(agentOpt())
     .action((o) => statusCommand(deps, o));
+  sub('watch').description('Live dashboard of the team: agents, tasks and activity (q quits; prints one snapshot when piped)')
+    .addOption(agentOpt()).option('--team <name>', 'which team to show when this repo is in several')
+    .option('--interval <seconds>', 'seconds between refreshes (at least 1)', parseSeconds, DASHBOARD_INTERVAL_SEC)
+    .option('--once', 'print one snapshot and exit')
+    .action(async (o: WatchOpts) => (await import('./commands/watch.js')).watchCommand(deps, o));
   sub('sync').description('Exchange team state with the git remote now (git teams; normally runs in the background)')
     .option('--repo <path>', 'the repo to sync (default: the current directory)')
     .addOption(new Option('--tool <tool>', TOOLS.join(' | ')).choices(TOOLS))

@@ -10,6 +10,8 @@ export interface Palette {
   yellow: (s: string) => string;
   gray: (s: string) => string;
   magenta: (s: string) => string;
+  red: (s: string) => string;
+  cyan: (s: string) => string;
   /** Colors an agent name with a stable color derived from the name. */
   agent: (s: string) => string;
 }
@@ -25,9 +27,9 @@ function hash(s: string): number {
 const identity = (s: string) => s;
 
 export function makePalette(enabled: boolean): Palette {
-  if (!enabled) return { dim: identity, bold: identity, green: identity, yellow: identity, gray: identity, magenta: identity, agent: identity };
+  if (!enabled) return { dim: identity, bold: identity, green: identity, yellow: identity, gray: identity, magenta: identity, red: identity, cyan: identity, agent: identity };
   return {
-    dim: wrap(2, 22), bold: wrap(1, 22), green: wrap(32, 39), yellow: wrap(33, 39), gray: wrap(90, 39), magenta: wrap(35, 39),
+    dim: wrap(2, 22), bold: wrap(1, 22), green: wrap(32, 39), yellow: wrap(33, 39), gray: wrap(90, 39), magenta: wrap(35, 39), red: wrap(31, 39), cyan: wrap(36, 39),
     agent: (s) => wrap(AGENT_COLORS[hash(s) % AGENT_COLORS.length]!, 39)(s),
   };
 }
