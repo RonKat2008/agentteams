@@ -3,13 +3,13 @@ import type { CliDeps } from '../deps.js';
 import { hasLocalTeam } from '../local/team.js';
 import { detectTools, which, type ToolChoice } from './detect.js';
 import {
-  createFlow, joinFlow, linkFlow, logFlow, realCommands, statusFlow, upFlow, type TuiCommands, type TuiContext,
+  createFlow, joinFlow, linkFlow, logFlow, realCommands, statusFlow, upFlow, watchFlow, type TuiCommands, type TuiContext,
 } from './flows.js';
 import { CancelledError, clackPrompter, type Choice, type Prompter } from './prompter.js';
 
 export const BANNER = 'agentteams · one team, every coding agent';
 
-type Action = 'create' | 'join' | 'link' | 'status' | 'log' | 'up' | 'quit';
+type Action = 'create' | 'join' | 'link' | 'status' | 'log' | 'watch' | 'up' | 'quit';
 
 export interface TuiOptions {
   prompter?: Prompter;
@@ -25,6 +25,7 @@ const FLOWS: Record<Exclude<Action, 'quit'>, { run: (ctx: TuiContext) => Promise
   link: { run: linkFlow, done: 'Done.' },
   status: { run: statusFlow },
   log: { run: logFlow },
+  watch: { run: watchFlow },
   up: { run: upFlow, done: 'Hub stopped.' },
 };
 
@@ -36,6 +37,7 @@ export function menuChoices(hasTeam: boolean): Choice<Action>[] {
     ...(hasTeam ? [{ value: 'link' as const, label: 'Link another agent to this team' }] : []),
     { value: 'status', label: 'Team status', hint: noTeam, disabled: !hasTeam },
     { value: 'log', label: 'Activity', hint: noTeam ?? 'recent events', disabled: !hasTeam },
+    ...(hasTeam ? [{ value: 'watch' as const, label: 'Watch the team live', hint: 'full-screen dashboard; q returns here' }] : []),
     { value: 'up', label: 'Start a local hub', hint: 'runs until Ctrl-C' },
     { value: 'quit', label: 'Quit' },
   ];

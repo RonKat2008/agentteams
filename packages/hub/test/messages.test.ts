@@ -106,4 +106,21 @@ describe('permissions and validation', () => {
     expect(last.data).toMatchObject({ to: 'all', kind: 'fyi' });
     expect((last.data.preview as string).length).toBeLessThanOrEqual(80);
   });
+
+  it('logs the full body so the activity log can show long messages whole', async () => {
+    const { ronit, dylan } = await seedTeam(env);
+    const body = 'y'.repeat(900);
+    await sendMessage(env.ctx, dylan, { to: 'all', body });
+    expect((await getActivity(env.ctx, ronit)).at(-1)!.data.body).toBe(body);
+  });
+
+  it('a direct message logs only the short preview; the recipient still reads the whole body', async () => {
+    const { ronit, dylan } = await seedTeam(env);
+    const body = `private ${'z'.repeat(300)}`;
+    await sendMessage(env.ctx, dylan, { to: 'ronit-claude', body });
+    const last = (await getActivity(env.ctx, dylan)).at(-1)!;
+    expect(last.data).toMatchObject({ to: 'ronit-claude', preview: body.slice(0, 80) });
+    expect(last.data).not.toHaveProperty('body');
+    expect((await readInbox(env.ctx, ronit)).map((m) => m.body)).toEqual([body]);
+  });
 });

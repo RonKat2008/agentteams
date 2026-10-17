@@ -7,7 +7,7 @@
  * replay, SQLite) loads on first use.
  */
 import type {
-  ActivityEvent, CheckFilesResult, CommitInput, InboxMessage, ReadInboxInput, TaskView, TeamStatus,
+  ActivityEvent, CheckFilesResult, CommitInput, InboxMessage, MessageKind, ReadInboxInput, TaskView, TeamStatus,
 } from '@agentteams/shared';
 import type { Actor } from '@agentteams/hub/core';
 import type { CliDeps } from '../deps.js';
@@ -174,6 +174,12 @@ export class GitTeamClient implements TeamClient {
   async getTask(n: number) {
     taskNumber(n);
     return this.read<TaskView>((v, a) => v.store.core.getTaskView(v.store.ctx, a, n));
+  }
+  async sendMessage(to: string, body: string, kind: MessageKind = 'fyi') {
+    return (await this.execute('sendMessage', { to, body, kind })) as { id: string; to: string };
+  }
+  listTasks() {
+    return this.read<TaskView[]>((v, a) => v.store.core.listTasks(v.store.ctx, a, {}));
   }
   async recordCommit(input: CommitInput) {
     return (await this.execute('recordCommit', input as OpInput<'recordCommit'>)) as { notified: string[]; duplicate: boolean };

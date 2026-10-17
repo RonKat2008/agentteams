@@ -12,6 +12,7 @@ import { loadCredentials, type Credential } from '../../src/credentials.js';
 import { realExec, type CliDeps, type Exec } from '../../src/deps.js';
 import { newAgentKeyPair } from '../../src/git/crypto.js';
 import { decodeInvite, encodeInvite } from '../../src/git/invite.js';
+import { GitTeamClient } from '../../src/git/client.js';
 import { createGitMcpServer } from '../../src/git/mcp.js';
 import { inviteUrlOf } from '../../src/git/setup.js';
 import { normalizeRemote, pickRemote, repoNameOf, stripCredentials } from '../../src/git/remoteUrl.js';
@@ -186,6 +187,40 @@ describe('git team: work crosses clones after one sync round', () => {
     expect(err.join('\n')).toMatch(/claimed by bob-codex/);
     await alice.close();
     await bob.close();
+  });
+});
+
+describe('git team: TeamClient.sendMessage', () => {
+  it('a command sent through the client reaches B after a sync round', async () => {
+    const { a, code } = await createTeam();
+    const b = cli(world.clone('b'));
+    expect(await b.run('join', code, '--agent', 'codex', '--as', 'bob', '--no-install')).toBe(0);
+    expect(await a.run('sync')).toBe(0);
+    const alice = new GitTeamClient(a.deps, await credOf(a), { trigger: () => {} });
+    expect(await alice.sendMessage('bob-codex', 'rebase task 2', 'command')).toBeTruthy();
+    expect(await a.run('sync')).toBe(0);
+    expect(await b.run('sync')).toBe(0);
+    const bob = new GitTeamClient(b.deps, await credOf(b, 'codex'), { trigger: () => {} });
+    expect((await bob.ping(false)).messages.map((m) => [m.kind, m.body])).toContainEqual(['command', 'rebase task 2']);
+  });
+
+  it('agentteams merge lands a finished task and records it as merged', async () => {
+    const { a, repoA } = await createTeam();
+    const alice = await mcp(a, await credOf(a));
+    expect((await alice.callTool({ name: 'create_task', arguments: { title: 'Login', assignee: 'alice-claude' } })).isError).toBeFalsy();
+    git(repoA, 'checkout', '-q', '-b', 'at/alice-claude/1');
+    writeFileSync(join(repoA, 'login.txt'), 'login');
+    git(repoA, 'add', 'login.txt');
+    git(repoA, 'commit', '-q', '-m', 'login');
+    git(repoA, 'checkout', '-q', 'main');
+    const client = new GitTeamClient(a.deps, await credOf(a), { trigger: () => {} });
+    await client.claimTask(1);
+    await client.completeTask(1, 'login', 'at/alice-claude/1');
+
+    expect(await a.run('merge', '--test', 'exit 0')).toBe(0);
+    expect(git(repoA, 'show', 'main:login.txt')).toBe('login');
+    expect((await client.getTask(1)).mergedAt).toBeTruthy();
+    await alice.close();
   });
 });
 

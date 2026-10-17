@@ -1,4 +1,4 @@
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import type { CliDeps } from './deps.js';
 
 type Deps = Pick<CliDeps, 'exec'>;
@@ -24,11 +24,18 @@ export async function mainRepoRoot(deps: Deps, cwd: string): Promise<string | nu
   return common.endsWith('/.git') ? dirname(common) : null;
 }
 
+/** Absolute path of a git-dir file (shared across worktrees for info/*). Falls back for git older than 2.31. */
 export async function gitPath(deps: Deps, cwd: string, name: string): Promise<string> {
-  const r = await git(deps, cwd, ['rev-parse', '--path-format=absolute', '--git-path', name]);
+  let r = await git(deps, cwd, ['rev-parse', '--path-format=absolute', '--git-path', name]);
+  if (r.code !== 0) r = await git(deps, cwd, ['rev-parse', '--git-path', name]); // no --path-format: relative to cwd
   const out = r.stdout.trim();
   if (r.code !== 0 || !out) throw new Error(`git rev-parse --git-path ${name} failed: ${r.stderr.trim() || `exit ${r.code}`}`);
-  return out;
+  return resolve(cwd, out);
+}
+
+/** Whether `relPath` is tracked by git (an ignore rule cannot hide a tracked file). */
+export async function isTracked(deps: Deps, cwd: string, relPath: string): Promise<boolean> {
+  return (await git(deps, cwd, ['ls-files', '--error-unmatch', '--', relPath])).code === 0;
 }
 
 export async function currentBranch(deps: Deps, cwd: string): Promise<string> {

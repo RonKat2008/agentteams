@@ -49,6 +49,8 @@ describe('installCursor', () => {
     expect(rules.startsWith('---\ndescription: agentteams multi-agent coordination\nalwaysApply: true\n---\n')).toBe(true);
     expect(rules).toContain('agentteams:start');
     expect(rules).toContain('dev-squad');
+    expect(rules).toContain('AGENTS.md');
+    expect(rules).not.toContain('claim_files'); // Cursor reads AGENTS.md: the rule only points there
     expect(read('AGENTS.md')).toContain('agentteams:start');
     for (const p of ['.cursor/mcp.json', '.cursor/hooks.json', '.cursor/rules/agentteams.mdc', 'AGENTS.md']) {
       expect(read(p)).not.toContain('at_SECRET');

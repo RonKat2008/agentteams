@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, CheckFilesResult, CommitInput, InboxMessage, TaskView, TeamStatus,
+  ActivityEvent, CheckFilesResult, CommitInput, InboxMessage, MessageKind, TaskView, TeamStatus,
 } from '@agentteams/shared';
 import type { Credential } from './credentials.js';
 import type { CliDeps } from './deps.js';
@@ -21,6 +21,10 @@ export interface TeamClient {
   completeTask(n: number, summary: string, branch: string): Promise<TaskView>;
   markMerged(n: number, pr?: string): Promise<TaskView>;
   getTask(n: number): Promise<TaskView>;
+  /** Message one agent or "all"; kind "command" is orchestrator-only. */
+  sendMessage(to: string, body: string, kind?: MessageKind): Promise<{ id: string; to: string }>;
+  /** The whole task board, by number. */
+  listTasks(): Promise<TaskView[]>;
   recordCommit(input: CommitInput): Promise<{ notified: string[]; duplicate: boolean }>;
 }
 

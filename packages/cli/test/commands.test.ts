@@ -183,12 +183,25 @@ describe('agentteams commands', () => {
     const t = mk({}, { claude: { code: 0 } });
     expect(await run(t, 'create', 'amb', '--hub', hub.url, '--local', '--no-install')).toBe(0);
     expect(await run(t, 'join', inviteCodeOf(t), '--agent', 'codex', '--as', 'b', '--hub', hub.url, '--no-install')).toBe(0);
-    for (const args of [['status'], ['log'], ['invite', 'rotate'], ['orchestrator', 'b-codex']]) {
+    for (const args of [['invite', 'rotate'], ['orchestrator', 'b-codex']]) {
       t.err.length = 0;
       expect(await run(t, ...args)).toBe(1);
       expect(t.err.join('\n')).toContain('multiple agentteams agents in this repo (claude, codex); pass --agent <tool>');
     }
     expect(await run(t, 'status', '--agent', 'codex')).toBe(0);
+  });
+
+  it('status and log need no --agent when several agents share the repo; all of them are marked "you"', async () => {
+    const t = mk({}, { claude: { code: 0 } });
+    expect(await run(t, 'create', 'amb', '--hub', hub.url, '--local', '--no-install')).toBe(0);
+    expect(await run(t, 'join', inviteCodeOf(t), '--agent', 'codex', '--as', 'b', '--hub', hub.url, '--no-install')).toBe(0);
+    t.out.length = 0;
+    expect(await run(t, 'status')).toBe(0);
+    const rows = t.out.filter((l) => /\b(claude|codex)\b.*\byou\b/.test(l));
+    expect(rows).toHaveLength(2);
+    t.out.length = 0;
+    expect(await run(t, 'log')).toBe(0);
+    expect(t.out.join('\n')).toContain('joined');
   });
 
   it('log rejects a non-positive --limit', async () => {

@@ -1,6 +1,6 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { defaultMemberName, MemberName, type RepoLink, type ToolKind } from '@agentteams/shared';
+import { MemberName, type RepoLink, type ToolKind } from '@agentteams/shared';
 import { saveCredential, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
@@ -10,7 +10,7 @@ import { HubClient } from '../hubClient.js';
 import { createLocalTeam, LOCAL_TEAM_LABEL } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
-import { checkTeamDir, detectGithubSlug, isGitRepo, repoRoot } from '../repo.js';
+import { checkTeamDir, detectGithubSlug, ensureFirstCommit, firstCommitNote, isGitRepo, repoRoot, resolveMemberName } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
 import { dateOnly, refuseExistingCredential } from './shared.js';
 
@@ -54,6 +54,17 @@ async function gitOrThrow(deps: CliDeps, cwd: string, args: string[]): Promise<s
 /** The exact command teammates run to join (printed by create and by the guided menu); local teams have no hub URL. */
 export const teammateJoinCommand = (inviteCode: string, hubUrl: string): string =>
   hubUrl ? `agentteams join ${inviteCode} --hub ${hubUrl}` : `agentteams join ${inviteCode}`;
+
+/** Hub and local codes: only the creator's credential holds the plaintext, so say to keep it safe. */
+export const HUB_INVITE_WARNING =
+  'Copy this code now and treat it like a password: anyone who has it can join the team until it expires.';
+
+/** The one place a hub or local code is printed: the code, the join command and the password warning. */
+export function printInvite(deps: Pick<CliDeps, 'out'>, code: string, expiresAt: string, hubUrl: string, label = 'Invite code'): void {
+  deps.out(`${label}: ${code} (expires ${dateOnly(expiresAt)})`);
+  deps.out(`Teammates join with: ${teammateJoinCommand(code, hubUrl)}`);
+  deps.out(HUB_INVITE_WARNING);
+}
 
 /** No --hub flag and no AGENTTEAMS_HUB: the team is stored in this repo (a local or a git team), not on a hub. */
 export const isLocalCreate = (opts: Pick<CreateOpts, 'hub'>, env: NodeJS.ProcessEnv): boolean =>
@@ -140,15 +151,15 @@ async function registerLocalTeam(
   if (await hasGitTeam(deps, repoPath)) {
     throw new Error('this repo already has a git team; a repo holds one git team (use another clone for a team on this computer only)');
   }
-  const member = opts.as ?? defaultMemberName(deps.username);
+  const member = opts.as ?? await resolveMemberName(deps, repoPath);
   const res = await createLocalTeam(deps, repoPath, { name, tool: opts.agent, repo, member });
   const cred: Credential = {
     repoPath, tool: opts.agent, hubUrl: '', teamName: res.teamName, agentName: res.agentName,
     apiKey: res.apiKey, createdAt: new Date().toISOString(), transport: 'local',
+    invite: { code: res.inviteCode, expiresAt: res.inviteExpiresAt },
   };
   deps.out(`Created team "${res.teamName}". You are ${res.agentName} (orchestrator).`);
-  deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
-  deps.out(`Teammates join with: ${teammateJoinCommand(res.inviteCode, '')}`);
+  printInvite(deps, res.inviteCode, res.inviteExpiresAt, '');
   deps.out(LOCAL_TEAM_LABEL);
   await saveCredential(deps, cred);
   return { cred, result: { teamName: res.teamName, inviteCode: res.inviteCode, inviteExpiresAt: res.inviteExpiresAt, hubUrl: '' } };
@@ -158,7 +169,7 @@ async function registerLocalTeam(
 async function registerGitTeam(
   deps: CliDeps, name: string, opts: CreateOpts, repoPath: string, repo: RepoLink, remote: string,
 ): Promise<{ cred: Credential; result: CreateResult }> {
-  const member = MemberName.parse(opts.as ?? defaultMemberName(deps.username));
+  const member = MemberName.parse(opts.as ?? await resolveMemberName(deps, repoPath));
   const res = await createGitTeam(deps, { repoPath, remote, name, tool: opts.agent, member, repo });
   await saveCredential(deps, res.cred);
   deps.out(`Created team "${name}" (shared through ${res.remoteUrl}). You are ${res.cred.agentName} (orchestrator).`);
@@ -176,15 +187,15 @@ async function registerTeam(
     return registerLocalTeam(deps, name, opts, repoPath, repo);
   }
   const hubUrl = hubUrlFrom(opts.hub, deps.env);
-  const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
+  const identity = githubToken ? { githubToken } : { member: opts.as ?? await resolveMemberName(deps, repoPath) };
   const res = await new HubClient(hubUrl, { fetch: deps.fetch }).createTeam({ name, tool: opts.agent, repo, ...identity });
   const cred = {
     repoPath, tool: opts.agent, hubUrl, teamName: res.teamName, agentName: res.agentName,
     apiKey: res.apiKey, createdAt: new Date().toISOString(),
+    invite: { code: res.inviteCode, expiresAt: res.inviteExpiresAt },
   };
   deps.out(`Created team "${res.teamName}". You are ${res.agentName} (orchestrator).`);
-  deps.out(`Invite code: ${res.inviteCode} (expires ${dateOnly(res.inviteExpiresAt)})`);
-  deps.out(`Teammates join with: ${teammateJoinCommand(res.inviteCode, hubUrl)}`);
+  printInvite(deps, res.inviteCode, res.inviteExpiresAt, hubUrl);
   deps.out(`Hub: ${hubLabel(hubUrl)}`);
   await saveCredential(deps, cred);
   return { cred, result: { teamName: res.teamName, inviteCode: res.inviteCode, inviteExpiresAt: res.inviteExpiresAt, hubUrl } };
@@ -207,6 +218,8 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
   const githubToken = local ? undefined : await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env), { trustHub: opts.trustHub });
   if (!opts.newRepo) {
     const repoPath = await repoRoot(deps, deps.cwd);
+    const note = (await isGitRepo(deps, repoPath)) ? firstCommitNote(await ensureFirstCommit(deps, repoPath)) : null;
+    if (note) (note.isError ? deps.err : deps.out)(note.text);
     const repo = await resolveRepoLink(deps, opts, repoPath, local);
     const { cred, result } = await registerTeam(deps, name, opts, repoPath, repo, githubToken);
     if (opts.install) printReport(deps, await runInstallers(deps, cred));

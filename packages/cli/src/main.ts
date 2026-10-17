@@ -11,12 +11,17 @@ import { statusCommand } from './commands/status.js';
 import { syncCommand } from './commands/sync.js';
 import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
+import type { MergeOpts } from './commands/merge.js';
+import type { RunEntryOpts } from './commands/run.js';
+import type { WatchOpts } from './commands/watch.js';
 import { realDeps, type CliDeps } from './deps.js';
 import { runPostCommit, runPreCommit } from './gitHooks.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './hooks.js';
 
 const TOOLS = ToolKind.options;
 const DEFAULT_LOG_LIMIT = 20;
+const DEFAULT_WATCH_INTERVAL_SEC = 30;
+const DASHBOARD_INTERVAL_SEC = 2;
 const TRUST_HUB_HELP = 'send your GitHub token to a non-official hosted hub without asking (required when not interactive)';
 
 function parsePositive(name: string) {
@@ -25,6 +30,12 @@ function parsePositive(name: string) {
     if (!Number.isInteger(n) || n < 1) throw new Error(`${name} must be a positive integer`);
     return n;
   };
+}
+
+function parseSeconds(v: string): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1) throw new Error('--interval must be a number of seconds, at least 1');
+  return n;
 }
 
 function parseLimit(v: string): number {
@@ -83,6 +94,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .action((o) => installCommand(deps, o));
   sub('status').description('Show team status').addOption(agentOpt())
     .action((o) => statusCommand(deps, o));
+  sub('watch').description('Live dashboard of the team: agents, tasks and activity (q quits; prints one snapshot when piped)')
+    .addOption(agentOpt()).option('--team <name>', 'which team to show when this repo is in several')
+    .option('--interval <seconds>', 'seconds between refreshes (at least 1)', parseSeconds, DASHBOARD_INTERVAL_SEC)
+    .option('--once', 'print one snapshot and exit')
+    .action(async (o: WatchOpts) => (await import('./commands/watch.js')).watchCommand(deps, o));
   sub('sync').description('Exchange team state with the git remote now (git teams; normally runs in the background)')
     .option('--repo <path>', 'the repo to sync (default: the current directory)')
     .addOption(new Option('--tool <tool>', TOOLS.join(' | ')).choices(TOOLS))
@@ -97,9 +113,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       try { await logCommand(deps, { agent: o.agent, follow: Boolean(o.follow), limit: o.limit, signal: ac.signal }); }
       finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
     });
-  sub('invite').description('Show (git teams), rotate or revoke the invite code')
-    .addArgument(new Argument('<action>').choices(['show', 'rotate', 'revoke'])).addOption(agentOpt())
-    .action((action: InviteAction, o) => inviteCommand(deps, action, o));
+  sub('invite').description('Show (default), rotate or revoke the invite code')
+    .addArgument(new Argument('[action]').choices(['show', 'rotate', 'revoke'])).addOption(agentOpt())
+    .option('--rotate', 'issue a new invite code (same as "invite rotate")').option('--revoke', 'revoke the invite code (same as "invite revoke")')
+    .action((action: InviteAction | undefined, o: { agent?: ToolKind; rotate?: boolean; revoke?: boolean }) =>
+      inviteCommand(deps, o.rotate ? 'rotate' : o.revoke ? 'revoke' : action ?? 'show', o));
   sub('orchestrator').description('Make an agent the orchestrator').argument('<agent-name>').addOption(agentOpt())
     .action((target: string, o) => orchestratorCommand(deps, target, o));
   sub('worktree').description('Claim a task and give it its own git worktree and branch')
@@ -108,6 +126,17 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .option('--remove', "remove this task's worktree instead (the branch is kept)")
     .option('--force', 'with --remove: discard uncommitted changes')
     .action((task: number, o: { agent?: ToolKind; base?: string; remove?: boolean; force?: boolean }) => worktreeCommand(deps, task, o));
+  sub('run').description("Start a task's assignee (codex, cursor, claude or gemini) non-interactively in the task worktree")
+    .addArgument(new Argument('[task]', 'task number').argParser(parsePositive('task')))
+    .addOption(agentOpt()).option('--model <model>', "model passed to the tool's own --model flag")
+    .option('--detach', 'run in the background; output goes only to the log')
+    .option('--all', 'start every assigned, unfinished task whose agent is on this computer, in the background')
+    .option('--watch', 'keep polling the task board and start runs for new assignments (Ctrl-C stops watching)')
+    .option('--interval <seconds>', 'with --watch: seconds between polls', parsePositive('--interval'), DEFAULT_WATCH_INTERVAL_SEC)
+    .addOption(new Option('--supervise').hideHelp())
+    .action(async (task: number | undefined, o: RunEntryOpts) => {
+      exit.code = await (await import('./commands/run.js')).runEntry(deps, task, o);
+    });
   const taskArg = () => new Argument('<task>', 'task number').argParser(parsePositive('task'));
   sub('done').description('Push this task branch and mark the task done')
     .addArgument(taskArg()).addOption(agentOpt())
@@ -119,6 +148,16 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('merged').description('Record that a task branch was merged (orchestrator only)')
     .addArgument(taskArg()).addOption(agentOpt()).option('--pr <url>', 'pull request URL')
     .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
+  sub('merge').description('Merge finished task branches, run the tests and land the result (orchestrator only)')
+    .addOption(agentOpt()).option('--into <branch>', 'branch to merge into (default: the branch checked out in the main checkout)')
+    .option('--test <cmd>', 'test command, run with sh -c (default: detected from the base branch\'s package.json, Makefile, Cargo, Go or pytest, after asking)')
+    .option('--no-test', 'do not run tests')
+    .option('--yes', 'run the auto-detected test command without asking (needed without a terminal)')
+    .option('--no-notify', "do not ask a conflicting task's agent to rebase")
+    .option('--stop-on-conflict', 'stop at the first conflict and leave it in the integration worktree')
+    .option('--dry-run', 'merge and test without updating the branch or recording merges')
+    .option('--push', 'push the branch after landing')
+    .action(async (o: MergeOpts) => { exit.code = await (await import('./commands/merge.js')).mergeCommand(deps, o); });
   const access = sub('access').description('Manage repo access for teammates');
   access.command('grant').exitOverride().description('Invite a teammate\'s GitHub account to the repo with push access')
     .argument('<agent-or-login>').addOption(agentOpt()).option('--yes', 'skip the confirmation prompt (CI only)')

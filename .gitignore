@@ -9,3 +9,4 @@ packages/agentteams/LICENSE
 packages/agentteams/README.md
 packages/agentteams/assets
 .claude/worktrees/
+.superpowers/

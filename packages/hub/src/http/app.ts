@@ -10,7 +10,7 @@ import { buildMcpServer } from '../mcp/server.js';
 import { getActivity } from '../services/activity.js';
 import { checkFiles, recordClaimOverride, whoOwns } from '../services/claims.js';
 import { getChanges, recordCommit } from '../services/commits.js';
-import { readInbox } from '../services/messages.js';
+import { readInbox, sendMessage } from '../services/messages.js';
 import { claimTask, completeTask, getTaskView, listTasks, markMerged } from '../services/tasks.js';
 import {
   authenticate, createTeam, getTeamStatus, joinTeam, previewInvite, revokeInvite, rotateInvite, setOrchestrator,
@@ -192,6 +192,7 @@ export function createApp(ctx: HubContext, opts: AppOptions = {}): Hono<AppEnv> 
     const b = (await body(c)) as Record<string, unknown>;
     return c.json(await markMerged(ctx, c.get('actor'), { ...b, task: taskNumber(c) } as never));
   });
+  app.post('/api/team/messages', async (c) => c.json(await sendMessage(ctx, c.get('actor'), (await body(c)) as never)));
   app.post('/api/team/orchestrator', async (c) => c.json(await setOrchestrator(ctx, c.get('actor'), (await body(c)) as never)));
   app.post('/api/team/invite/rotate', async (c) => c.json(await rotateInvite(ctx, c.get('actor'))));
   app.post('/api/team/invite/revoke', async (c) => c.json(await revokeInvite(ctx, c.get('actor'))));

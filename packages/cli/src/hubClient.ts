@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, CheckFilesResult, CommitInput, CreateTeamInput, InboxMessage, InvitePreview, JoinTeamInput, RepoLink, TaskView,
+  ActivityEvent, CheckFilesResult, CommitInput, CreateTeamInput, InboxMessage, InvitePreview, MessageKind, JoinTeamInput, RepoLink, TaskView,
   TeamStatus,
 } from '@agentteams/shared';
 
@@ -123,6 +123,12 @@ export class HubClient implements TeamClient {
   }
   getTask(n: number) {
     return this.request<TaskView>('GET', `/api/team/tasks/${n}`);
+  }
+  sendMessage(to: string, body: string, kind: MessageKind = 'fyi') {
+    return this.request<{ id: string; to: string }>('POST', '/api/team/messages', { to, body, kind });
+  }
+  listTasks() {
+    return this.request<TaskView[]>('GET', '/api/team/tasks');
   }
   recordCommit(input: CommitInput) {
     return this.request<{ notified: string[]; duplicate: boolean }>('POST', '/api/team/commits', input);

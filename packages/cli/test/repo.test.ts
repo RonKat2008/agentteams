@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { checkTeamDir, detectGithubSlug, repoRoot } from '../src/repo.js';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { realExec, type Exec } from '../src/deps.js';
+import { checkTeamDir, detectGithubSlug, ensureFirstCommit, FIRST_COMMIT_MESSAGE, repoRoot } from '../src/repo.js';
 import { defaultMemberName } from '@agentteams/shared';
 import { fakeExec } from './helpers.js';
 
@@ -49,5 +54,33 @@ describe('checkTeamDir', () => {
     const err: string[] = [];
     await checkTeamDir({ exec: git, homedir: '/Users/x', err: (l) => err.push(l) }, '/w/app');
     expect(err).toEqual([]);
+  });
+});
+
+describe('ensureFirstCommit', () => {
+  const ID = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  const exec: Exec = (cmd, args, opts) => realExec(cmd, args, { ...opts, env: { ...opts?.env, ...ID } });
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  let dir: string;
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'agentteams-first-')));
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'config', 'user.name', 'T');
+    git(dir, 'config', 'user.email', 't@example.com');
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('makes an empty first commit that leaves staged files staged and out of the commit', async () => {
+    writeFileSync(join(dir, 'secret.txt'), 'mine');
+    git(dir, 'add', 'secret.txt');
+    expect(await ensureFirstCommit({ exec }, dir)).toBe('committed');
+    expect(git(dir, 'ls-tree', '-r', '--name-only', 'HEAD')).toBe('');
+    expect(git(dir, 'log', '--format=%s')).toBe(FIRST_COMMIT_MESSAGE);
+    expect(git(dir, 'diff', '--cached', '--name-only')).toBe('secret.txt');
+  });
+
+  it('does nothing when HEAD already has a commit', async () => {
+    expect(await ensureFirstCommit({ exec }, dir)).toBe('committed');
+    expect(await ensureFirstCommit({ exec }, dir)).toBe('exists');
   });
 });

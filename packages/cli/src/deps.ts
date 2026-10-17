@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { homedir, userInfo } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { colorEnabled } from './color.js';
+import { realRunner, type ProcessRunner } from './run/runner.js';
 
 export interface ExecResult {
   code: number;
@@ -40,6 +41,8 @@ export interface CliDeps {
   isTTY: boolean;
   color: boolean;
   prompt: (question: string) => Promise<string>;
+  /** Starts agent tools for `agentteams run`; unset in tests unless they inject a fake, so nothing real is launched. */
+  runner?: ProcessRunner;
 }
 
 export const realExec: Exec = (cmd, args, opts = {}) =>
@@ -97,5 +100,6 @@ export function realDeps(): CliDeps {
     isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     color: colorEnabled(process.env, Boolean(process.stdout.isTTY)),
     prompt: readlinePrompt,
+    runner: realRunner,
   };
 }

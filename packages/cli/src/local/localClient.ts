@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent, CheckFilesResult, CommitInput, InboxMessage, TaskView, TeamStatus,
+  ActivityEvent, CheckFilesResult, CommitInput, InboxMessage, MessageKind, TaskView, TeamStatus,
 } from '@agentteams/shared';
 import type { CliDeps } from '../deps.js';
 import type { Credential } from '../credentials.js';
@@ -93,6 +93,12 @@ export class LocalTeamClient implements TeamClient {
   async getTask(n: number) {
     taskNumber(n);
     return this.run<TaskView>((s, a) => s.core.getTaskView(s.ctx, a, n));
+  }
+  sendMessage(to: string, body: string, kind: MessageKind = 'fyi') {
+    return this.run<{ id: string; to: string }>((s, a) => s.core.sendMessage(s.ctx, a, { to, body, kind }));
+  }
+  listTasks() {
+    return this.run<TaskView[]>((s, a) => s.core.listTasks(s.ctx, a, {}));
   }
   recordCommit(input: CommitInput) {
     return this.run<{ notified: string[]; duplicate: boolean }>((s, a) => s.core.recordCommit(s.ctx, a, input as never));

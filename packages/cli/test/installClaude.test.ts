@@ -63,6 +63,9 @@ describe('installClaude', () => {
     expect(settings).toContain('hook session-start --tool claude');
     expect(settings).not.toContain('at_SECRET');
     expect(claudeMd).toContain('agentteams:start');
+    expect(claudeMd).toContain('@AGENTS.md');
+    expect(claudeMd).not.toContain('claim_files'); // the steps live once, in AGENTS.md
+    expect(readFileSync(join(repo, 'AGENTS.md'), 'utf8')).toContain('claim_files');
     expect(claudeMd).not.toContain('at_SECRET');
     expect(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8')).toContain('.claude/settings.local.json');
   });

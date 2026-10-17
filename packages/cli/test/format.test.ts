@@ -85,6 +85,25 @@ describe('formatEvent', () => {
     expect(describe1('commit', { sha: 5 })).toBe('commit sha=5');
     expect(describe1('brand_new', { long: 'z'.repeat(100) })).toBe(`brand_new long=${'z'.repeat(39)}…`);
   });
+  it('shows a long message in full, wrapped under the description, never cut with an ellipsis', () => {
+    const body = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ');
+    const out = formatEvent(ev('message_sent', { to: 'alice-claude', kind: 'fyi', body, preview: body.slice(0, 80) }));
+    const lines = out.split('\n');
+    expect(lines.length).toBeGreaterThan(1);
+    expect(out).not.toContain('…');
+    expect(lines.slice(1).every((l) => l.startsWith(' '.repeat(26)))).toBe(true);
+    expect(out.replace(/\s+/g, ' ')).toContain(body);
+  });
+  it("keeps a message's own line breaks as indented continuation lines, but strips control characters", () => {
+    const out = formatEvent(ev('message_sent', { to: 'bob', kind: 'fyi', body: 'line one\nline two\u001b[31m\u0007‮' }));
+    expect(out.split('\n')).toHaveLength(2);
+    expect(out).toContain('line two[31m');
+    expect(out).not.toMatch(/[\u001b\u0007‮]/);
+  });
+  it('shows full task summaries and notes', () => {
+    const summary = 's'.repeat(200);
+    expect(formatEvent(ev('task_completed', { task: 1, branch: 'b', summary })).replace(/\s+/g, '')).toContain(summary);
+  });
   it('never throws on odd data', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;

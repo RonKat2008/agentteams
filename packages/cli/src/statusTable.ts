@@ -29,12 +29,14 @@ function widths(rows: string[][]): number[] {
   return HEADERS.map((h, i) => Math.max(h.length, ...rows.map((r) => [...r[i]!].length)));
 }
 
-function notes(a: AgentView, me: string, p: Palette): string {
-  const parts = [a.isOrchestrator ? p.magenta('★ orchestrator') : '', a.name === me ? 'you' : ''].filter(Boolean);
+function notes(a: AgentView, me: readonly string[], p: Palette): string {
+  const parts = [a.isOrchestrator ? p.magenta('★ orchestrator') : '', me.includes(a.name) ? 'you' : ''].filter(Boolean);
   return parts.join(' · ');
 }
 
-export function formatStatusTable(status: TeamStatus, me: string, p: Palette = makePalette(false)): string[] {
+/** `me`: the local agent(s) on this team, each marked "you". */
+export function formatStatusTable(status: TeamStatus, me: string | readonly string[], p: Palette = makePalette(false)): string[] {
+  const mine = typeof me === 'string' ? [me] : me;
   const { team, agents } = status;
   const rows = agents.map(cells);
   const w = widths(rows);
@@ -43,7 +45,7 @@ export function formatStatusTable(status: TeamStatus, me: string, p: Palette = m
   const header = `  ${p.dim(line([...HEADERS]).trimEnd())}`;
   const body = agents.map((a, i) => {
     const c = rows[i]!;
-    const note = notes(a, me, p);
+    const note = notes(a, mine, p);
     return `${glyph(a.presence, p)} ${line([p.agent(c[0]!), ...c.slice(1)])}${note ? `  ${note}` : ''}`.trimEnd();
   });
   return [head, '', header, ...body];

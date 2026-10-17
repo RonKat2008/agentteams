@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHub, type RunningHub } from '@agentteams/hub';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { saveCredential, type Credential } from '../src/credentials.js';
+import { loadCredentials, saveCredential, type Credential } from '../src/credentials.js';
 import { realExec, type CliDeps, type Exec } from '../src/deps.js';
 import { HubClient } from '../src/hubClient.js';
 import { main } from '../src/main.js';
@@ -45,6 +45,9 @@ const createTask = async (apiKey: string, assignee: string) => {
   });
   expect(res.status).toBe(200);
 };
+
+const credFor = async (repoPath: string): Promise<Credential> => (await loadCredentials(cli.deps)).find((c) => c.repoPath === repoPath)!;
+const wtOf = (agent: string, task: number) => join(repo, '.agentteams', 'worktrees', agent, String(task));
 
 const run = (cwd: string, ...args: string[]) => {
   cli.deps.cwd = cwd;
@@ -87,7 +90,7 @@ afterEach(async () => {
 describe('agentteams worktree', () => {
   it('claims the task and creates branch, worktree and claude config', async () => {
     expect(await run(repo, 'worktree', '1')).toBe(0);
-    const wt = join(tmp, 'proj.at', 'dylan-claude-1');
+    const wt = wtOf('dylan-claude', 1);
     expect(await git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('at/dylan-claude/1');
     expect(await git(wt, 'rev-parse', 'HEAD')).toBe(await git(repo, 'rev-parse', 'main'));
     expect((await client.getTask(1)).status).toBe('in_progress');
@@ -108,7 +111,7 @@ describe('agentteams worktree', () => {
     });
     await createTask(orchKey, team.agentName);
     expect(await run(repo, 'worktree', '2', '--agent', 'gemini')).toBe(0);
-    const wt = join(tmp, 'proj.at', `${team.agentName}-2`);
+    const wt = wtOf(team.agentName, 2);
     const settings = JSON.parse(readFileSync(join(wt, '.gemini', 'settings.json'), 'utf8'));
     expect(settings.mcpServers.agentteams.args.slice(-2)).toEqual(['--repo', wt]);
     expect(settings.hooks.SessionStart).toHaveLength(1);
@@ -118,7 +121,7 @@ describe('agentteams worktree', () => {
 
   it('is idempotent when run twice', async () => {
     expect(await run(repo, 'worktree', '1')).toBe(0);
-    const wt = join(tmp, 'proj.at', 'dylan-claude-1');
+    const wt = wtOf('dylan-claude', 1);
     expect(await run(repo, 'worktree', '1')).toBe(0);
     expect(cli.out).toContain(`worktree already exists: ${wt}`);
     expect(cli.out.filter((l) => l.startsWith('Task #1 claimed')).length).toBe(2);
@@ -128,11 +131,11 @@ describe('agentteams worktree', () => {
     await createTask(orchKey, 'ronit-claude');
     expect(await run(repo, 'worktree', '2')).toBe(1);
     expect(cli.err.join('\n')).toMatch(/only the assignee \(ronit-claude\) can claim task #2/);
-    expect(existsSync(join(tmp, 'proj.at', 'dylan-claude-2'))).toBe(false);
+    expect(existsSync(wtOf('dylan-claude', 2))).toBe(false);
   });
 
   it('refuses an unrelated directory at the path and leaves it alone', async () => {
-    const wt = join(tmp, 'proj.at', 'dylan-claude-1');
+    const wt = wtOf('dylan-claude', 1);
     mkdirSync(wt, { recursive: true });
     writeFileSync(join(wt, 'keep.txt'), 'mine');
     expect(await run(repo, 'worktree', '1')).toBe(1);
@@ -141,12 +144,12 @@ describe('agentteams worktree', () => {
     expect(existsSync(join(wt, '.git'))).toBe(false);
   });
 
-  it('places the worktree next to the main root when run from a linked worktree', async () => {
+  it('places the worktree inside the main root when run from a linked worktree', async () => {
     const other = join(tmp, 'elsewhere');
     await git(repo, 'worktree', 'add', '-q', '-b', 'side', other);
     expect(await run(other, 'worktree', '1')).toBe(0);
-    expect(existsSync(join(tmp, 'proj.at', 'dylan-claude-1', 'a.txt'))).toBe(true);
-    expect(existsSync(join(tmp, 'proj.at', 'dylan-claude-1', '.git'))).toBe(true);
+    expect(existsSync(join(wtOf('dylan-claude', 1), 'a.txt'))).toBe(true);
+    expect(existsSync(join(wtOf('dylan-claude', 1), '.git'))).toBe(true);
   });
 
   it('installs the managed git hooks (idempotently) in the shared hooks dir', async () => {
@@ -161,7 +164,7 @@ describe('agentteams worktree', () => {
 
   it('install works from inside a linked worktree', async () => {
     expect(await run(repo, 'worktree', '1')).toBe(0);
-    const wt = join(tmp, 'proj.at', 'dylan-claude-1');
+    const wt = wtOf('dylan-claude', 1);
     cli.err.length = 0;
     expect(await run(wt, 'install')).toBe(0);
     expect(cli.err.join('\n')).not.toContain('no agentteams credentials');
@@ -173,8 +176,37 @@ describe('agentteams worktree', () => {
     expect(cli.err.join('\n')).toMatch(/positive integer/);
   });
 
+  it('keeps the main checkout clean: .agentteams/ goes in .git/info/exclude, not .gitignore', async () => {
+    expect(await run(repo, 'worktree', '1')).toBe(0);
+    expect(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8').split('\n')).toContain('.agentteams/');
+    expect(existsSync(join(repo, '.gitignore'))).toBe(false);
+    expect(await git(repo, 'status', '--porcelain')).toBe('');
+  });
+
+  it('keeps using a worktree made at the old location next to the repo (and --remove finds it)', async () => {
+    const legacy = join(tmp, 'proj.at', 'dylan-claude-1');
+    await git(repo, 'worktree', 'add', '-q', '-b', 'at/dylan-claude/1', legacy, 'main');
+    expect(await run(repo, 'worktree', '1')).toBe(0);
+    expect(cli.out).toContain(`worktree already exists: ${legacy}`);
+    expect(cli.out).toContain(`Task #1 claimed. Worktree: ${legacy} (branch at/dylan-claude/1)`);
+    expect(existsSync(wtOf('dylan-claude', 1))).toBe(false);
+    expect(await run(repo, 'worktree', '1', '--remove')).toBe(0);
+    expect(existsSync(legacy)).toBe(false);
+  });
+
+  it('explains (instead of a git error) that a repo without commits has nothing to branch from, and claims nothing', async () => {
+    const fresh = join(tmp, 'fresh');
+    mkdirSync(fresh);
+    await git(fresh, 'init', '-q', '-b', 'main');
+    await saveCredential(cli.deps, { ...(await credFor(repo)), repoPath: fresh });
+    expect(await run(fresh, 'worktree', '1')).toBe(1);
+    expect(cli.err.join('\n')).toMatch(/has no commits yet.*git commit --allow-empty/);
+    expect(cli.err.join('\n')).not.toMatch(/fatal:/);
+    expect((await client.getTask(1)).status).not.toBe('in_progress');
+  });
+
   describe('--remove', () => {
-    const wtPath = () => join(tmp, 'proj.at', 'dylan-claude-1');
+    const wtPath = () => wtOf('dylan-claude', 1);
 
     it('removes a clean task worktree, keeps the branch and prints what it removed', async () => {
       expect(await run(repo, 'worktree', '1')).toBe(0);
@@ -183,7 +215,7 @@ describe('agentteams worktree', () => {
       expect(existsSync(wtPath())).toBe(false);
       expect(await git(repo, 'branch', '--list', 'at/dylan-claude/1')).toContain('at/dylan-claude/1');
       expect(cli.out.join('\n')).toContain(`Removed worktree ${wtPath()} (branch at/dylan-claude/1 kept)`);
-      expect(await git(repo, 'worktree', 'list')).not.toContain('dylan-claude-1');
+      expect(await git(repo, 'worktree', 'list')).not.toContain(wtPath());
     });
 
     it('refuses uncommitted changes without --force and leaves the worktree', async () => {

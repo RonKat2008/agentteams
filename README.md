@@ -103,7 +103,8 @@ Then open the agents in the repo. In Codex, run `/hooks` once and approve the ag
 
 `create` and `join` install everything (MCP server, hooks, instruction block). Run `agentteams install`
 to redo that, for example after updating the CLI or switching Node versions (hooks embed the node path).
-`agentteams invite show` prints a git team's code again.
+`agentteams invite` prints the code again (git teams derive it from the team key; for local and hub teams the creator's
+credential file keeps it, see below).
 
 <details>
 <summary><b>Install from source (not on npm yet)</b></summary>
@@ -119,6 +120,40 @@ The publishable package is `packages/agentteams` (single-file bundle, Node >=22)
 
 </details>
 
+## Watch the team
+
+```bash
+agentteams watch
+```
+
+A live, full-screen dashboard of the team: every agent with its presence (● active, ◐ idle, ○ offline), tool,
+current task, claimed files and how long ago it last did something, with a spinner on agents that are working on an
+in-progress task; the task board (open, in progress, done and merged counts, plus what is in progress or waiting and
+for whom); and the activity feed, newest first, with whole messages wrapped to fit. The header names the team, how it
+is shared (this computer, the git remote, or a hub), the orchestrator (★) and, for git teams, when it last synced.
+This repo's own agents are marked "you". Reading the team counts as presence, so while the dashboard is open the agent
+it reads as (the repo's first by tool name, or `--agent <tool>`) shows as active.
+
+<p align="center"><img src="assets/watch.gif" alt="agentteams watch: the agents, the task board and the activity feed updating live as the team works" width="100%"></p>
+
+**Tip:** run it in a split pane next to Claude Code, Codex or Cursor (a tmux split, an iTerm or VS Code split
+terminal) and keep it open while your agents work.
+
+| Key | Does |
+|---|---|
+| `q`, `Ctrl+C` | Quit (the terminal is always restored) |
+| `↑` `↓` (or `k` `j`), `PgUp` `PgDn`, `Home` `End` | Scroll the activity feed |
+| `r` | Refresh now |
+| `a` | Show only active agents / everyone |
+| `?` | Help |
+
+It refreshes every 2 seconds (`--interval <seconds>`, at least 1). Local and git teams are read from the local
+database (for git teams the usual background sync keeps it current); a hub team is polled over HTTP, and when the hub
+is unreachable the error shows in the header while it retries with backoff. Piped (`agentteams watch | cat`) or with
+`--once` it prints one snapshot and exits. When the repo is in several teams it shows the first and names the others:
+pick one with `--team <name>`. The guided menu (`agentteams`) has it too: "Watch the team live". Colors follow
+`NO_COLOR` / `FORCE_COLOR`.
+
 ## Supported agents
 
 Eleven integrations. **Live** means hooks inject teammate messages into the agent's context
@@ -127,11 +162,11 @@ rules file tells it to.
 
 | Agent | `--agent` | How messages arrive | Files written |
 |---|---|---|---|
-| Claude Code | `claude` | Live: session start, every prompt, after tools, stop gate | local-scope stdio-proxy MCP entry via `claude mcp add` (in `~/.claude.json`, no key stored), `.claude/settings.local.json`, `CLAUDE.md` |
+| Claude Code | `claude` | Live: session start, every prompt, after tools, stop gate | local-scope stdio-proxy MCP entry via `claude mcp add` (in `~/.claude.json`, no key stored), `.claude/settings.local.json`, `CLAUDE.md` (imports `AGENTS.md`), `AGENTS.md` |
 | Codex | `codex` | Live: same four events | `~/.codex/config.toml`, `~/.codex/hooks.json`, `AGENTS.md` |
-| Cursor | `cursor` | Live: session start, after tools, stop gate (no per-prompt) | `.cursor/mcp.json`, `.cursor/hooks.json`, `.cursor/rules/agentteams.mdc`, `AGENTS.md` |
-| Gemini CLI | `gemini` | Live: session start, before agent, after tools, after agent | `.gemini/settings.json`, `GEMINI.md` |
-| GitHub Copilot (CLI and VS Code) | `copilot` | Live: session start and after tools; the prompt hook is a heartbeat only | `.github/hooks/agentteams.json`, `.github/mcp.json`, `.vscode/mcp.json`, `.github/copilot-instructions.md`, `AGENTS.md` |
+| Cursor | `cursor` | Live: session start, after tools, stop gate (no per-prompt) | `.cursor/mcp.json`, `.cursor/hooks.json`, `.cursor/rules/agentteams.mdc` (points at `AGENTS.md`), `AGENTS.md` |
+| Gemini CLI | `gemini` | Live: session start, before agent, after tools, after agent | `.gemini/settings.json`, `GEMINI.md` (imports `AGENTS.md`), `AGENTS.md` |
+| GitHub Copilot (CLI and VS Code) | `copilot` | Live: session start and after tools; the prompt hook is a heartbeat only | `.github/hooks/agentteams.json`, `.github/mcp.json`, `.vscode/mcp.json`, `.github/copilot-instructions.md` (points at `AGENTS.md`), `AGENTS.md` |
 | Factory Droid | `droid` | Live: same four events as Claude | `.factory/mcp.json`, `.factory/hooks.json`, `AGENTS.md` |
 | OpenCode | `opencode` | Live: managed plugin (session created, tool calls, idle re-prompt) | `opencode.json`, `.opencode/plugins/agentteams.js`, `AGENTS.md` |
 | Windsurf / Devin | `windsurf` | Pull | `~/.config/devin/mcp_config.json` (plus `~/.codeium/windsurf/mcp_config.json` if that dir exists), `.devin/rules/agentteams.md`, `.windsurf/rules/agentteams.md` |
@@ -147,7 +182,14 @@ Caveats worth knowing:
 - **Copilot CLI** must trust the folder to load project MCP servers, and drops per-prompt injection.
 - **OpenCode**'s plugin relies on event payload fields that its docs do not specify; verify on your version.
 - **Cline** has one global MCP entry, so it points at the last repo you installed.
-- Files that embed absolute paths from your machine are added to `.git/info/exclude`, so they are not committed.
+- Files that embed absolute paths from your machine (including `.claude/settings.local.json`) are added to `.git/info/exclude`,
+  so they are not committed. That file is per clone and is not shared like `.gitignore`, so your tracked files stay
+  untouched. If such a file is already tracked, install warns and tells you to `git rm --cached` it.
+- **One copy of the team instructions.** `AGENTS.md` holds the block. `CLAUDE.md` and `GEMINI.md` only contain an
+  import line (`@AGENTS.md`, `@./AGENTS.md`) inside the agentteams markers; Cursor's rule and Copilot's instructions
+  file hold a two-line pointer. Re-running install upgrades older copies in place and keeps your own text. If your
+  `CLAUDE.md` is a link to `AGENTS.md`, or already imports it, nothing is added. Windsurf, Cline and Roo (no
+  `AGENTS.md`) keep their own full rules file.
 - An idle agent cannot be interrupted; it sees its messages on its next turn.
 
 <details>
@@ -265,7 +307,10 @@ Teams made with `--hub` are separate (see Advanced).
 Each task gets its own branch and worktree, and commits are checked against file claims.
 
 1. `agentteams worktree <task>` claims the task and creates branch `at/<agent>/<task>` in a worktree at
-   `<parent of repo>/<repo>.at/<agent>-<task>`. Work and commit there.
+   `<repo>/.agentteams/worktrees/<agent>/<task>`. Work and commit there. `.agentteams/` is added to
+   `.git/info/exclude` (per clone, so no tracked file changes and nothing to commit). Worktrees made by older
+   versions next to the repo (`<repo>.at/<agent>-<task>`) keep working. A repo with no commits has nothing to branch
+   from: make a first commit (`create` does this for you when your git identity is set).
 2. A pre-commit check looks at the team's file claims (as of your last sync) and blocks the commit if another agent
    holds an exclusive claim on a file you are committing. Message the owner instead. As a last resort,
    `AGENTTEAMS_ALLOW=1 git commit ...` overrides the check; the override is logged to the team.
@@ -274,7 +319,95 @@ Each task gets its own branch and worktree, and commits are checked against file
 3. `agentteams done <task> -m "<summary>"` pushes the branch and completes the task. It must be
    run on the task branch, not the default branch.
 4. `agentteams pr <task>` opens a pull request with `gh` (needs `gh`). If one exists, its URL is printed.
-5. The orchestrator runs `agentteams merged <task> [--pr <url>]` after merging.
+5. The orchestrator runs `agentteams merge` to merge every finished task, run the tests on the combined result and
+   land it (see below). Merging some other way (a pull request, by hand), record it with
+   `agentteams merged <task> [--pr <url>]`.
+
+### Merging finished tasks (`agentteams merge`)
+
+`agentteams merge` (orchestrator only) takes every task that is done and not yet merged, in task order, and merges its
+branch (the one recorded by `done`, normally `at/<agent>/<task>`) with `git merge --no-ff` into a fresh integration
+worktree at `<repo>/.agentteams/worktrees/_merge` on branch `agentteams/merge`, started from the base branch: the branch
+checked out in the main checkout, or `--into <branch>`. When the repo has a git remote it fetches first, so branches
+pushed from other computers are found; a remote branch newer than the local one wins.
+
+- **Conflicts.** A branch that conflicts is skipped (its merge aborted) and the others still merge. The report names
+  the conflicting files and the earlier task they conflict with, and the task's agent gets a command message asking it
+  to rebase onto the base (`--no-notify` skips the message). `--stop-on-conflict` stops at the first conflict instead,
+  lands nothing and leaves the conflicted merge in the integration worktree for you to resolve.
+- **Tests.** `--test "<cmd>"` runs that command with `sh -c` in the integration worktree, without asking. Without it
+  the command is detected from the base branch's files (never from a task branch) and printed: a `package.json`
+  `test` script (`pnpm test`, `yarn test` or `npm test` by lockfile; the dependencies are installed first, with
+  `--ignore-scripts`, when the worktree has no `node_modules`), a Makefile `test` target (`make test`), `cargo test`,
+  `go test ./...`, or `pytest` when pytest is configured. A detected command runs only after you say yes at the
+  prompt, or with `--yes`; without a terminal and without `--yes` (or `--test`/`--no-test`) merge refuses before
+  merging anything. If the merged branches change what the detected command runs (the `package.json` test script or
+  the Makefile), it is not run, even with `--yes`, unless you approve the change at the prompt. `--no-test` skips
+  the tests. The last 40 lines of output are shown.
+
+  **Warning: merge runs the merged code's tests on your machine, with your user's permissions.** The tests, build
+  scripts (`build.rs`, Go `init`/`TestMain`, Makefile recipes, conftest.py) and test files come from your teammates'
+  branches, which no human may have reviewed yet. Review the branches first, or run merge in a disposable
+  environment, when you do not trust every agent on the team.
+- **Conflicts (what the agent is told).** The rebase command names the conflicting files and the task branch only as
+  quoted, length-capped data (at most 10 names), labelled as data rather than instructions. A task whose recorded
+  branch is not a valid branch name is skipped.
+- **Landing.** When the tests pass, the base is fast-forwarded to the integration result, the merged tasks are recorded
+  as merged (the team log shows each one, and each assignee is told) and the integration worktree is removed. The base
+  is only moved when the main checkout is on it with no uncommitted changes; otherwise the result stays on branch
+  `agentteams/merge` and the exact commands to land and record it are printed. Nothing is pushed unless you pass
+  `--push`.
+- **Failures.** If the tests fail, the base is untouched, nothing is recorded, and the integration worktree is kept
+  (its path is printed) so you can look; the next `agentteams merge` replaces it.
+- `--dry-run` merges and tests but never moves the base or records anything.
+
+It exits 0 when every finished task merged and landed, and 1 when anything was skipped, conflicted, failed or was
+not landed.
+
+### Starting agents on their tasks (`agentteams run`)
+
+Assigning a task does not wake the assignee's tool by itself. On the computer where the assignee's agent lives,
+`agentteams run <task>` claims the task as that agent, makes its worktree and starts the tool there non-interactively
+with a prompt to work the task through the agentteams MCP tools and finish by calling `complete_task`. It runs as the
+assignee: pick its credential with `--agent <tool>` when the repo has several, and a task assigned to someone else is
+refused. Output streams to the terminal and to `.git/agentteams/runs/<team>-<task>-<agent>.log` (`<team>` is a short
+tag for the team, since task numbers are per team); `--detach` starts a background `agentteams` process that runs the
+tool (output only in the log) and does the after-run steps below when it exits. `--model <m>` is passed to the tool's
+own `--model` flag. While a run is going, a `.pid` file next to the log marks the agent busy.
+
+**After the tool exits**, `run` itself (outside any sandbox, as you, with your git identity and hooks) commits whatever
+the tool left in the worktree on the task branch as `task #<n>: <title>`, for every tool that is told not to commit
+(see the table). Then it says whether the task is done; if the agent did not call `complete_task`, it prints the log
+path and the commands to finish it (`agentteams done <task> -m "..."` in the worktree) or start it again. Nothing is
+pushed: push the branch yourself if teammates on other computers will merge it.
+
+#### What `run` allows each tool
+
+| Tool | Command started | Commits? | What it is allowed |
+|---|---|---|---|
+| Codex | `codex exec --sandbox workspace-write -C <worktree> "<prompt>"` | No, `run` commits after | Edit files in the task worktree and run commands inside Codex's sandbox (no network). The repo's `.git` stays read-only, so it cannot write git hooks or config that would run outside the sandbox. |
+| Cursor | `cursor-agent -p --output-format text --trust --approve-mcps --force --workspace <worktree> "<prompt>"` | No, `run` commits after | **Any shell command, as you**: print mode needs `--force` to run commands at all, and it approves all of them. `--trust` skips the workspace-trust prompt, `--approve-mcps` approves the MCP servers. |
+| Claude Code | `claude -p "<prompt>" --permission-mode acceptEdits --allowedTools mcp__agentteams "Bash(git status:*)" "Bash(git diff:*)" "Bash(git add:*)" "Bash(git commit:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git branch:*)" "Bash(git rev-parse:*)"` | Yes, itself | Edit files in its working directory, the agentteams MCP tools, and only those git subcommands. Rules match by prefix, so `git -c ...`, `git config`, `git push` and any other command are denied. |
+| Gemini CLI | `gemini -p "<prompt>" --approval-mode auto_edit` | No, `run` commits after | Edit files; shell commands are not approved. Depending on your Gemini version, headless MCP calls may also need approval: if `complete_task` is never called, mark the agentteams server trusted (`"trust": true` under `mcpServers.agentteams` in `.gemini/settings.json`) for headless runs, or finish with `agentteams done`. |
+
+Task text and teammate messages reach these tools. A prompt-injected or misbehaving agent can do whatever its row
+allows, unattended, so treat Cursor runs (and `--watch`, which starts runs with nobody present) as running code from
+your teammates: use them in a disposable or containerized environment when you do not trust everyone on the team.
+
+Other tools have no non-interactive mode agentteams can drive; `run` says so. The exact command (without the prompt)
+is the first line of the log, so you can rerun it by hand with other flags.
+
+`agentteams run --all` starts, in the background, every assigned, unfinished task (of every team this repo is in)
+whose agent has a credential in this repo on this computer and whose tool is installed; each task runs with its own
+team's credential. It skips agents that already have a run going and tasks that were already started once (rerun
+those with `agentteams run <task>`), prints why it skipped each task, and exits 1 if any start failed. Anyone with an
+agent here can use it; it is meant for whoever runs the board. `agentteams run --watch [--interval <seconds>]` does
+the same every 30 seconds (by default) until Ctrl-C, so new assignments start on their own; runs it started keep
+going after you stop watching.
+
+Task worktrees live inside the repo under `.agentteams/` (git-excluded). Tools that ignore `.git/info/exclude` and do
+descend into dot directories (some linters and IDE indexers) may see each task worktree as extra sources; exclude
+`.agentteams/` in their config.
 
 The installed git hooks chain any existing hook (moved to `<hook>.agentteams-prev`). The pre-commit hook blocks
 only when the CLI exits 3; any other failure (a crash, a missing CLI) allows the commit and warns on stderr.
@@ -306,18 +439,22 @@ fi
 
 | Command | Purpose |
 |---|---|
-| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
-| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only |
+| `agentteams` (or `agentteams tui`) | Guided menu: create or join a team, link another agent, status, activity, the live dashboard. Asks who will be on the team. Needs an interactive terminal; without one it prints help |
+| `agentteams create <name> [--this-computer]` | Create a team in this repo and install the agent integration. A repo with a git remote makes a git team (prints an `at1-` invite); `--this-computer` (or no remote) makes a team for this computer only. A repo with no commits gets an empty first commit (`chore: start agentteams team`) when your git identity is set, so task worktrees have a branch point; files you already staged stay staged and are not part of it |
 | `agentteams join <invite-code>` | Join a team and install the agent integration. `at1-` codes clone the repo (or use the current clone) |
 | `agentteams sync` | Exchange team state with the git remote now. Normally runs in the background from hooks and MCP; run it to make a recording or a debugging session deterministic |
-| `agentteams invite show` | Print a git team's invite code again (`rotate` and `revoke` apply to hub and local teams; a git team is gated by repo access) |
+| `agentteams invite [show]` | Print the invite code again. Git teams derive it; for local and hub teams the creator's credential file (0600) keeps it until it expires. Teams created by an older version, and joiners, do not have it: run `agentteams invite --rotate` |
+| `agentteams invite --rotate` / `--revoke` | New code (stored the same way) or revoke it (hub and local teams; a git team is gated by repo access). `rotate` and `revoke` also work as subcommands |
 | `agentteams install [--agent <tool>\|all]` | (Re)configure agents for this repo |
 | `agentteams status` | Show the team, its agents and when it last synced |
 | `agentteams log [-f] [--limit <n>]` | Show team activity (default 20 events); `-f` follows |
+| `agentteams watch [--interval <s>] [--team <name>] [--once]` | Live full-screen dashboard of agents, tasks and activity (see [Watch the team](#watch-the-team)); prints one snapshot when piped or with `--once` |
 | `agentteams orchestrator <agent-name>` | Make an agent the orchestrator |
 | `agentteams worktree <task> [--base <ref>] [--remove [--force]]` | Claim a task and create its branch and worktree; `--remove` deletes the worktree (branch kept) |
+| `agentteams run <task> [--agent <tool>] [--model <m>] [--detach]` | Start the assignee's tool (Codex, Cursor, Claude Code, Gemini) non-interactively on the task in its worktree; `--all` starts every assigned task, `--watch` keeps doing so for new assignments |
 | `agentteams done <task> -m <summary>` | Push the task branch and mark the task done |
-| `agentteams pr <task>` | Open a GitHub pull request for a finished task (needs `gh`) |
+| `agentteams pr <task>` | Open a GitHub pull request for a finished task (needs `gh`; in a repo with several teams, `--agent <tool>` picks the team) |
+| `agentteams merge [--test <cmd>\|--no-test\|--yes] [--into <branch>] [--dry-run] [--push]` | Merge every finished task's branch, run the tests on the result and fast-forward the base (orchestrator only); conflicting tasks are skipped and their agents asked to rebase |
 | `agentteams merged <task> [--pr <url>]` | Record a task as merged (orchestrator only) |
 | `agentteams access grant <agent-or-login> [--yes]` | Invite a teammate's GitHub account to the repo with push access (needs `gh`) |
 | `agentteams up [--port <n>] [--share]` | Advanced: run a hub server (see below) |
@@ -327,7 +464,8 @@ fi
 <details>
 <summary><b>Options</b></summary>
 
-- `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name), `--no-install` (skip tool setup),
+- `create` and `join`: `--agent <tool>` (default `claude`), `--as <member>` (member name; default: your git `user.name`,
+  then your OS username, skipping generic names like `root` and tool names like `codex`, finally `me`), `--no-install` (skip tool setup),
   `--hub <url>` (or `local` for http://127.0.0.1:4747) to use a hub server instead (advanced).
   Without `--hub` or `$AGENTTEAMS_HUB`, `create` makes a team stored in this repo (`.git/agentteams`): a git team
   shared through the repo's remote (`origin`, or `--remote <name>`) when it has one, otherwise a team for this
@@ -341,9 +479,20 @@ fi
 - `join` only: for a git team, uses the current clone when one of its remotes is the team's repo, otherwise clones
   it with git (into `./<repo name>`, or `--dir <path>`). `--no-clone` skips the clone and uses the current directory.
 - `sync`: `--repo <path>` and `--tool <tool>` pick the repo and credential.
+- `merge`: `--into <branch>`, `--test <cmd>` / `--no-test` / `--yes` (run the detected test command without asking), `--no-notify`, `--stop-on-conflict`, `--dry-run`, `--push`.
+  With several agents in the repo it acts as the one that is the orchestrator; `--agent <tool>` picks one explicitly.
 - `done`, `pr`, `merged`: `--agent <tool>` picks the credential; `done` requires `-m, --message`; `merged` takes `--pr <url>`.
-- `status`, `log`, `invite`, `orchestrator`, `worktree`, `access grant`: `--agent <tool>` picks which credential to use when the repo
-  has more than one (for example both Claude and Codex).
+- `status`, `log`, `watch`, `invite show`, `pr`, `access grant` only read team state, so they need no `--agent`: every agent in a repo sees
+  the same team. `status` lists the whole team and marks all of this repo's agents "you" (if the repo's agents are on
+  different teams it shows each team); `log` shows the team (with several teams it shows the first and says how to pick
+  another). `--agent <tool>` still selects a specific credential.
+- `invite rotate|revoke`, `orchestrator`, `worktree`, `done`, `merged` act as an agent: when the repo has more than one,
+  pass `--agent <tool>` (for example both Claude and Codex).
+- `log` prints whole broadcast messages (`to: all`), task notes and summaries, word-wrapped under the event with
+  control characters stripped (only the `status` table shortens long values). The activity log is visible to the whole
+  team, so a direct message to one agent appears there only as an 80-character preview; the recipient reads the whole
+  message in its inbox. (On a git team every member's replica holds the encrypted op log, which includes direct
+  messages.) Events from older hubs carry only the preview.
 
 `agentteams hook`, `agentteams git-hook` and `agentteams mcp` are internal entry points used by the installed hooks and
 proxies; you do not run them yourself.
@@ -376,7 +525,7 @@ For each team a hub stores: team name, member and agent names and the tool each 
 numeric id (from `gh`) and the linked repo slug; messages, tasks (title, description, status,
 branch, summary) and the activity log; file claim globs; and commit summaries (sha, branch, message, file names and
 insertion/deletion counts). It never receives your code or diffs. Your GitHub token is sent once to verify your
-identity and is never stored or logged; API keys and invite codes are stored hashed. Unlike git teams, a hub sees
+identity and is never stored or logged; API keys and invite codes are stored hashed on the hub (the creator's local credential file keeps the code itself, 0600). Unlike git teams, a hub sees
 this in plaintext, so only use a hub you run or trust.
 
 ### Hub security notes

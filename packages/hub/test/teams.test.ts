@@ -252,6 +252,7 @@ describe('hosted GitHub identity', () => {
       body: 'dylan_d-codex (GitHub @dylan.d) joined the team. Repo access to ronit/my-app must be granted by a human: ask your user to run "agentteams access grant dylan_d-codex" in their own terminal.',
     });
     const events = await getActivity(hosted.ctx, orch);
+    expect(events.find((e) => e.type === 'message_sent')!.data).not.toHaveProperty('body');
     const joinEvent = events.filter((e) => e.type === 'agent_joined').at(-1)!;
     expect(joinEvent.data).toMatchObject({ agent: 'dylan_d-codex', githubLogin: 'dylan.d' });
   });
