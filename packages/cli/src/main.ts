@@ -97,9 +97,11 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
       try { await logCommand(deps, { agent: o.agent, follow: Boolean(o.follow), limit: o.limit, signal: ac.signal }); }
       finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
     });
-  sub('invite').description('Show (git teams), rotate or revoke the invite code')
-    .addArgument(new Argument('<action>').choices(['show', 'rotate', 'revoke'])).addOption(agentOpt())
-    .action((action: InviteAction, o) => inviteCommand(deps, action, o));
+  sub('invite').description('Show (default), rotate or revoke the invite code')
+    .addArgument(new Argument('[action]').choices(['show', 'rotate', 'revoke'])).addOption(agentOpt())
+    .option('--rotate', 'issue a new invite code (same as "invite rotate")').option('--revoke', 'revoke the invite code (same as "invite revoke")')
+    .action((action: InviteAction | undefined, o: { agent?: ToolKind; rotate?: boolean; revoke?: boolean }) =>
+      inviteCommand(deps, o.rotate ? 'rotate' : o.revoke ? 'revoke' : action ?? 'show', o));
   sub('orchestrator').description('Make an agent the orchestrator').argument('<agent-name>').addOption(agentOpt())
     .action((target: string, o) => orchestratorCommand(deps, target, o));
   sub('worktree').description('Claim a task and give it its own git worktree and branch')

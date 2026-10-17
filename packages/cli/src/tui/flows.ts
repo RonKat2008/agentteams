@@ -1,5 +1,5 @@
-import { defaultMemberName, type ToolKind } from '@agentteams/shared';
-import { createCommand, teammateJoinCommand, validateNewRepoArgs, type CreateOpts, type CreateResult } from '../commands/create.js';
+import { type ToolKind } from '@agentteams/shared';
+import { createCommand, HUB_INVITE_WARNING, teammateJoinCommand, validateNewRepoArgs, type CreateOpts, type CreateResult } from '../commands/create.js';
 import { joinCommand, type JoinOpts } from '../commands/join.js';
 import { logCommand, type LogOpts } from '../commands/log.js';
 import { dateOnly } from '../commands/shared.js';
@@ -13,7 +13,7 @@ import { decodeInvite } from '../git/invite.js';
 import { findRemoteFor, pickRemote, remoteFetchUrl, remoteNames, repoNameOf, stripCredentials } from '../git/remoteUrl.js';
 import { INVITE_WARNING, inviteCodeOf } from '../git/setup.js';
 import { hubUrlFrom } from '../paths.js';
-import { detectGithubSlug, isGitRepo, real, repoRoot } from '../repo.js';
+import { detectGithubSlug, isGitRepo, real, repoRoot, resolveMemberName } from '../repo.js';
 import {
   agentChoices, createOptions, defaultTeamKind, isGitInviteCode, joinOptions, repoChoices, teamKindChoices,
   validateHubTarget, validateInviteCode, validateMemberName, validateTeamName, type RepoChoice, type TeamKind,
@@ -73,7 +73,7 @@ async function isLocalModeHub(deps: CliDeps, hub: string): Promise<boolean> {
 }
 
 async function memberName(ctx: TuiContext): Promise<string> {
-  const as = await ctx.p.text('Your name on this team', { initial: defaultMemberName(ctx.deps.username), validate: validateMemberName });
+  const as = await ctx.p.text('Your name on this team', { initial: await resolveMemberName(ctx.deps, ctx.deps.cwd), validate: validateMemberName });
   return as.toLowerCase();
 }
 
@@ -162,6 +162,9 @@ function createdBox(p: Prompter, res: CreateResult): void {
     '',
     res.hubUrl ? 'Send teammates this command:' : 'Add another agent on this computer (run it in the team repo):',
     `  ${teammateJoinCommand(res.inviteCode, res.hubUrl)}`,
+    '',
+    HUB_INVITE_WARNING,
+    'Run "agentteams invite" to see it again.',
   ].join('\n'), ` Team "${res.teamName}" is ready `);
 }
 
@@ -256,8 +259,11 @@ export async function linkFlow(ctx: TuiContext): Promise<void> {
     p.success(`${agent} is linked to "${cred.teamName}".`);
     return;
   }
-  p.info(`Paste the invite code for "${cred.teamName}" (printed by create; "agentteams invite rotate" issues a new one).`);
-  const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', validate: validateInviteCode });
+  const stored = cred.invite && Date.parse(cred.invite.expiresAt) > Date.now() ? cred.invite.code : undefined;
+  p.info(stored
+    ? `Using the invite code stored for "${cred.teamName}" (change it to paste another).`
+    : `Paste the invite code for "${cred.teamName}" ("agentteams invite --rotate" issues a new one).`);
+  const code = await p.text('Invite code', { placeholder: 'abcd-efgh-jkmn-pqrs', initial: stored, validate: validateInviteCode });
   const hub = cred.transport === 'local' ? undefined : cred.hubUrl;
   const args = joinOptions({ code, agent, hub, as: member, clone: false });
   await ctx.commands.join(deps, args.code, args.opts);
