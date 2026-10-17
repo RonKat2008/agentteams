@@ -64,6 +64,7 @@ describe('agentteams watch', () => {
     expect(out).toContain('shop-api');
     expect(out).toMatch(/jamie-claude .*#1 Rate-limit POST \/login/);
     expect(out).toContain('Tasks: open 0 · in progress 1 · done 0 · merged 0');
+    expect(out).toMatch(/^ {2}▶ #1 Rate-limit POST \/login {2}jamie-claude$/m); // what is in progress or waiting, and for whom
     expect(out).toContain('started #1 "Rate-limit POST /login"');
     expect(out).not.toContain('\u001b');
     expect(out).not.toContain('at_secret');

@@ -10,11 +10,13 @@ import { lastSyncedText } from '../git/syncState.js';
 import { formatStatusTable } from '../statusTable.js';
 import { snapshotSource } from '../watch/data.js';
 import { runWatchLoop, type Screen } from '../watch/loop.js';
-import { initialState, taskCounts, transportLabel, type Snapshot } from '../watch/model.js';
+import { initialState, liveTasks, taskCounts, transportLabel, type Snapshot } from '../watch/model.js';
+import { TASK_GLYPHS } from '../watch/panels.js';
 import { readableTeams, type TeamAccess } from './shared.js';
 
 export const DEFAULT_WATCH_INTERVAL_SEC = 2;
 const SNAPSHOT_EVENTS = 15;
+const SNAPSHOT_TASKS = 15;
 
 export interface WatchOpts { agent?: ToolKind; team?: string; interval?: number; once?: boolean }
 /** Test seams: a fake screen instead of the real terminal, and a stop signal. */
@@ -41,6 +43,12 @@ function printSnapshot(deps: CliDeps, access: TeamAccess, snap: Snapshot): void 
   const c = taskCounts(snap.tasks);
   deps.out('');
   deps.out(`Tasks: open ${c.open} · in progress ${c.inProgress} · done ${c.done} · merged ${c.merged}`);
+  const live = liveTasks(snap.tasks);
+  for (const t of live.slice(0, SNAPSHOT_TASKS)) {
+    const label = t.status === 'blocked' ? ' (blocked)' : '';
+    deps.out(`  ${TASK_GLYPHS[t.status] ?? '○'} #${t.number} ${oneLine(t.title)}${label}  ${t.assignee ? oneLine(t.assignee) : 'unassigned'}`);
+  }
+  if (live.length > SNAPSHOT_TASKS) deps.out(`  +${live.length - SNAPSHOT_TASKS} more`);
   if (snap.sync) {
     const err = snap.sync.lastError ? ` (last sync failed: ${oneLine(snap.sync.lastError)})` : '';
     deps.out(`Sync: ${lastSyncedText(snap.sync)}${err}`);

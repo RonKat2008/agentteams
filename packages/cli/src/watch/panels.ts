@@ -103,7 +103,7 @@ export function agentsPanel(st: WatchState, w: number, h: number, ctx: PanelCtx)
 /** Colored lines are built to fit; this only guards against an off-by-one producing an overlong line. */
 const truncateColored = (l: string, w: number): string => (textWidth(l) <= w ? l : truncate(l.replace(/\u001b\[[0-9;]*m/g, ''), w));
 
-const TASK_GLYPHS: Record<string, string> = { in_progress: '▶', blocked: '■' };
+export const TASK_GLYPHS: Record<string, string> = { in_progress: '▶', blocked: '■' };
 
 function taskRow(t: TaskView, numW: number, assigneeW: number, w: number, p: Palette): string {
   const glyph = TASK_GLYPHS[t.status] ?? '○';
