@@ -1,11 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { saveCredential } from '../../src/credentials.js';
 import { realExec, type CliDeps } from '../../src/deps.js';
-import { createGitMcpServer } from '../../src/git/mcp.js';
+import { GIT_READ_ONLY_TOOLS, GIT_WRITE_TOOLS, createGitMcpServer } from '../../src/git/mcp.js';
+import { listPending } from '../../src/git/replicaStore.js';
 import { syncRound } from '../../src/git/sync.js';
 import { spawnDetachedSync, syncPaths, writeStatus } from '../../src/git/syncState.js';
 import { runHook } from '../../src/hooks.js';
@@ -92,7 +95,7 @@ describe('agentteams sync / status', () => {
   it('exits 1 and reports the error when the remote is unreachable', async () => {
     const a = await saved(await bootstrap(world, world.clone('a'), 'createTeam', 'ann', { remote: join(world.tmp, 'nope.git') }));
     expect(await main(['node', 'agentteams', 'sync'], cliDeps(a.repo))).toBe(1);
-    expect(t.out.join('\n')).toMatch(/sync failed: fetch:/);
+    expect(t.out.join('\n')).toMatch(/sync failed: fetch \(from git\): /);
   });
 });
 
@@ -119,7 +122,7 @@ describe('git MCP server', () => {
     const sent = await lc.callTool({ name: 'send_message', arguments: { to: worker.name, kind: 'command', body: 'do it' } });
     expect(sent.isError).toBeFalsy();
     expect(triggers.length).toBe(1);
-    expect((await (await view(lead)).files.listPending()).map((o) => o.op)).toEqual(['sendMessage']);
+    expect((await listPending((await view(lead)).store.ctx.db)).map((o) => o.op)).toEqual(['sendMessage']);
     const created = await lc.callTool({ name: 'create_task', arguments: { title: 'T1', assignee: worker.name } });
     expect(JSON.parse(text(created)).number).toBe(1);
 
@@ -129,7 +132,7 @@ describe('git MCP server', () => {
     const inbox = JSON.parse(text(await wc.callTool({ name: 'read_inbox', arguments: {} }))) as Array<{ body: string }>;
     expect(inbox.map((m) => m.body)).toContain('do it');
     expect(JSON.parse(text(await wc.callTool({ name: 'read_inbox', arguments: {} })))).toEqual([]);
-    expect((await (await view(worker)).files.listPending()).map((o) => o.op)).toContain('markRead');
+    expect((await listPending((await view(worker)).store.ctx.db)).map((o) => o.op)).toContain('markRead');
     const denied = await wc.callTool({ name: 'create_task', arguments: { title: 'nope' } });
     expect(denied.isError).toBe(true);
     expect(text(denied)).toMatch(/^forbidden: /);
@@ -137,5 +140,71 @@ describe('git MCP server', () => {
     expect(tasks.map((x) => x.title)).toEqual(['T1']);
     await lc.close();
     await wc.close();
+  });
+});
+
+const DIST = fileURLToPath(new URL('../../dist/', import.meta.url));
+const BIN = join(DIST, 'bin.js');
+const built = existsSync(BIN) && existsSync(join(DIST, 'git', 'syncState.js'));
+
+function run(cmd: string, args: string[], input: string): Promise<{ code: number | null; stdout: string; ms: number }> {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'inherit'], env: process.env });
+    let stdout = '';
+    child.stdout.on('data', (d) => { stdout += String(d); });
+    child.on('close', (code) => resolve({ code, stdout, ms: Date.now() - started }));
+    child.stdin.end(input);
+  });
+}
+
+describe('built CLI', () => {
+  it.skipIf(!built)('a hook of the BUILT CLI with a non-routable remote answers well within its 2 s budget (needs pnpm -r build; skipped otherwise)', async () => {
+    const a = await bootstrap(world, world.clone('a'), 'createTeam', 'ann', { remote: NON_ROUTABLE });
+    await saveCredential({ env: process.env, homedir: process.env.HOME! }, a.cred);
+    const r = await run(process.execPath, [BIN, 'hook', 'session-start', '--tool', 'claude'], JSON.stringify({ cwd: a.repo }));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('alpha');
+    expect(r.ms).toBeLessThan(2000);
+  });
+
+  it.skipIf(!built)('three processes racing for a stale lock run strictly one at a time (needs pnpm -r build; skipped otherwise)', async () => {
+    const lock = join(world.tmp, 'race', 'sync.lock');
+    const log = join(world.tmp, 'race.log');
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(join(world.tmp, 'race'));
+    writeFileSync(lock, '{"pid":1,"token":"stale"}\n');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const script = join(world.tmp, 'racer.mjs');
+    writeFileSync(script, [
+      `import { appendFileSync } from 'node:fs';`,
+      `const { acquireLock } = await import(${JSON.stringify(pathToFileURL(join(DIST, 'git', 'syncState.js')).href)});`,
+      `const l = await acquireLock(${JSON.stringify(lock)}, { waitMs: 20000, pollMs: 10 });`,
+      `if (!l) process.exit(3);`,
+      `appendFileSync(${JSON.stringify(log)}, 'start ' + process.pid + '\\n');`,
+      `await new Promise((r) => setTimeout(r, 300));`,
+      `await l.assertOwned();`,
+      `appendFileSync(${JSON.stringify(log)}, 'end ' + process.pid + '\\n');`,
+      `await l.release();`,
+    ].join('\n'));
+    const results = await Promise.all([0, 1, 2].map(() => run(process.execPath, [script], '')));
+    expect(results.map((r) => r.code)).toEqual([0, 0, 0]);
+    const lines = readFileSync(log, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(6);
+    for (let i = 0; i < 6; i += 2) {
+      expect(lines[i]!.startsWith('start ')).toBe(true);
+      expect(lines[i + 1]).toBe(lines[i]!.replace('start', 'end'));
+    }
+    expect(existsSync(lock)).toBe(false);
+  });
+});
+
+describe('git MCP tool surface', () => {
+  it('every hub tool is either read-only or overridden for git credentials', async () => {
+    const { listToolDefinitions } = await import('@agentteams/hub');
+    const names = (await listToolDefinitions()).map((t) => t.name).sort();
+    const covered = [...GIT_READ_ONLY_TOOLS, ...Object.keys(GIT_WRITE_TOOLS)].sort();
+    expect(names).toEqual(covered);
   });
 });

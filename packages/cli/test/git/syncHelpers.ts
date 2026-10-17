@@ -91,3 +91,19 @@ export async function dump(a: Agent): Promise<string> {
   }
   return JSON.stringify(out);
 }
+
+/** Like an attacker with push access: appends `data` as seq `seq` on top of an agent's ref on the remote (fast-forward). */
+export async function forgeOnRemote(world: World, agentId: string, seq: number, data: Buffer): Promise<string> {
+  const { appendSegment } = await import('../../src/git/refs.js');
+  const evil = world.clone(`evil-${Math.random().toString(36).slice(2, 8)}`);
+  git(evil, 'fetch', '-q', world.remote, `+refs/agentteams/${TEAM}/agents/${agentId}:refs/agentteams-local/${TEAM}/agents/${agentId}`);
+  await appendSegment(deps, evil, TEAM, agentId, seq, data);
+  git(evil, 'push', '-q', world.remote, `refs/agentteams-local/${TEAM}/agents/${agentId}:refs/agentteams/${TEAM}/agents/${agentId}`);
+  return git(evil, 'rev-parse', `refs/agentteams-local/${TEAM}/agents/${agentId}`);
+}
+
+export const remoteHead = (world: World, agentId: string): string =>
+  git(world.remote, 'rev-parse', `refs/agentteams/${TEAM}/agents/${agentId}`);
+
+export const ownSeqs = (repo: string, agentId: string): string[] =>
+  git(repo, 'ls-tree', '--name-only', `refs/agentteams-local/${TEAM}/agents/${agentId}:ops`).split('\n').filter(Boolean);

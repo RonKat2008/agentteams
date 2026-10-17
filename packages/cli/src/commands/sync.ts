@@ -3,7 +3,7 @@ import type { ToolKind } from '@agentteams/shared';
 import { resolveCredentialForCwd } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 
-/** How long `sync` waits for a running round (detached syncs queue behind it so no write is left unpushed). */
+/** How long an interactive `sync` waits for a running round. Detached (`--quiet`) syncs coalesce instead (C7). */
 const LOCK_WAIT_MS = 60_000;
 
 export interface SyncCommandOpts { repo?: string; tool?: ToolKind; quiet?: boolean }
@@ -21,7 +21,7 @@ export async function syncCommand(deps: CliDeps, opts: SyncCommandOpts): Promise
     return 0;
   }
   const { formatSyncSummary, syncRound } = await import('../git/sync.js');
-  const summary = await syncRound(deps, cred.repoPath, cred, { waitMs: LOCK_WAIT_MS });
+  const summary = await syncRound(deps, cred.repoPath, cred, opts.quiet ? { coalesce: true } : { waitMs: LOCK_WAIT_MS });
   if (!opts.quiet) deps.out(formatSyncSummary(summary));
   return summary.ok || summary.skipped ? 0 : 1;
 }
