@@ -19,14 +19,15 @@
  */
 import type { CliDeps } from '../deps.js';
 import type { Credential } from '../credentials.js';
-import { PRESENCE_BUDGET, SEGMENT_BUDGET, ingestAgents, type Budget, type IngestTarget } from './ingest.js';
+import { PRESENCE_BUDGET, SEGMENT_BUDGET, ingestAgents, noteDeletedRefs, type Budget, type IngestTarget } from './ingest.js';
+import { parseHlc } from './hlc.js';
 import { decodeMeta, encodeMeta, MAX_META_BYTES, metaPin, type TeamMeta } from './meta.js';
 import type { Op } from './ops.js';
 import { checkOwnRemote, type OwnRemote } from './ownLog.js';
 import { encodePresence, nextPresence } from './presence.js';
 import {
-  appendSegment, fetchTeam, fetchedMetaObject, fetchedTips, localAgentHead, localTips, pushMeta, pushOwn, readFetchedMeta,
-  readLocalMeta, restoreMeta, setFetchedAgentHead, setPresence, treeOf, writeMeta,
+  appendSegment, deleteRemoteRefs, fetchTeam, fetchedMetaObject, fetchedTips, localAgentHead, localTips, pushMeta, pushOwn, readFetchedMeta,
+  readLocalMeta, restoreMeta, setFetchedAgentHead, setPresence, treeOf, writeMeta, type RemoteRef,
 } from './refs.js';
 import { dropLegacy, insertPending, listPending, opKey, removePending } from './replicaStore.js';
 import {
@@ -122,6 +123,7 @@ async function ingestAll(deps: Deps, repo: string, view: GitView, lock: SyncLock
   const budget: Budget = { ...(opts.budget ?? { segments: SEGMENT_BUDGET, presence: PRESENCE_BUDGET }) };
   const r = await ingestAgents(deps, repo, view, lock, targets, budget);
   summary.problems.push(...r.problems);
+  summary.problems.push(...(await noteDeletedRefs(view, lock, new Set(agents))));
   summary.morePending ||= r.morePending;
   summary.ingested += r.ops.length;
   return r.ops;
@@ -163,9 +165,16 @@ async function creatorMeta(deps: Deps, repo: string, view: GitView): Promise<boo
   const local = buf ? decodeMeta(buf, teamKey, teamId) : null;
   if (local && local.agentId === agentId && local.publicKey === publicKey) return true;
   const pin = await getPinnedTeamMeta(view.store, teamId);
-  const { name, createdAt, defaultBranch } = pin ?? ({} as Record<string, unknown>);
-  if (typeof name !== 'string' || typeof createdAt !== 'string' || typeof defaultBranch !== 'string') return false;
-  const meta: Omit<TeamMeta, 'v'> = { teamId, name, createdAt, defaultBranch, agentId, publicKey };
+  let { name, createdAt, defaultBranch } = pin ?? ({} as Record<string, unknown>);
+  if (typeof name !== 'string' || typeof createdAt !== 'string' || typeof defaultBranch !== 'string') {
+    // Pinned from the credential (no descriptive fields): take them from our own createTeam op (seq 0).
+    const op = (await view.files.readAccepted(agentId)).find((sg) => sg.seq === 0)?.ops[0];
+    const input = op?.op === 'createTeam' ? (op.input as { name?: unknown; repo?: { defaultBranch?: unknown } } | null) : null;
+    const at = op ? parseHlc(op.ts)?.ms : undefined;
+    if (!input || typeof input.name !== 'string' || at === undefined) return false;
+    ({ name, createdAt, defaultBranch } = { name: input.name, createdAt: new Date(at).toISOString(), defaultBranch: String(input.repo?.defaultBranch ?? 'main') });
+  }
+  const meta: Omit<TeamMeta, 'v'> = { teamId, name: name as string, createdAt: createdAt as string, defaultBranch: defaultBranch as string, agentId, publicKey };
   await writeMeta(deps, repo, teamId, encodeMeta(meta, teamKey, privateKey));
   return true;
 }
@@ -296,9 +305,14 @@ async function publishPending(deps: Deps, repo: string, view: GitView, lock: Syn
 /** Pushes the meta repair and our verified log (leased on the observed remote tip). Returns the new remote view. */
 async function pushAll(
   deps: Deps, repo: string, view: GitView, lock: SyncLock, status: SyncStatus, own: OwnRemote,
-  meta: MetaCheck, now: number, summary: SyncSummary,
+  meta: MetaCheck, blockers: RemoteRef[], now: number, summary: SyncSummary,
 ): Promise<OwnRemote> {
   const { teamId, agentId, remote } = view.git;
+  await lock.assertOwned();
+  if (blockers.length > 0) {
+    const d = await deleteRemoteRefs(deps, repo, remote, blockers);
+    if (!d.ok) summary.errors.push(fromGit('clear blocking refs', d.error));
+  }
   if (meta.repair === 'missing') {
     const m = await pushMeta(deps, repo, remote, teamId);
     if (!m.ok) summary.errors.push(fromGit('push meta', m.error));
@@ -349,6 +363,31 @@ async function migrateLegacy(view: GitView): Promise<void> {
   await dropLegacy(view.files, pending.map((o) => o.id));
 }
 
+// ---- Unexpected remote refs ---------------------------------------------------------------------------
+
+const MAX_IGNORED_REMEMBERED = 200;
+
+/**
+ * Refs under the team prefix that are not `meta` or `agents/<canonical id>` are never fetched; each is warned about
+ * once. Returns the ones this agent clears from the remote because they block a valid name: the owner clears
+ * `agents/<own id>/...`, the creator `refs/agentteams/<team>`, `.../agents` and `.../meta/...`.
+ */
+async function noteIgnoredRefs(view: GitView, lock: SyncLock, ignored: RemoteRef[], summary: SyncSummary): Promise<RemoteRef[]> {
+  const { teamId, agentId, publicKey } = view.git;
+  const seen = new Set((await view.files.readLogState()).ignoredRefs ?? []);
+  const fresh = ignored.map((r) => oneLine(r.ref, 160)).filter((n) => !seen.has(n));
+  for (const n of fresh) summary.problems.push(`ignored an unexpected team ref on the remote: ${JSON.stringify(n)}`);
+  if (fresh.length > 0) {
+    await lock.assertOwned();
+    await view.files.setIgnoredRefs([...seen, ...fresh].slice(-MAX_IGNORED_REMEMBERED));
+  }
+  const base = `refs/agentteams/${teamId}`;
+  const pin = await getPinnedTeamMeta(view.store, teamId);
+  const creatorHere = pin?.agentId === agentId && pin.publicKey === publicKey;
+  return ignored.filter((r) => r.ref.startsWith(`${base}/agents/${agentId}/`)
+    || (creatorHere && (r.ref === base || r.ref === `${base}/agents` || r.ref.startsWith(`${base}/meta/`))));
+}
+
 // ---- The round ---------------------------------------------------------------------------------------
 
 async function runRound(
@@ -356,12 +395,19 @@ async function runRound(
 ): Promise<void> {
   const { teamId, remote, agentId } = view.git;
   await migrateLegacy(view);
+  // The creator named by our credential is pinned before anything is fetched (review L5).
+  const creator = view.git.creator;
+  if (creator && (await pinTeamMetaFromInvite(view.store, teamId, creator)) === 'mismatch') {
+    summary.problems.push('this clone pinned a different team creator than this credential names; refusing that meta');
+  }
   const f = await fetchTeam(deps, repo, remote, teamId);
   let own: OwnRemote = { observed: null, remoteRoot: null, vandalised: false, conflict: null };
+  let blockers: RemoteRef[] = [];
   if (f.ok) {
     status.lastFetchAt = new Date(now()).toISOString();
     summary.fetched = true;
-    if (!opts.ingestOnly) own = await checkOwnRemote(deps, repo, view, lock, summary);
+    blockers = await noteIgnoredRefs(view, lock, f.ignored ?? [], summary);
+    if (!opts.ingestOnly) own = await checkOwnRemote(deps, repo, view, lock, (f.pruned ?? []).includes(`agents/${agentId}`), summary);
   } else {
     summary.errors.push(fromGit('fetch', f.error));
   }
@@ -376,7 +422,8 @@ async function runRound(
     summary.published += await publishPending(deps, repo, view, lock, opts, summary);
     await writePresence(deps, repo, view, lock, status, now(), summary);
     if (!f.ok) break; // nothing can be pushed; everything stays queued locally
-    own = await pushAll(deps, repo, view, lock, status, own, meta, now(), summary);
+    own = await pushAll(deps, repo, view, lock, status, own, meta, blockers, now(), summary);
+    blockers = [];
     // Stop as soon as nothing of ours is pending (writes during the round are picked up here) or a push failed.
     if (summary.errors.length > 0 || (await listPending(view.store.ctx.db, agentId)).length === 0) break;
   }

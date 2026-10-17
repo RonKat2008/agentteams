@@ -95,10 +95,21 @@ replayed op that fails validation is recorded as rejected and skipped, never fat
   - Commits exist only to carry trees. The writer makes one commit per change; history depth, parents and commit ids
     are never read, so the writer may squash freely.
 
-A machine fetches `+refs/agentteams/<teamId>/*:refs/agentteams-remote/<teamId>/*` and pushes
-`<local log commit>:refs/agentteams/<teamId>/agents/<agentId>` with `--force-with-lease` on the remote tip it last
-observed. One leased push covers a normal push, a restore after vandalism and a re-clone whose rebuilt log has
-different commits.
+A machine never fetches with a glob. Each round it:
+1. lists `refs/agentteams/<teamId>` on the remote with `git ls-remote`;
+2. keeps only the exact names `meta` and `agents/<ID>`, where ID is a canonical uppercase Crockford ULID (26 chars);
+3. fetches the changed ones with explicit refspecs, in one `git fetch --stdin`, into `refs/agentteams-remote/<teamId>/`;
+4. deletes fetched refs the remote no longer lists (prune).
+
+Every other name is ignored and warned about once. That covers directory/file conflicts such as `agents/<id>/x` or
+a ref named `agents`, and lowercase or case-variant ids. So no ref anyone pushes can break a fetch or clobber
+another name on a case-insensitive filesystem. Names that block a valid ref are deleted from the remote with
+leased deletes: the owner deletes `agents/<own id>/...`, and the creator deletes `refs/agentteams/<team>`,
+`.../agents` and `.../meta/...`.
+
+A machine pushes `<local log commit>:refs/agentteams/<teamId>/agents/<agentId>` with `--force-with-lease` on the
+remote tip it last observed, or with "must not exist" when the ref is absent. One leased push covers a normal push,
+a restore after vandalism, a deleted ref, and a re-clone whose rebuilt log has different commits.
 
 **Encryption and signatures.**
 - **Team key:** 32 random bytes created at `create`, carried only in the invite code. Every segment and presence file
@@ -135,8 +146,13 @@ the host's UI).
     accepted presence.
   - A blob that fails verification stops that agent at that seq for that tip, with one security warning. Any later
     tip is read again, so a valid blob at the same path is accepted.
-  - When an agent's tip changes, its last accepted seq is looked up again. Different content there is logged and
-    ignored: as equivocation if the agent signed it, as vandalism otherwise. The accepted copy stays.
+  - When an agent's tip changes, its last accepted seq is looked up again and compared by its **decrypted, signed
+    content**: the sha256 of signature | plaintext, which is deterministic because Ed25519 is. Blob and ciphertext
+    ids are never compared, because any member holding the team key can re-encrypt a segment.
+    - A re-encrypted copy is the same segment and is ignored silently.
+    - Different signed content is equivocation; content that does not verify is vandalism. Both are logged and
+      ignored, and the accepted copy stays.
+  - A deleted ref of an agent we accepted data from is warned about once. Its accepted log is kept.
   - A seq gap is just a missing path: the replica waits.
 - **Tree guards.** Before any path lookup, `cat-file --batch-check` sizes are checked:
   - the tip commit: at most 64 KiB;
@@ -146,12 +162,21 @@ the host's UI).
 
   An oversized log is skipped with a warning until its tip changes.
 - **Budget.** A round reads at most 64 new segments and visits at most 64 changed agents, across all remote agents.
-  Each visit reads at most one presence. Agents are served round-robin in passes of 8 segments, from an offset that
-  rotates every round. Leftover work sets "more pending": the round leaves `sync.pending`, so the coalescing loop
+  Each visit reads at most one presence. Agents are served round-robin in passes of 8 segments. The order is the
+  stable sorted agent list, rotated by an offset that advances just past the last agent served each round. With B
+  agents holding backlogs, every one is served within about B / 8 rounds (B / 64 for visits). Batched blob reads are
+  chunked at 16 MiB. Leftover work sets "more pending": the round leaves `sync.pending`, so the coalescing loop
   (up to 3 more rounds per call) or the next detached sync continues it. Logs written in this clone (other agents
   sharing it) are not budgeted. A fully processed tip is cached, so unchanged agents cost nothing.
-- **Own log.** Every round compares our remote tip's tree with our local one, by path and content. Shards with the
-  same tree id are skipped.
+- **Own log.** Every round compares our remote tip with our local log at the **expected paths only**:
+  - our seqs 0..n-1, with one lookup per shard of ours, where a shard whose tree id equals ours is skipped whole, and
+    one lookup per seq in a shard that differs;
+  - then n, n+1, ... for adoption;
+  - then presence.bin.
+
+  Extra shards and files are never listed, so the cost is O(our segments) whatever is pushed. 8000 empty shards
+  cost no extra time. Segments are compared by decrypted signed content, so a re-encrypted copy is restored as
+  vandalism, never mistaken for our own key signing twice.
   - Our own segments on the remote that we lack are adopted at any depth. They must be contiguous after our last one
     and verify under our own key. This covers a fresh clone with the same credential, which rebuilds its local log
     from them and continues.
@@ -188,6 +213,14 @@ the host's UI).
 
 ## Security
 
+**Threat model (binding).**
+- **Integrity and authenticity** must hold against any member: no forgery, no impersonation, no silent state
+  divergence.
+- **Availability** against a malicious member with push access is best effort. Such a member can already delete the
+  code.
+  - Simple vandalism must heal itself cheaply.
+  - Nothing a single push does may wedge an agent or the team permanently, or cost unbounded time per round.
+
 - Invite code = team key: anyone holding it and repo access can read and join. Treat it like a password; the CLI says
   so when printing it.
 - Encrypted at rest in the remote; plaintext only in the local `team.db` (0600, inside `.git/`, never committed).
@@ -199,21 +232,35 @@ the host's UI).
   restores the meta: from its local copy, or after a re-clone by re-encoding the pinned meta with its key.
 
 **Residual risks** (accepted, documented):
-- **TOFU for creator pins.** Invites carry the creator's agent id and key, and a joiner pins them before its first
-  fetch. Only a joiner without the creator in its invite (an old or hand-made invite) trusts the first meta it sees.
-  Each agent's own key is still trust-on-first-use from its seq-0 bootstrap.
-- **A large push slows fetches.** `git fetch` downloads everything under the team refs, with a 20 s timeout. One
-  member pushing a huge object onto any ref makes every member's fetch slow or time out until the owner or creator
-  overwrites it. The tree guards and the round budget bound what is read after the fetch, not what is downloaded.
+- **TOFU for creator pins.** Invites carry the creator's agent id and key. Every credential stores them: the
+  creator's names itself. They are pinned before every round's fetch, so neither a joiner nor a re-cloned creator
+  trusts a forged meta. Only a credential without a creator (an old or hand-made invite) trusts the first meta it
+  sees. Each agent's own key is still trust-on-first-use from its seq-0 bootstrap.
+- **A large push slows fetches.** The fetch downloads every valid team ref, with a 20 s timeout, and the listing is
+  capped at 32 MiB.
+  - A huge object on a ref that an honest party owns (its own agent ref, the meta) lasts until that owner overwrites
+    it.
+  - On a ref that no honest party will ever overwrite (the pusher's own agent ref, or a new agent ref), it is
+    **permanent**: every member's fetch stays slow or times out until a person deletes the ref.
+  - The same goes for a flood of millions of junk refs, which exceeds the listing cap.
+  - The tree guards and the round budget bound what is read after the fetch, not what is downloaded.
+- **Hostile agents cost latency and storage.** Any member can mint agents (seq-0 bootstraps are TOFU), and their
+  verified segments are stored by every replica forever (`accepted/*.jsonl`). Honest latency grows with the number
+  of agents holding backlogs: worst case about B / 8 rounds (B / 64 for presence-only changes). That is bounded per
+  round, but not in total.
 - **Members are attributable but can backdate.** Every op is signed, so it is attributable to its author. Its HLC
   timestamp is chosen by that author, though, so a member can backdate ops to win races such as task claims. (Ops
   dated too far in the future are held back.) Late or backdated arrivals are logged when they force a rebuild.
 - **OS-user trust between agents in one clone.** Agents sharing a clone share `.git/agentteams`, the local refs and
   `team.db`. Anyone running as that OS user can edit them, and local logs are read without the round budget. The
   boundary against teammates is the git remote, not the local machine.
-- **One credential, one clone at a time.** Running the same agent credential in two clones at once makes them sign
-  different segments for the same seq. Replicas keep the first copy and log equivocation; the agent stops pushing
-  until a person resolves it.
+- **One credential, one clone at a time.** Running the same agent credential in two clones at once can make them
+  sign different segments for the same seq: true equivocation. Replicas keep the first copy and log it. The agent
+  that loses stops pushing until a person resolves it, and the ops it wrote meanwhile exist only in that clone's
+  local log. Members cannot fake this state: re-encrypted copies are recognised as the same content.
+- **Deleted refs and junk names heal in one owner round.** A deleted agent ref is pruned and recreated by its owner.
+  Names that block a valid ref are deleted by the owner or the creator. Until then, replicas keep everything they
+  accepted.
 
 ## Testing
 

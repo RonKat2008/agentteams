@@ -29,8 +29,10 @@ type Db = Kysely<Database>;
 export interface AgentLogState {
   /** Next seq expected; every seq below it was accepted (lastAcceptedSeq + 1). */
   nextSeq: number;
-  /** Git blob id (content hash) of seq nextSeq - 1: different content there later is equivocation or vandalism. */
+  /** Git blob id of seq nextSeq - 1 (a fast path: the same blob needs no check). */
   lastBlob?: string;
+  /** Hash of the decrypted signed content of seq nextSeq - 1: different signed content later is equivocation. */
+  lastHash?: string;
   /** Last accepted presence; a newer (ts, counter) only. */
   presence?: { ts: number; counter: number; blob: string };
   /**
@@ -40,15 +42,19 @@ export interface AgentLogState {
   doneTip?: string;
   /** Set with doneTip when ingestion stopped on refused data at that tip (it resumes on any other tip). */
   stuck?: boolean;
+  /** Its ref was deleted on the remote (warned once; cleared when the ref is back). */
+  gone?: boolean;
 }
 
 export interface LogState {
   agents: Record<string, AgentLogState>;
   /** Rotating start of the per-round ingest budget (round-robin across agents). */
   rotation?: number;
+  /** Unexpected remote team ref names already warned about (bounded). */
+  ignoredRefs?: string[];
 }
 
-export interface AcceptedSegment { seq: number; ops: Op[]; blob?: string }
+export interface AcceptedSegment { seq: number; ops: Op[]; blob?: string; hash?: string }
 
 export interface ReplicaFiles {
   readonly dir: string;
@@ -59,6 +65,7 @@ export interface ReplicaFiles {
    */
   setAgentState(agentId: string, s: AgentLogState, expected?: AgentLogState | null): Promise<void>;
   setRotation(n: number): Promise<void>;
+  setIgnoredRefs(names: string[]): Promise<void>;
   appendAccepted(agentId: string, segments: AcceptedSegment[]): Promise<void>;
   readAccepted(agentId: string): Promise<AcceptedSegment[]>;
   acceptedAgents(): Promise<string[]>;
@@ -87,13 +94,18 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
   const deferredPath = join(dir, 'deferred.json');
   const ensure = (d: string) => mkdir(d, { recursive: true, mode: DIR_MODE });
 
-  const readRaw = () => readJson<{ agents?: Record<string, AgentLogState>; rotation?: number; pins?: Record<string, string> }>(statePath, {});
+  const readRaw = () => readJson<{
+    agents?: Record<string, AgentLogState>; rotation?: number; ignoredRefs?: unknown[]; pins?: Record<string, string>;
+  }>(statePath, {});
 
   const files: ReplicaFiles = {
     dir,
     async readLogState() {
       const raw = await readRaw();
-      return { agents: raw.agents ?? {}, rotation: Number.isSafeInteger(raw.rotation) ? raw.rotation : 0 };
+      return {
+        agents: raw.agents ?? {}, rotation: Number.isSafeInteger(raw.rotation) ? raw.rotation : 0,
+        ignoredRefs: Array.isArray(raw.ignoredRefs) ? raw.ignoredRefs.filter((x) => typeof x === 'string') : [],
+      };
     },
     async setAgentState(agentId, s, expected) {
       const raw = await readRaw();
@@ -108,12 +120,17 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
       await ensure(dir);
       await writeJsonAtomic(statePath, { ...raw, rotation: n });
     },
+    async setIgnoredRefs(names) {
+      const raw = await readRaw();
+      await ensure(dir);
+      await writeJsonAtomic(statePath, { ...raw, ignoredRefs: names });
+    },
     async appendAccepted(agentId, segments) {
       if (segments.length === 0) return;
       await ensure(acceptedDir);
       const fh = await open(join(acceptedDir, `${agentId}.jsonl`), 'a', FILE_MODE);
       try {
-        await fh.appendFile(segments.map((s) => `${JSON.stringify({ seq: s.seq, blob: s.blob, ops: s.ops })}\n`).join(''));
+        await fh.appendFile(segments.map((s) => `${JSON.stringify({ seq: s.seq, blob: s.blob, hash: s.hash, ops: s.ops })}\n`).join(''));
         await fh.sync();
       } finally {
         await fh.close();
