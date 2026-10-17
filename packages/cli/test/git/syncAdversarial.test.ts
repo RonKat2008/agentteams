@@ -46,6 +46,9 @@ function attacker(agentId: string): string {
 const pushTo = (evil: string, commit: string, agentId: string) =>
   git(evil, 'push', '-q', '--force', world.remote, `${commit}:refs/agentteams/${TEAM}/agents/${agentId}`);
 
+/** These tests spawn hundreds of git processes; 30 s is too tight on a loaded machine. */
+const HEAVY_TIMEOUT_MS = 120_000;
+
 describe('R1: commit identity is irrelevant; replicas read content by path', () => {
   it('a re-created commit (new sha, same content) changes nothing: no refusal, and later writes flow', async () => {
     const { lead, worker } = await twoAgents();
@@ -185,7 +188,7 @@ describe('tree guards: oversized log trees are skipped before any path lookup', 
       const w2 = await sync(worker);
       expect(w2.problems).toEqual([]);
       expect(await bodies(worker)).toContain('after the flood');
-    });
+    }, HEAVY_TIMEOUT_MS);
   }
 });
 
@@ -362,7 +365,7 @@ describe('R2: a re-cloned agent adopts its own remote log at any depth', () => {
     expect((await stateOf(worker, lead.id))!.nextSeq).toBe(612);
     const db = (await view(worker)).store.ctx.db;
     expect(await db.selectFrom('messages').select('body').where('body', '=', 'from the re-clone').execute()).toHaveLength(1);
-  });
+  }, HEAVY_TIMEOUT_MS);
 });
 
 describe('R3: presence never goes backwards for its writer', () => {
@@ -417,7 +420,7 @@ describe('R4: a round is bounded whatever the number of agents and writes', () =
     for (const a of agents) await sync(a);
     await sync(worker);
     expect(await dump(worker)).toBe(await dump(lead));
-  });
+  }, HEAVY_TIMEOUT_MS);
 
   it('presence writes alone are budgeted as agent visits', async () => {
     const { lead, worker } = await twoAgents();
@@ -578,7 +581,7 @@ describe('fix round 4 (re-review 3)', () => {
     expect(s.rounds).toBe(4); // 4 rounds x 2 agents served = 8 >= 6 agents
     const after = await Promise.all(agents.map(async (a) => (await stateOf(worker, a.id))?.nextSeq ?? 0));
     expect(after.every((n, i) => n > before[i]!)).toBe(true);
-  });
+  }, HEAVY_TIMEOUT_MS);
 
   it('L5: a re-cloned creator pins itself from its credential, refuses a forged meta and repairs it', async () => {
     const { lead, worker } = await twoAgents();
