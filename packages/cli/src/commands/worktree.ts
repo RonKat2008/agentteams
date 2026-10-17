@@ -15,7 +15,8 @@ export interface WorktreeOpts { agent?: ToolKind; base?: string; remove?: boolea
 /** Task worktrees live inside the repo (so sandboxed agents such as Codex can write there), git-excluded. */
 export const WORKTREES_DIR = '.agentteams';
 
-export interface TaskWorktree { root: string; path: string; branch: string }
+/** `existed`: the worktree was already there (it is reused as it is). */
+export interface TaskWorktree { root: string; path: string; branch: string; existed: boolean }
 
 export const UNBORN_HEAD_MESSAGE = 'has no commits yet, so there is nothing to branch task worktrees from; '
   + 'make a first commit (e.g. git commit --allow-empty -m "chore: start agentteams team") and retry';
@@ -118,10 +119,9 @@ export async function ensureTaskWorktree(deps: CliDeps, cred: Credential, task: 
 
   const client = clientFor(deps, cred);
   await client.claimTask(task);
-  if (present) deps.out(`worktree already exists: ${path}`);
-  else await addWorktree(deps, client, root, path, branch, base);
+  if (!present) await addWorktree(deps, client, root, path, branch, base);
   await setupForAgent(deps, cred, root, path);
-  return { root, path, branch };
+  return { root, path, branch, existed: present };
 }
 
 export async function worktreeCommand(deps: CliDeps, task: number, opts: WorktreeOpts): Promise<void> {
@@ -132,7 +132,8 @@ export async function worktreeCommand(deps: CliDeps, task: number, opts: Worktre
     const path = await taskWorktreePath(deps, root, cred.agentName, task, branch);
     return removeWorktree(deps, task, root, branch, path, Boolean(opts.force));
   }
-  const { path, branch } = await ensureTaskWorktree(deps, cred, task, opts.base);
+  const { path, branch, existed } = await ensureTaskWorktree(deps, cred, task, opts.base);
+  if (existed) deps.out(`worktree already exists: ${path}`);
   deps.out(`Task #${task} claimed. Worktree: ${path} (branch ${branch})`);
   deps.out(`Next: cd ${path} && ${getAdapter(cred.tool).launch}`);
 }

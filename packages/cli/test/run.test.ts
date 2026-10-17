@@ -201,6 +201,15 @@ describe('agentteams run <task>', () => {
     expect(cli.err.join('\n')).toContain('codex exited with code 3');
   });
 
+  it('a rerun reuses the worktree without the worktree command\'s "already exists" notice', async () => {
+    installBins('codex');
+    const n = await addTask('x', s.bob.agentName);
+    expect(await run('run', String(n), '--agent', 'codex')).toBe(0);
+    expect(await run('run', String(n), '--agent', 'codex')).toBe(0);
+    expect(starts.map((st) => st.cwd)).toEqual([wtOf(s.bob.agentName, n), wtOf(s.bob.agentName, n)]);
+    expect(cli.out.join('\n')).not.toContain('already exists');
+  });
+
   it('passes --model through', async () => {
     installBins('codex');
     const n = await addTask('x', s.bob.agentName);
