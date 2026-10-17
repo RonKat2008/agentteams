@@ -168,6 +168,60 @@ const migrations: Record<string, Migration> = {
       await db.schema.createIndex('replica_notices_agent_idx').on('replica_notices').columns(['agent_id', 'op_id']).execute();
     },
   },
+  '007_replication_v2': {
+    // Replay hardening (Task 5 review rounds 1-2):
+    // - applied_ops keyed by (agent, op_id, hash): op identity is (agent, id); equivocation losers get their own row.
+    //   A replica that already replayed under 006 used the old row-id scheme, so its view is flagged for a rebuild.
+    // - replica_notices keyed by (agent_id, op_id).
+    // - agent_key_pins / team_meta_pins: local trust-on-first-use pins that rebuilds never touch.
+    // - commits are unique per (team, agent, sha, branch): each agent's record stands on its own.
+    async up(db: Kysely<any>) {
+      const evaluated = await db.selectFrom('applied_ops').select((eb) => eb.fn.countAll().as('n')).executeTakeFirst();
+      await db.schema.dropTable('applied_ops').execute();
+      await db.schema.createTable('applied_ops')
+        .addColumn('agent', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('hash', 'text', (c) => c.notNull())
+        .addColumn('ts', 'text')
+        .addColumn('status', 'text', (c) => c.notNull())
+        .addColumn('error', 'text')
+        .addPrimaryKeyConstraint('applied_ops_pk', ['agent', 'op_id', 'hash'])
+        .execute();
+      await db.schema.createIndex('applied_ops_order_idx').on('applied_ops').columns(['ts', 'agent', 'op_id']).execute();
+      await db.schema.createIndex('applied_ops_id_idx').on('applied_ops').columns(['op_id']).execute();
+      if (Number(evaluated?.n ?? 0) > 0) {
+        await db.insertInto('replica_state').values({ key: 'needs_rebuild', value: '1' })
+          .onConflict((oc: any) => oc.column('key').doUpdateSet({ value: '1' })).execute();
+      }
+
+      const notices = await db.selectFrom('replica_notices').selectAll().execute();
+      await db.schema.dropTable('replica_notices').execute();
+      await db.schema.createTable('replica_notices')
+        .addColumn('agent_id', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('body', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'text', (c) => c.notNull())
+        .addColumn('delivered_at', 'text')
+        .addPrimaryKeyConstraint('replica_notices_pk', ['agent_id', 'op_id'])
+        .execute();
+      if (notices.length > 0) await db.insertInto('replica_notices').values(notices).execute();
+
+      await db.schema.createTable('agent_key_pins')
+        .addColumn('agent_id', 'text', (c) => c.primaryKey())
+        .addColumn('public_key', 'text', (c) => c.notNull())
+        .addColumn('pinned_at', 'text', (c) => c.notNull())
+        .execute();
+      await db.schema.createTable('team_meta_pins')
+        .addColumn('team_id', 'text', (c) => c.primaryKey())
+        .addColumn('meta_json', 'text', (c) => c.notNull())
+        .addColumn('pinned_at', 'text', (c) => c.notNull())
+        .execute();
+
+      await db.schema.dropIndex('commits_team_sha_branch_unique').execute();
+      await db.schema.createIndex('commits_team_agent_sha_branch_unique').unique().on('commits')
+        .columns(['team_id', 'agent_id', 'sha', 'branch']).execute();
+    },
+  },
 };
 
 class InCodeMigrationProvider implements MigrationProvider {

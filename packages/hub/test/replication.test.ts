@@ -67,13 +67,17 @@ describe('replicated team bootstrap', () => {
     await expect(registerReplicatedAgent(env.ctx, CREATOR, join)).rejects.toMatchObject({ code: 'forbidden' });
   });
 
-  it('joins once; same key is a no-op, a different key or a taken name is rejected', async () => {
+  it('joins once; same key is a no-op, a different key is rejected, a taken name gets a suffix', async () => {
     await createReplicatedTeam(env.ctx, CREATOR, team);
     expect(await registerReplicatedAgent(env.ctx, JOINER, join)).toEqual({ agentName: 'dylan-claude', alreadyRegistered: false });
     expect(await registerReplicatedAgent(env.ctx, JOINER, join)).toEqual({ agentName: 'dylan-claude', alreadyRegistered: true });
     await expect(registerReplicatedAgent(env.ctx, JOINER, { ...join, publicKey: KEY_A })).rejects.toMatchObject({ code: 'conflict' });
     const third = '01JABCDEFGHJKMNPQRSTVWXYZ2';
-    await expect(registerReplicatedAgent(env.ctx, third, { ...join, agentId: third })).rejects.toMatchObject({ code: 'conflict' });
+    const fourth = '01JABCDEFGHJKMNPQRSTVWXYZ3';
+    expect(await registerReplicatedAgent(env.ctx, third, { ...join, agentId: third }))
+      .toEqual({ agentName: 'dylan-claude-2', alreadyRegistered: false });
+    expect(await registerReplicatedAgent(env.ctx, fourth, { ...join, agentId: fourth }))
+      .toEqual({ agentName: 'dylan-claude-3', alreadyRegistered: false });
     await expect(registerReplicatedAgent(env.ctx, third, { ...join, agentId: third, teamId: 'nope', agentName: 'x-claude' }))
       .rejects.toMatchObject({ code: 'not_found' });
   });

@@ -6,20 +6,21 @@
  * - `id` is a ULID minted from that same HLC time (see mintOpId): its 48-bit time field is the HLC physical
  *   millisecond and the top 14 bits of its 80-bit "random" field are the HLC counter. So for two ops with
  *   different `ts`, ULID order equals `ts` order. Replay rejects any op whose id does not match its ts.
- * - `agent` is the author's agent id. Agent ids are ULIDs minted at join time (captureBootstrapOp uses the
- *   bootstrap op's own id), exactly like the HTTP hub's, so readInbox's broadcast rule (`message.id > agent.id`)
- *   means "sent after the agent joined" on every replica. The bootstrap op's input.agentId must equal its
- *   author; the first registration of an agent id (in total order) wins.
+ * - `agent` is the author's agent id: the id of its own bootstrap op (`createTeam`/`join` require
+ *   op.id === op.agent === input.agentId), so agent ids are ULIDs minted from the join's HLC time, like the
+ *   HTTP hub's, and readInbox's broadcast rule (`message.id > agent.id`) means "sent after the agent joined"
+ *   (at millisecond granularity) on every replica.
+ * - An op's identity is (agent, id): different agents can never shadow or collide with each other's ops.
  * - `input` is the service input after validation with the same zod schema the service/MCP tool uses.
  *
  * This module only type-imports the hub; the registry is built from the lazily imported `@agentteams/hub/core`.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
   AssignTaskInput, ClaimFilesInput, ClaimOverrideInput, ClaimTaskInput, CommitInput, CompleteTaskInput, CreateTaskInput,
   MarkMergedInput, MarkReadInput, ReleaseFilesInput, ReplicatedCreateTeamInput, ReplicatedJoinInput, SendMessageInput,
-  SetOrchestratorInput, UpdateTaskInput,
+  SetOrchestratorInput, Ulid, UpdateTaskInput,
 } from '@agentteams/shared';
 import type { Actor, HubContext } from '@agentteams/hub/core';
 import { parseHlc, type Hlc } from './hlc.js';
@@ -29,8 +30,11 @@ export type { Op } from './segment.js';
 
 type Core = typeof import('@agentteams/hub/core');
 
-/** Every op name the log may carry, with the zod schema its input must satisfy. */
-export const OP_SCHEMAS = {
+/**
+ * What callers pass to capture, per op: the same schemas the services and MCP tools use, so agents are
+ * addressed by name.
+ */
+export const CAPTURE_SCHEMAS = {
   createTeam: ReplicatedCreateTeamInput,
   join: ReplicatedJoinInput,
   sendMessage: SendMessageInput,
@@ -48,10 +52,39 @@ export const OP_SCHEMAS = {
   setOrchestrator: SetOrchestratorInput,
 } as const satisfies Record<string, z.ZodType>;
 
+/** An agent targeted by an op, on the wire: its id (names can be squatted or suffixed; ids cannot). */
+const AgentRef = Ulid;
+
+/**
+ * What the log carries, per op. Identical to CAPTURE_SCHEMAS except that every field naming an agent
+ * (TARGET_FIELDS) carries the agent id, resolved at capture time against the author's view.
+ */
+export const OP_SCHEMAS = {
+  ...CAPTURE_SCHEMAS,
+  sendMessage: SendMessageInput.extend({ to: z.union([z.literal('all'), AgentRef]) }),
+  createTask: CreateTaskInput.extend({ assignee: AgentRef.optional() }),
+  assignTask: AssignTaskInput.extend({ assignee: AgentRef }),
+  setOrchestrator: SetOrchestratorInput.extend({ agent: AgentRef }),
+} as const satisfies Record<keyof typeof CAPTURE_SCHEMAS, z.ZodType>;
+
+/** Input fields that name an agent: captured as names, carried and replayed as ids. */
+export const TARGET_FIELDS = {
+  sendMessage: 'to',
+  createTask: 'assignee',
+  assignTask: 'assignee',
+  setOrchestrator: 'agent',
+} as const satisfies Partial<Record<keyof typeof CAPTURE_SCHEMAS, string>>;
+
 export type OpName = keyof typeof OP_SCHEMAS;
 export type BootstrapOpName = 'createTeam' | 'join';
 export type RegularOpName = Exclude<OpName, BootstrapOpName>;
-export type OpInput<N extends OpName> = z.input<(typeof OP_SCHEMAS)[N]>;
+/** Capture-time input (agents by name). */
+export type OpInput<N extends OpName> = z.input<(typeof CAPTURE_SCHEMAS)[N]>;
+
+/** Name to id lookup over the author's current view (see replay.ts loadAgentDirectory). */
+export interface AgentDirectory {
+  idOf(name: string): string | undefined;
+}
 
 /** Ops that register their author's key. They must be the only op of the author's seq-0 segment. */
 export const BOOTSTRAP_OP_NAMES: ReadonlySet<string> = new Set<BootstrapOpName>(['createTeam', 'join']);
@@ -74,13 +107,29 @@ export type OpHandler = (ctx: HubContext, actor: Actor, input: unknown) => Promi
  * - reads (readInbox without its side effect, status, activity, changes, whoOwns, checkFiles).
  */
 export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
+  /** Replay adapter: the services address agents by name; the log carries ids. The view is deterministic. */
+  const nameOf = async (ctx: HubContext, actor: Actor, id: string): Promise<string> => {
+    const row = await ctx.db.selectFrom('agents').select('name')
+      .where('team_id', '=', actor.teamId).where('id', '=', id).executeTakeFirst();
+    if (!row) throw new core.DomainError('not_found', 'the target agent is not in this team');
+    return row.name;
+  };
+  const withName = <K extends string>(field: K) => async (ctx: HubContext, actor: Actor, input: unknown) => {
+    const i = (input ?? {}) as Record<string, unknown>;
+    const v = i[field];
+    if (typeof v !== 'string' || v === 'all') return i;
+    return { ...i, [field]: await nameOf(ctx, actor, v) };
+  };
+  const to = withName('to');
+  const assignee = withName('assignee');
+  const agent = withName('agent');
   return {
     createTeam: (ctx, actor, input) => core.createReplicatedTeam(ctx, actor.id, input as never),
     join: (ctx, actor, input) => core.registerReplicatedAgent(ctx, actor.id, input as never),
-    sendMessage: (ctx, actor, input) => core.sendMessage(ctx, actor, input as never),
+    sendMessage: async (ctx, actor, input) => core.sendMessage(ctx, actor, (await to(ctx, actor, input)) as never),
     markRead: (ctx, actor, input) => core.markRead(ctx, actor, input as never),
-    createTask: (ctx, actor, input) => core.createTask(ctx, actor, input as never),
-    assignTask: (ctx, actor, input) => core.assignTask(ctx, actor, input as never),
+    createTask: async (ctx, actor, input) => core.createTask(ctx, actor, (await assignee(ctx, actor, input)) as never),
+    assignTask: async (ctx, actor, input) => core.assignTask(ctx, actor, (await assignee(ctx, actor, input)) as never),
     claimTask: (ctx, actor, input) => core.claimTask(ctx, actor, input as never),
     updateTask: (ctx, actor, input) => core.updateTask(ctx, actor, input as never),
     completeTask: (ctx, actor, input) => core.completeTask(ctx, actor, input as never),
@@ -89,9 +138,27 @@ export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
     releaseFiles: (ctx, actor, input) => core.releaseFiles(ctx, actor, input as never),
     recordCommit: (ctx, actor, input) => core.recordCommit(ctx, actor, input as never),
     recordClaimOverride: (ctx, actor, input) => core.recordClaimOverride(ctx, actor, input as never),
-    setOrchestrator: (ctx, actor, input) => core.setOrchestrator(ctx, actor, input as never),
+    setOrchestrator: async (ctx, actor, input) => core.setOrchestrator(ctx, actor, (await agent(ctx, actor, input)) as never),
   };
 }
+
+/**
+ * Ops that can succeed without doing what their author wanted. The op stays applied (the outcome is part
+ * of the deterministic view) but its author gets a local notice with the returned text.
+ */
+export const OUTCOME_NOTICES: Partial<Record<OpName, (result: unknown, input: unknown) => string | null>> = {
+  join: (result, input) => {
+    const got = (result as { agentName?: unknown } | null)?.agentName;
+    const wanted = (input as { agentName?: unknown } | null)?.agentName;
+    return typeof got === 'string' && got !== wanted ? `you joined as "${got}" because "${String(wanted)}" was already taken` : null;
+  },
+  claimFiles: (result) => {
+    const r = result as { granted?: boolean; conflicts?: Array<{ agent: string; glob: string }> } | null;
+    if (!r || (r.granted !== false && (r.conflicts?.length ?? 0) === 0)) return null;
+    const held = (r.conflicts ?? []).map((c) => `${c.glob} (${c.agent})`).join(', ');
+    return `your file claim was refused by the team log${held ? `: already claimed ${held}` : ''}`;
+  },
+};
 
 // ---- ULIDs derived from HLC time -----------------------------------------------------------------
 
@@ -144,38 +211,57 @@ export function opIdMatchesTs(id: unknown, ts: unknown): boolean {
 }
 
 /**
- * Deterministic id source for replaying one op: the op id, then op id + 1, + 2, ... (as 128-bit integers).
+ * Deterministic row-id source for replaying one op by `agent`: the n-th id (n = 0, 1, ...) is the ULID
+ * with time = the op's HLC millisecond and random part = the first 80 bits of SHA-256(agent \0 opId \0 n).
  *
- * Why this keeps ids globally monotonic in total order: every id an op produces shares the op's
- * (HLC ms, HLC counter) prefix, because the 2 reserved zero bits leave 2^64 increments of headroom before
- * a carry could reach the counter. Ops are applied in (ts, agent, id) order and ts is (ms, counter), so for
- * ops with different ts every id of the earlier op sorts below every id of the later one. Two ops with
- * identical ts (different authors) get id ranges ordered by their random bits rather than by author:
- * still identical on every replica, just not tied to the author tie-break.
+ * - Time-ordered: rows of an op sort after every row of ops in earlier milliseconds and before every row of
+ *   ops in later ones, which is what readInbox's broadcast rule (`m.id > actor.id`) needs. Within one
+ *   millisecond (same op, or several ops sharing the ms) the order is deterministic but arbitrary.
+ * - Bound to the author: the random part hashes (agent, op id, n), so an agent cannot aim its rows at
+ *   another agent's ids; a collision needs an 80-bit truncated SHA-256 second preimage.
  */
-export function opIdSequence(opId: string): () => string {
-  const base = decodeUlid(opId);
-  if (base === null) throw new Error(`invalid op id: ${opId}`);
-  let next = 0n;
-  return () => encodeUlid(base + next++);
+export function rowIdSequence(agent: string, opId: string, ts: string): () => string {
+  const t = parseHlc(ts);
+  if (!t) throw new Error(`invalid HLC timestamp: ${ts}`);
+  const time = BigInt(t.ms) << RANDOM_BITS;
+  let n = 0;
+  return () => {
+    const digest = createHash('sha256').update(`${agent}\0${opId}\0${n++}`).digest();
+    return encodeUlid(time | BigInt(`0x${digest.subarray(0, 10).toString('hex')}`));
+  };
 }
 
 // ---- Capture --------------------------------------------------------------------------------------
 
-function validated<N extends OpName>(op: N, input: unknown): unknown {
-  const result = OP_SCHEMAS[op].safeParse(input ?? {});
+function validated(schema: z.ZodType, op: string, input: unknown): unknown {
+  const result = schema.safeParse(input ?? {});
   if (!result.success) throw new Error(`invalid ${op} input: ${z.prettifyError(result.error)}`);
   return result.data;
 }
 
+/** Replaces the agent name in the op's target field (if any) by that agent's id; 'all' stays. */
+function resolveTargets(op: OpName, input: unknown, directory: AgentDirectory): unknown {
+  const field = (TARGET_FIELDS as Partial<Record<OpName, string>>)[op];
+  const i = input as Record<string, unknown>;
+  if (!field || typeof i[field] !== 'string' || i[field] === 'all') return input;
+  const name = i[field] as string;
+  const id = directory.idOf(name);
+  if (!id) throw new Error(`no agent named "${name}" in this team`);
+  return { ...i, [field]: id };
+}
+
 /**
- * Captures a regular op by the given (already registered) agent: ticks the clock, mints the id from that
- * tick and stores the schema-validated input. Throws on invalid input or a bootstrap op name.
+ * Captures a regular op by the given (already registered) agent: validates the input with the service
+ * schema, resolves agent names to ids against `directory` (the author's current view; unknown names throw),
+ * ticks the clock and mints the id from that tick. Throws on invalid input or a bootstrap op name.
  */
-export function captureOp<N extends RegularOpName>(hlc: Pick<Hlc, 'tick'>, agentId: string, op: N, input: OpInput<N>): Op {
+export function captureOp<N extends RegularOpName>(
+  hlc: Pick<Hlc, 'tick'>, agentId: string, op: N, input: OpInput<N>, directory: AgentDirectory,
+): Op {
   if (!isOpName(op) || BOOTSTRAP_OP_NAMES.has(op)) throw new Error(`not a regular op: ${String(op)}`);
   if (!AGENT_ID_RE.test(agentId)) throw new Error('invalid agent id');
-  const data = validated(op, input);
+  const named = validated(CAPTURE_SCHEMAS[op], op, input);
+  const data = validated(OP_SCHEMAS[op], op, resolveTargets(op, named, directory));
   const ts = hlc.tick();
   return { v: 1, id: mintOpId(ts), ts, agent: agentId, op, input: data };
 }
@@ -189,7 +275,7 @@ export function captureBootstrapOp<N extends BootstrapOpName>(
 ): { agentId: string; op: Op } {
   const ts = hlc.tick();
   const id = mintOpId(ts);
-  const data = validated(op, { ...input, agentId: id });
+  const data = validated(OP_SCHEMAS[op], op, { ...input, agentId: id });
   return { agentId: id, op: { v: 1, id, ts, agent: id, op, input: data } };
 }
 

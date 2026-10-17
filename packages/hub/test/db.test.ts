@@ -149,3 +149,46 @@ describe('migration 005_github_id_bigint', () => {
     expect(res.rows[0]?.data_type).toBe('bigint');
   });
 });
+
+describe('migration 007_replication_v2', () => {
+  it('upgrades a view built under 006: rekeys applied_ops, keeps notices, adds pins, flags a rebuild', async () => {
+    const freshHandle = makeTestDb();
+    const fresh = freshHandle.db as unknown as Kysely<any>;
+    try {
+      await migrateTo(freshHandle.db, '006_replication');
+      await fresh.insertInto('applied_ops')
+        .values({ op_id: 'op1', ts: '2026-10-16T12:00:00.000Z-0000', agent: 'agentA0000', status: 'applied', error: null, hash: 'h1' })
+        .execute();
+      await fresh.insertInto('replica_notices')
+        .values({ op_id: 'op9', agent_id: 'agentA0000', body: 'hello', created_at: '2026-10-16T12:00:00.000Z', delivered_at: null })
+        .execute();
+      const commit = (id: string, agent: string) => ({
+        id, team_id: 't1', agent_id: agent, sha: 'abc1234', branch: 'b', message: 'm', files_json: '[]',
+        insertions: 0, deletions: 0, created_at: '2026-01-01T00:00:00.000Z',
+      });
+      await fresh.insertInto('commits').values(commit('c1', 'a1')).execute();
+
+      await migrateToLatest(freshHandle.db);
+
+      expect(await fresh.selectFrom('applied_ops').selectAll().execute()).toEqual([]);
+      const row = (k: string, agent: string, hash: string) => ({ agent, op_id: k, hash, ts: null, status: 'rejected', error: 'x' });
+      await fresh.insertInto('applied_ops')
+        .values([row('op1', 'agentA0000', 'h'), row('op1', 'agentB0000', 'h'), row('op1', 'agentA0000', 'h2')]).execute();
+      await expect(fresh.insertInto('applied_ops').values(row('op1', 'agentA0000', 'h')).execute()).rejects.toThrow();
+      expect(await fresh.selectFrom('replica_state').selectAll().execute()).toEqual([{ key: 'needs_rebuild', value: '1' }]);
+      expect(await fresh.selectFrom('replica_notices').select(['agent_id', 'op_id', 'body']).execute())
+        .toEqual([{ agent_id: 'agentA0000', op_id: 'op9', body: 'hello' }]);
+      await fresh.insertInto('agent_key_pins').values({ agent_id: 'agentA0000', public_key: 'k', pinned_at: 'now' }).execute();
+      await fresh.insertInto('team_meta_pins').values({ team_id: 't1', meta_json: '{}', pinned_at: 'now' }).execute();
+
+      await fresh.insertInto('commits').values(commit('c2', 'a2')).execute(); // same sha+branch, another agent: allowed
+      await expect(fresh.insertInto('commits').values(commit('c3', 'a1')).execute()).rejects.toThrow(); // same agent: not
+    } finally {
+      await freshHandle.close();
+    }
+  });
+
+  it('does not flag a rebuild for a database that never replayed', async () => {
+    expect(await db.selectFrom('replica_state').selectAll().execute()).toEqual([]);
+  });
+});
