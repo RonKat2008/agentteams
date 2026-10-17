@@ -7,8 +7,10 @@
  *   agent_key_pins / team_meta_pins   TOFU pins (replay.ts pinAgentKey / pinTeamMeta)
  *
  * In `<git-common-dir>/agentteams/replica/<teamId>/` (0700), written only by a round under the sync lock:
- *   accepted/<agentId>.jsonl every verified segment, one `{"seq":n,"ops":[...]}` line each (append-only)
- *   log-state.json           per agent: the commit of its last accepted segment (`head`) and the next seq
+ *   accepted/<agentId>.jsonl every verified segment, one `{"seq":n,"blob":"<git blob id>","ops":[...]}` line each
+ *                            (append-only; the blob id is the content hash an accepted seq is compared against)
+ *   log-state.json           per agent: next seq, last accepted blob, last accepted presence, the last tip fully
+ *                            processed; plus the round-robin offset of the ingest budget
  *   deferred.json            verified ops held back from replay for now (future-dated), offered every round
  */
 import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
@@ -25,28 +27,38 @@ const AGENT_FILE_RE = /^([0-9A-Za-z]{10,40})\.jsonl$/;
 type Db = Kysely<Database>;
 
 export interface AgentLogState {
-  /** Commit of the agent's last accepted segment (fast-forward checks start from here). */
-  head?: string;
-  /** Next seq expected; every seq below it was accepted. */
+  /** Next seq expected; every seq below it was accepted (lastAcceptedSeq + 1). */
   nextSeq: number;
-  /** Time of the last accepted presence (ms); newer presence only. */
-  presenceMs?: number;
+  /** Git blob id (content hash) of seq nextSeq - 1: different content there later is equivocation or vandalism. */
+  lastBlob?: string;
+  /** Last accepted presence; a newer (ts, counter) only. */
+  presence?: { ts: number; counter: number; blob: string };
+  /**
+   * A tip whose tree was fully processed (every path from nextSeq looked up, presence read): a cache only, since a
+   * commit id names its content. Skipping it saves work; it is never compared for ancestry.
+   */
+  doneTip?: string;
+  /** Set with doneTip when ingestion stopped on refused data at that tip (it resumes on any other tip). */
+  stuck?: boolean;
 }
 
 export interface LogState {
   agents: Record<string, AgentLogState>;
+  /** Rotating start of the per-round ingest budget (round-robin across agents). */
+  rotation?: number;
 }
 
-export interface AcceptedSegment { seq: number; ops: Op[] }
+export interface AcceptedSegment { seq: number; ops: Op[]; blob?: string }
 
 export interface ReplicaFiles {
   readonly dir: string;
   readLogState(): Promise<LogState>;
   /**
-   * Updates one agent's entry (read-modify-write under the sync lock). With `expectedHead`, a compare-and-swap:
-   * throws when the stored head is no longer that value (another round moved it).
+   * Updates one agent's entry (read-modify-write under the sync lock). With `expected` (null = no entry yet), a
+   * compare-and-swap: throws RefMovedError when the stored entry is no longer that value (another round moved it).
    */
-  setAgentState(agentId: string, s: AgentLogState, expectedHead?: string): Promise<void>;
+  setAgentState(agentId: string, s: AgentLogState, expected?: AgentLogState | null): Promise<void>;
+  setRotation(n: number): Promise<void>;
   appendAccepted(agentId: string, segments: AcceptedSegment[]): Promise<void>;
   readAccepted(agentId: string): Promise<AcceptedSegment[]>;
   acceptedAgents(): Promise<string[]>;
@@ -75,27 +87,33 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
   const deferredPath = join(dir, 'deferred.json');
   const ensure = (d: string) => mkdir(d, { recursive: true, mode: DIR_MODE });
 
-  const readRaw = () => readJson<{ agents?: Record<string, AgentLogState>; pins?: Record<string, string> }>(statePath, {});
+  const readRaw = () => readJson<{ agents?: Record<string, AgentLogState>; rotation?: number; pins?: Record<string, string> }>(statePath, {});
 
   const files: ReplicaFiles = {
     dir,
     async readLogState() {
-      return { agents: (await readRaw()).agents ?? {} };
-    },
-    async setAgentState(agentId, s, expectedHead) {
       const raw = await readRaw();
-      if (arguments.length >= 3 && raw.agents?.[agentId]?.head !== expectedHead) {
+      return { agents: raw.agents ?? {}, rotation: Number.isSafeInteger(raw.rotation) ? raw.rotation : 0 };
+    },
+    async setAgentState(agentId, s, expected) {
+      const raw = await readRaw();
+      if (expected !== undefined && JSON.stringify(raw.agents?.[agentId] ?? null) !== JSON.stringify(expected)) {
         throw Object.assign(new Error(`log state of ${agentId} moved unexpectedly; stopping`), { name: 'RefMovedError' });
       }
       await ensure(dir);
       await writeJsonAtomic(statePath, { ...raw, agents: { ...(raw.agents ?? {}), [agentId]: s } });
+    },
+    async setRotation(n) {
+      const raw = await readRaw();
+      await ensure(dir);
+      await writeJsonAtomic(statePath, { ...raw, rotation: n });
     },
     async appendAccepted(agentId, segments) {
       if (segments.length === 0) return;
       await ensure(acceptedDir);
       const fh = await open(join(acceptedDir, `${agentId}.jsonl`), 'a', FILE_MODE);
       try {
-        await fh.appendFile(segments.map((s) => `${JSON.stringify({ seq: s.seq, ops: s.ops })}\n`).join(''));
+        await fh.appendFile(segments.map((s) => `${JSON.stringify({ seq: s.seq, blob: s.blob, ops: s.ops })}\n`).join(''));
         await fh.sync();
       } finally {
         await fh.close();
@@ -162,8 +180,11 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
 /** Removes the legacy pins and pending files once they are stored in team.db. */
 export async function dropLegacy(files: ReplicaFiles, migratedPendingIds: string[]): Promise<void> {
   const statePath = join(files.dir, 'log-state.json');
-  const raw = await readJson<{ agents?: Record<string, AgentLogState>; pins?: Record<string, string> }>(statePath, {});
-  if (raw.pins !== undefined) await writeJsonAtomic(statePath, { agents: raw.agents ?? {} });
+  const raw = await readJson<{ agents?: Record<string, AgentLogState>; rotation?: number; pins?: Record<string, string> }>(statePath, {});
+  if (raw.pins !== undefined) {
+    const { pins: _dropped, ...rest } = raw;
+    await writeJsonAtomic(statePath, rest);
+  }
   for (const id of migratedPendingIds) await unlink(join(files.dir, 'pending', `${id}.json`)).catch(() => undefined);
 }
 
