@@ -39,7 +39,7 @@ export function formatStatusTable(status: TeamStatus, me: string, p: Palette = m
   const rows = agents.map(cells);
   const w = widths(rows);
   const line = (cols: string[]) => cols.map((c, i) => padVisible(c, w[i]!)).join('  ');
-  const head = p.bold(oneLine(team.name)) + p.dim(` · repo ${oneLine(team.repo.slug ?? 'local')} · orchestrator ${oneLine(team.orchestrator ?? 'none')}`);
+  const head = p.bold(oneLine(team.name)) + p.dim(`${team.repo.slug ? ` · repo ${oneLine(team.repo.slug)}` : ''} · orchestrator ${oneLine(team.orchestrator ?? 'none')}`);
   const header = `  ${p.dim(line([...HEADERS]).trimEnd())}`;
   const body = agents.map((a, i) => {
     const c = rows[i]!;

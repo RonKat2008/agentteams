@@ -20,7 +20,7 @@ const status: TeamStatus = {
 describe('formatStatusTable', () => {
   it('renders a header, glyphs, truncation and notes with color off', () => {
     const lines = formatStatusTable(status, 'alice-claude');
-    expect(lines[0]).toBe('shop-api · repo local · orchestrator alice-claude');
+    expect(lines[0]).toBe('shop-api · orchestrator alice-claude');
     expect(lines[2]).toMatch(/^ {2}AGENT +PERSON +TOOL +STATUS +TASK +CLAIMS$/);
     expect(lines[3]).toMatch(/^● alice-claude +alice +claude +active +— +— +★ orchestrator · you$/);
     expect(lines[4]).toMatch(/^● jamie-claude .*#1 Rate-limit POST \/login +src\/auth\/\*\*, web\/a\.ts$/);
