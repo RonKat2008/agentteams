@@ -7,6 +7,7 @@ import { ReplicatedCreateTeamInput, ReplicatedJoinInput } from '@agentteams/shar
 import { withTx, type HubContext } from '../context.js';
 import { DomainError, parseInput } from '../errors.js';
 import { logEvent } from './activity.js';
+import { uniqueAgentName } from './teams.js';
 
 /**
  * Placeholder secrets for replicated rows. hashSecret() yields 64 hex characters, so these can never
@@ -17,12 +18,6 @@ const apiKeyHashOf = (agentId: string): string => `replica:${agentId}`;
 
 function requireSelf(authorId: string, agentId: string): void {
   if (authorId !== agentId) throw new DomainError('forbidden', 'an agent can only register its own key');
-}
-
-async function requireNameFree(ctx: HubContext, teamId: string, name: string): Promise<void> {
-  const taken = await ctx.db.selectFrom('agents').select('id')
-    .where('team_id', '=', teamId).where('name', '=', name).executeTakeFirst();
-  if (taken) throw new DomainError('conflict', `agent name "${name}" is already taken in this team`);
 }
 
 /**
@@ -54,9 +49,10 @@ export async function createReplicatedTeam(
 }
 
 /**
- * An agent's first op. First registration wins: a second registration of the same agent id with a
- * different key, or of a name another agent already holds, is rejected. Re-registering the identical
- * key is an idempotent no-op.
+ * An agent's first op. A second registration of the same agent id with a different key is rejected;
+ * re-registering the identical key is an idempotent no-op. A join is never rejected over its name: if the
+ * requested name is taken, the agent gets the first free `<name>-2`, `-3`, ... (as joinTeam does), which
+ * is deterministic because replay applies joins in total order.
  */
 export async function registerReplicatedAgent(
   ctx: HubContext, authorId: string, input: ReplicatedJoinInput,
@@ -72,14 +68,15 @@ export async function registerReplicatedAgent(
       if (key.public_key !== p.publicKey || key.team_id !== p.teamId) {
         throw new DomainError('conflict', 'this agent is already registered with a different key');
       }
-      return { agentName: p.agentName, alreadyRegistered: true };
+      const current = await tx.db.selectFrom('agents').select('name').where('id', '=', p.agentId).executeTakeFirst();
+      return { agentName: current?.name ?? p.agentName, alreadyRegistered: true };
     }
     const row = await tx.db.selectFrom('agents').select('id').where('id', '=', p.agentId).executeTakeFirst();
     if (row) throw new DomainError('conflict', 'this agent is already registered');
-    await requireNameFree(tx, p.teamId, p.agentName);
-    await insertAgent(tx, p.teamId, p, nowIso);
-    await logEvent(tx, p.teamId, p.agentId, 'agent_joined', { agent: p.agentName, member: p.member, tool: p.tool, githubLogin: null });
-    return { agentName: p.agentName, alreadyRegistered: false };
+    const agentName = await uniqueAgentName(tx, p.teamId, p.agentName);
+    await insertAgent(tx, p.teamId, { ...p, agentName }, nowIso);
+    await logEvent(tx, p.teamId, p.agentId, 'agent_joined', { agent: agentName, member: p.member, tool: p.tool, githubLogin: null });
+    return { agentName, alreadyRegistered: false };
   });
 }
 

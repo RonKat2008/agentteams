@@ -4,11 +4,14 @@ import { createHlc, formatHlc, parseHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp, mintOpId } from '../../src/git/ops.js';
 import { deferFutureOps, getPinnedKey, loadAgentKeys, pinAgentKey, rebuildView } from '../../src/git/replay.js';
 import { decodeSegment, encodeSegment, type Op } from '../../src/git/segment.js';
+import type { TeamCreator } from '../../src/git/replay.js';
+
+const NO_DIR = { idOf: () => undefined };
 import { Scenario, TEAM_ID, TEST_NOW, buildLog, openReplica, type Built, type Replica } from './replayHelpers.js';
 
 const open: Replica[] = [];
-async function replica(source: () => unknown[], localAgentId?: string): Promise<Replica> {
-  const r = await openReplica(source, localAgentId);
+async function replica(source: () => unknown[], localAgentId?: string, creator?: TeamCreator): Promise<Replica> {
+  const r = await openReplica(source, localAgentId, () => creator ?? log?.creator);
   open.push(r);
   return r;
 }
@@ -107,7 +110,7 @@ describe('op identity is (agent, id)', () => {
 });
 
 describe('key pins', () => {
-  it('survive a rebuild that rejects the pinned join after an honest name race (probe P3)', async () => {
+  it('survive a rebuild after an honest name race, which renames the later join (probe P3)', async () => {
     const s = await Scenario.start();
     open.push(s.live);
     await s.createTeam('ronit');
@@ -122,7 +125,8 @@ describe('key pins', () => {
     });
     const summary = await s.live.apply([earlierJoin]);
     expect(summary.rebuilt).toBe(true);
-    expect((await rowsFor(s.live, { agent: dylan.id, id: dylan.id }))[0]).toMatchObject({ status: 'rejected', error: 'conflict' });
+    expect((await rowsFor(s.live, { agent: dylan.id, id: dylan.id }))[0]).toMatchObject({ status: 'applied' });
+    expect((await s.live.actor(dylan.id)).name).toBe('dylan-claude-2');
 
     expect(await getPinnedKey(s.live.store, dylan.id)).toBe(dylan.publicKey);
     expect(await pinAgentKey(s.live.store, dylan.id, dylan.publicKey)).toBe('match');
@@ -154,7 +158,7 @@ describe('future timestamps', () => {
   it('defers a far-future op instead of rejecting it, without forcing rebuilds, and applies it once due', async () => {
     const ronit = log.ronit;
     const futureMs = TEST_NOW + 24 * 60 * 60 * 1000;
-    const future = captureOp(createHlc(() => futureMs), ronit.id, 'sendMessage', { to: 'all', body: 'from the future' });
+    const future = captureOp(createHlc(() => futureMs), ronit.id, 'sendMessage', { to: 'all', body: 'from the future' }, NO_DIR);
     expect(deferFutureOps([future, log.ops[0]!], TEST_NOW)).toEqual({ ready: [log.ops[0]], deferred: [future] });
 
     const head = log.ops.slice(0, -3);
@@ -168,10 +172,10 @@ describe('future timestamps', () => {
     expect(await countRebuilds(r)).toBe(0);
     expect(await r.dump()).toBe(reference); // the deferred op is invisible
 
-    await rebuildView(r.store, { source: { allOps: async () => stored }, teamId: TEAM_ID, nowMs: TEST_NOW });
+    await rebuildView(r.store, { source: { allOps: async () => stored }, teamId: TEAM_ID, nowMs: TEST_NOW, teamCreator: log.creator });
     expect(await r.dump()).toBe(reference);
 
     const later = await r.apply([future], { nowMs: futureMs });
-    expect(later).toMatchObject({ applied: 1, deferred: 0, rebuilt: false });
+    expect(later).toMatchObject({ applied: 1, deferred: 0, backdated: 0, rebuilt: false });
   });
 });

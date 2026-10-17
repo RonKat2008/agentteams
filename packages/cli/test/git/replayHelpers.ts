@@ -8,7 +8,9 @@ import { createHlc, type Hlc } from '../../src/git/hlc.js';
 import {
   captureBootstrapOp, captureOp, type OpInput, type RegularOpName,
 } from '../../src/git/ops.js';
-import { REPLICATED_TABLES, applyOps, type ApplyOptions, type ReplayStore } from '../../src/git/replay.js';
+import {
+  REPLICATED_TABLES, applyOps, loadAgentDirectory, type ApplyOptions, type ReplayStore, type TeamCreator,
+} from '../../src/git/replay.js';
 import type { Op } from '../../src/git/segment.js';
 
 export const TEAM_ID = 'team-alpha';
@@ -26,7 +28,12 @@ export interface Replica {
 }
 
 /** A fresh, migrated SQLite replica in a temp dir. `source` defaults to whatever the test registers. */
-export async function openReplica(source: () => unknown[] = () => [], localAgentId?: string): Promise<Replica> {
+/** A creator that matches nothing: every createTeam is rejected (used before a team exists). */
+export const NO_CREATOR: TeamCreator = { agentId: 'NOCREATOR0', publicKey: 'A'.repeat(43) };
+
+export async function openReplica(
+  source: () => unknown[] = () => [], localAgentId?: string, creator: () => TeamCreator | undefined = () => undefined,
+): Promise<Replica> {
   const dir = mkdtempSync(join(tmpdir(), 'at-replay-'));
   const db = core.createSqliteDb(join(dir, 'team.db'));
   await core.migrateToLatest(db);
@@ -34,7 +41,7 @@ export async function openReplica(source: () => unknown[] = () => [], localAgent
   return {
     store,
     apply: (ops, opts = {}) => applyOps(store, ops, {
-      source: { allOps: async () => source() }, teamId: TEAM_ID, nowMs: TEST_NOW,
+      source: { allOps: async () => source() }, teamId: TEAM_ID, nowMs: TEST_NOW, teamCreator: creator() ?? NO_CREATOR,
       ...(localAgentId === undefined ? {} : { localAgentId }), ...opts,
     }),
     async dump() {
@@ -71,11 +78,12 @@ export class Scenario {
   now = T0;
   readonly ops: Op[] = [];
   readonly agents = new Map<string, ScenarioAgent>();
+  creator: TeamCreator | undefined;
   private constructor(readonly live: Replica) {}
 
   static async start(): Promise<Scenario> {
     let scenario: Scenario | undefined;
-    const live = await openReplica(() => scenario!.ops);
+    const live = await openReplica(() => scenario!.ops, undefined, () => scenario!.creator);
     scenario = new Scenario(live);
     return scenario;
   }
@@ -106,6 +114,7 @@ export class Scenario {
     });
     const agent = { id: agentId, name, hlc, publicKey };
     this.agents.set(name, agent);
+    this.creator = { agentId, publicKey };
     await this.push(op);
     return agent;
   }
@@ -123,7 +132,8 @@ export class Scenario {
   /** Captures (and live-applies) an op; the author first observes every op so far, like after a sync. */
   async op<N extends RegularOpName>(agent: ScenarioAgent, name: N, input: OpInput<N>, opts: { observe?: boolean } = {}): Promise<Op> {
     if (opts.observe !== false) for (const o of this.ops) agent.hlc.observe(o.ts);
-    return this.push(captureOp(agent.hlc, agent.id, name, input));
+    const directory = await loadAgentDirectory(this.live.store);
+    return this.push(captureOp(agent.hlc, agent.id, name, input, directory));
   }
 
   /** Ids of the messages the agent would currently see as unread on the live replica. */
@@ -168,6 +178,7 @@ export function batches<T>(items: readonly T[], rand: () => number, maxBatch = 5
 
 export interface Built {
   s: Scenario;
+  creator: TeamCreator;
   ops: Op[];
   ronit: ScenarioAgent;
   dylan: ScenarioAgent;
@@ -246,7 +257,7 @@ export async function buildLog(): Promise<Built> {
   const pairA = await s.op(dylan, 'sendMessage', { to: 'all', body: 'same tick from dylan', kind: 'fyi' });
   const pairB = await s.op(kai, 'sendMessage', { to: 'all', body: 'same tick from kai', kind: 'fyi' }, { observe: false });
   return {
-    s, ops: [...s.ops], ronit, dylan, ash, kai, createTask1, ashClaimFiles, claimByDylan, claimByKai, rejectedCreate,
+    s, creator: s.creator!, ops: [...s.ops], ronit, dylan, ash, kai, createTask1, ashClaimFiles, claimByDylan, claimByKai, rejectedCreate,
     sameTsPair: [pairA, pairB],
   };
 }

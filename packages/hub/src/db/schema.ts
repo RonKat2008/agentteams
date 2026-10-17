@@ -141,6 +141,13 @@ export interface AgentKeyPinsTable {
   pinned_at: string;
 }
 
+/** Local trust-on-first-use pin of a team's meta (creator id and key); never wiped, never replaced. */
+export interface TeamMetaPinsTable {
+  team_id: string;
+  meta_json: string;
+  pinned_at: string;
+}
+
 export interface Database {
   teams: TeamsTable;
   agents: AgentsTable;
@@ -155,6 +162,7 @@ export interface Database {
   replica_state: ReplicaStateTable;
   replica_notices: ReplicaNoticesTable;
   agent_key_pins: AgentKeyPinsTable;
+  team_meta_pins: TeamMetaPinsTable;
 }
 
 export type TeamRow = Selectable<TeamsTable>;

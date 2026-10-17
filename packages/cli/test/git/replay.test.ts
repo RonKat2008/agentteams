@@ -5,13 +5,16 @@ import { createHlc, formatHlc } from '../../src/git/hlc.js';
 import { captureBootstrapOp, captureOp, mintOpId } from '../../src/git/ops.js';
 import { loadAgentKeys, rebuildView, takeNotices } from '../../src/git/replay.js';
 import { decodeSegment, encodeSegment, type Op } from '../../src/git/segment.js';
+import type { TeamCreator } from '../../src/git/replay.js';
+
+const NO_DIR = { idOf: () => undefined };
 import {
   Scenario, TEAM_ID, TEST_NOW, batches, buildLog, openReplica, prng, shuffle, type Built, type Replica, type ScenarioAgent,
 } from './replayHelpers.js';
 
 const open: Replica[] = [];
-async function replica(source: () => unknown[], localAgentId?: string): Promise<Replica> {
-  const r = await openReplica(source, localAgentId);
+async function replica(source: () => unknown[], localAgentId?: string, creator?: TeamCreator): Promise<Replica> {
+  const r = await openReplica(source, localAgentId, () => creator ?? log?.creator);
   open.push(r);
   return r;
 }
@@ -68,7 +71,7 @@ describe('applyOps determinism', () => {
     }
 
     const rebuilt = await replica(() => all);
-    const summary = await rebuildView(rebuilt.store, { source: { allOps: async () => all }, teamId: TEAM_ID, nowMs: TEST_NOW });
+    const summary = await rebuildView(rebuilt.store, { source: { allOps: async () => all }, teamId: TEAM_ID, nowMs: TEST_NOW, teamCreator: log.creator });
     expect(summary).toMatchObject({ rebuilt: true, applied: all.length - 2, rejected: 2 });
     expect(await rebuilt.dump()).toBe(reference);
   });
@@ -103,7 +106,7 @@ describe('applyOps determinism', () => {
     expect(second.applied + second.rejected).toBe(log.ops.length);
     expect(await r.dump()).toBe(reference);
 
-    expect(await r.apply([])).toEqual({ applied: 0, rejected: 0, duplicates: 0, deferred: 0, rebuilt: false });
+    expect(await r.apply([])).toEqual({ applied: 0, rejected: 0, duplicates: 0, deferred: 0, backdated: 0, rebuilt: false });
   });
 
   it('treats re-applying the same ops as a no-op', async () => {
@@ -111,7 +114,7 @@ describe('applyOps determinism', () => {
     await r.apply(log.ops);
     const before = await r.dump();
     const again = await r.apply(shuffle(log.ops, prng(9)));
-    expect(again).toEqual({ applied: 0, rejected: 0, duplicates: log.ops.length, deferred: 0, rebuilt: false });
+    expect(again).toEqual({ applied: 0, rejected: 0, duplicates: log.ops.length, deferred: 0, backdated: 0, rebuilt: false });
     expect(await r.dump()).toBe(before);
   });
 });
@@ -154,7 +157,7 @@ describe('conflicts and notices', () => {
     expect(await peek()).toEqual([]);
     await r.apply([log.claimByDylan]); // rebuild: kai's claim now loses
     expect(await peek()).toEqual([log.claimByKai.id]);
-    await rebuildView(r.store, { source: { allOps: async () => log.ops }, teamId: TEAM_ID, localAgentId: log.kai.id, nowMs: TEST_NOW });
+    await rebuildView(r.store, { source: { allOps: async () => log.ops }, teamId: TEAM_ID, localAgentId: log.kai.id, nowMs: TEST_NOW, teamCreator: log.creator });
     expect(await peek()).toEqual([log.claimByKai.id]);
   });
 
@@ -168,7 +171,7 @@ describe('conflicts and notices', () => {
 });
 
 describe('registration', () => {
-  it('rejects a join that takes a name, targets another team or agent, a second createTeam and unknown authors', async () => {
+  it('suffixes a join that takes a name; rejects other-team joins, impersonation, a non-creator createTeam, unknown authors', async () => {
     const s = await Scenario.start();
     open.push(s.live);
     await s.createTeam('ronit');
@@ -189,16 +192,16 @@ describe('registration', () => {
     });
     const impersonation = { ...forOther, agent: twin.id }; // registers someone else's id
     const wrongInputId = { ...forOther, input: { ...(forOther.input as object), agentId: twin.id } };
-    const ghost = captureOp(hlc, mintOpId(hlc.tick()), 'sendMessage', { to: 'all', body: 'boo' });
+    const ghost = captureOp(hlc, mintOpId(hlc.tick()), 'sendMessage', { to: 'all', body: 'boo' }, NO_DIR);
     await s.live.apply([secondTeam, otherTeamJoin, impersonation, wrongInputId, ghost]);
-    expect(await rowOf(s.live, s.ops[1]!)).toMatchObject({ status: 'rejected', error: 'conflict' });
-    expect(await rowOf(s.live, secondTeam)).toMatchObject({ status: 'rejected', error: 'conflict' });
+    expect(await rowOf(s.live, s.ops[1]!)).toMatchObject({ status: 'applied', error: null });
+    expect(await rowOf(s.live, secondTeam)).toMatchObject({ status: 'rejected', error: 'not-creator' });
     expect(await rowOf(s.live, otherTeamJoin)).toMatchObject({ status: 'rejected', error: 'wrong-team' });
     expect(await rowOf(s.live, impersonation)).toMatchObject({ status: 'rejected', error: 'bootstrap-id' });
     expect(await rowOf(s.live, wrongInputId)).toMatchObject({ status: 'rejected', error: 'bootstrap-id' });
     expect(await rowOf(s.live, ghost)).toMatchObject({ status: 'rejected', error: 'unknown-agent' });
     const agents = await s.live.store.ctx.db.selectFrom('agents').select('name').execute();
-    expect(agents.map((a) => a.name)).toEqual(['ronit-claude']);
+    expect(agents.map((a) => a.name).sort()).toEqual(['ronit-claude', 'ronit-claude-2']);
   });
 });
 
@@ -216,7 +219,7 @@ describe('envelope validation', () => {
     const badInput: Op = { ...base, id: mintOpId(badInputTs), ts: badInputTs, input: { to: 'all' } };
     const before = await r.store.ctx.db.selectFrom('messages').select('id').execute();
     const summary = await r.apply([badTs, badId, unknownOp, badInput, { nonsense: true }]);
-    expect(summary).toEqual({ applied: 0, rejected: 5, duplicates: 0, deferred: 0, rebuilt: false });
+    expect(summary).toEqual({ applied: 0, rejected: 5, duplicates: 0, deferred: 0, backdated: 0, rebuilt: false });
     expect(await rowOf(r, badTs)).toMatchObject({ status: 'rejected', ts: null, error: 'malformed' });
     expect(await rowOf(r, badId)).toMatchObject({ status: 'rejected', ts: null, error: 'malformed' });
     expect(await rowOf(r, unknownOp)).toMatchObject({ status: 'rejected', error: 'unknown-op' });
@@ -234,11 +237,11 @@ describe('segment round trip', () => {
       teamId: TEAM_ID, name: 'alpha', repo: { provider: 'local', defaultBranch: 'main' }, member: 'ronit', tool: 'claude',
       agentName: 'ronit-claude', publicKey: pair.publicKey,
     });
-    const hello = captureOp(hlc, agentId, 'sendMessage', { to: 'all', body: 'hello' });
+    const hello = captureOp(hlc, agentId, 'sendMessage', { to: 'all', body: 'hello' }, NO_DIR);
     const seg0 = encodeSegment({ teamId: TEAM_ID, agent: agentId, seq: 0, ops: [create] }, teamKey, pair.privateKey);
     const seg1 = encodeSegment({ teamId: TEAM_ID, agent: agentId, seq: 1, ops: [hello] }, teamKey, pair.privateKey);
 
-    const r = await replica(() => [create, hello]);
+    const r = await replica(() => [create, hello], undefined, { agentId, publicKey: pair.publicKey });
     let keys = await loadAgentKeys(r.store);
     const d0 = decodeSegment(seg0, teamKey, { teamId: TEAM_ID, agent: agentId, seq: 0 }, (id) => keys.get(id));
     expect(d0).toMatchObject({ ok: true, bootstrapKey: pair.publicKey });

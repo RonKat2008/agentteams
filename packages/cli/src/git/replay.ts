@@ -17,14 +17,18 @@
  * - Ops more than MAX_CLOCK_SKEW_MS ahead of local wall time are deferred, never rejected (a wall-clock rule
  *   would diverge between replicas): they are neither applied nor counted for ordering until they are due.
  * - Local-only state that a rebuild never touches: replica_notices (messages for this replica's own agent:
- *   rejections and refused outcomes), replica_state, and agent_key_pins (trust-on-first-use signing keys).
+ *   rejections and refused outcomes), replica_state, agent_key_pins and team_meta_pins (trust-on-first-use).
+ * - Only the createTeam by the pinned team creator (ApplyOptions.teamCreator, from the meta ref) is accepted.
+ * - Residual, accepted risk: an author chooses its ops' HLC ts, so a member can backdate ops to win
+ *   order-dependent races (claimTask, claimFiles). Every replica still agrees, and the ops are attributable;
+ *   ApplySummary.backdated counts ops that arrive behind the newest applied op so sync can log them.
  */
 import { createHash } from 'node:crypto';
 import type { Actor, ControlledTransaction, Database, HubContext, Kysely } from '@agentteams/hub/core';
 import { isKeyString } from './crypto.js';
 import { MAX_CLOCK_SKEW_MS, parseHlc } from './hlc.js';
 import {
-  BOOTSTRAP_OP_NAMES, OUTCOME_NOTICES, buildRegistry, canonicalJson, cmp, compareOps, isOpName, opIdMatchesTs,
+  type AgentDirectory, BOOTSTRAP_OP_NAMES, OUTCOME_NOTICES, buildRegistry, canonicalJson, cmp, compareOps, isOpName, opIdMatchesTs,
   rowIdSequence, type Op, type OpHandler, type OpName,
 } from './ops.js';
 import { AGENT_ID_RE } from './segment.js';
@@ -51,6 +55,21 @@ export interface ApplyOptions {
   teamId?: string;
   /** Local wall time for deferring future ops; defaults to Date.now(). */
   nowMs?: number;
+  /**
+   * The team creator from the verified, locally pinned meta ref (see pinTeamMeta). Only a createTeam by this
+   * agent with this key is accepted; any other createTeam is rejected 'not-creator'.
+   */
+  teamCreator: TeamCreator;
+}
+
+export interface TeamCreator {
+  agentId: string;
+  publicKey: string;
+}
+
+/** The part of a team's meta ref that is pinned; extra fields are stored but not compared. */
+export interface TeamMetaPin extends TeamCreator {
+  [field: string]: unknown;
 }
 
 export interface ApplySummary {
@@ -62,6 +81,8 @@ export interface ApplySummary {
   duplicates: number;
   /** Incoming ops held back because their ts is too far in the future; offer them again later. */
   deferred: number;
+  /** New ops that sorted at or before the newest op already applied (late arrivals or backdating). */
+  backdated: number;
   rebuilt: boolean;
 }
 
@@ -87,6 +108,7 @@ export const REJECT = {
   wrongTeam: 'wrong-team',
   bootstrapId: 'bootstrap-id',
   pinMismatch: 'pin-mismatch',
+  notCreator: 'not-creator',
   validation: 'validation',
   constraint: 'constraint',
 } as const;
@@ -115,8 +137,8 @@ export function deferFutureOps<T>(ops: readonly T[], nowMs: number): { ready: T[
 
 /** A received op content. Valid envelopes take part in the total order; invalid ones are only recorded. */
 type Candidate =
-  | { valid: true; agent: string; id: string; hash: string; op: Op }
-  | { valid: false; agent: string; id: string; hash: string; detail: string };
+  | { valid: true; agent: string; id: string; hash: string; op: Op; pinned: boolean }
+  | { valid: false; agent: string; id: string; hash: string; detail: string; pinned: false };
 
 interface Group {
   winner: Candidate;
@@ -131,32 +153,43 @@ function hashOf(raw: unknown): string {
 }
 
 /** Envelope checks. Null when the op has no usable (agent, id): it cannot even be recorded. */
-function classify(raw: unknown): Candidate | null {
+function classify(raw: unknown, pins: ReadonlyMap<string, string>): Candidate | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== 'string' || r.id.length === 0 || r.id.length > MAX_OP_ID_LENGTH) return null;
   if (typeof r.agent !== 'string' || !AGENT_ID_RE.test(r.agent)) return null;
   const base = { agent: r.agent, id: r.id, hash: hashOf(raw) };
-  const invalid = (detail: string): Candidate => ({ valid: false, ...base, detail });
+  const invalid = (detail: string): Candidate => ({ valid: false, ...base, detail, pinned: false });
   if (r.v !== 1) return invalid('unsupported op version');
   if (!parseHlc(r.ts)) return invalid('malformed timestamp');
   if (!opIdMatchesTs(r.id, r.ts)) return invalid('op id does not match its timestamp');
   if (typeof r.op !== 'string') return invalid('malformed op name');
-  return { valid: true, ...base, op: { v: 1, id: r.id, ts: r.ts as string, agent: r.agent, op: r.op, input: r.input } };
+  const pin = pins.get(r.agent);
+  const key = (r.input as { publicKey?: unknown } | null)?.publicKey;
+  const pinned = BOOTSTRAP_OP_NAMES.has(r.op) && pin !== undefined && pin === key;
+  return { valid: true, ...base, op: { v: 1, id: r.id, ts: r.ts as string, agent: r.agent, op: r.op, input: r.input }, pinned };
 }
 
-/** Equivocation order among contents of one (agent, id): valid envelope first, then lowest hash. */
-function rank(a: { valid: boolean; hash: string }, b: { valid: boolean; hash: string }): number {
+/**
+ * Equivocation order among contents of one (agent, id): valid envelope first, then (bootstrap ops) the
+ * variant whose key matches this replica's pin, then lowest hash.
+ */
+function rank(
+  a: { valid: boolean; hash: string; pinned: boolean }, b: { valid: boolean; hash: string; pinned: boolean },
+): number {
   if (a.valid !== b.valid) return a.valid ? -1 : 1;
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
   return cmp(a.hash, b.hash);
 }
 
-function groupCandidates(raws: readonly unknown[]): { groups: Map<string, Group>; unrecordable: number; copies: number } {
+function groupCandidates(
+  raws: readonly unknown[], pins: ReadonlyMap<string, string>,
+): { groups: Map<string, Group>; unrecordable: number; copies: number } {
   const byKey = new Map<string, Map<string, Candidate>>();
   let unrecordable = 0;
   let copies = 0;
   for (const raw of raws) {
-    const c = classify(raw);
+    const c = classify(raw, pins);
     if (!c) {
       unrecordable++;
       continue;
@@ -269,6 +302,10 @@ class Replayer {
       if (op.id !== op.agent || input?.agentId !== op.agent) {
         return this.reject(REJECT.bootstrapId, 'a bootstrap op must have op id = agent = input.agentId');
       }
+      const creator = this.opts.teamCreator;
+      if (op.op === 'createTeam' && (op.agent !== creator.agentId || input?.publicKey !== creator.publicKey)) {
+        return this.reject(REJECT.notCreator, 'only the team creator named in the team meta can create the team');
+      }
       if (this.opts.teamId !== undefined && input?.teamId !== this.opts.teamId) {
         return this.reject(REJECT.wrongTeam, 'op belongs to a different team');
       }
@@ -292,7 +329,7 @@ class Replayer {
     try {
       const result = await this.registry[op.op](ctx, actor, op.input);
       await sp.releaseSavepoint(SAVEPOINT).execute();
-      return { status: 'applied', notice: OUTCOME_NOTICES[op.op]?.(result) ?? null };
+      return { status: 'applied', notice: OUTCOME_NOTICES[op.op]?.(result, op.input) ?? null };
     } catch (err) {
       const rejection = rejectionOf(this.store.core, err);
       if (rejection === null) throw err;
@@ -346,6 +383,19 @@ async function bumpRebuilds(trx: Trx): Promise<void> {
     .onConflict((oc) => oc.column('key').doUpdateSet({ value })).execute();
 }
 
+async function loadPins(db: Db): Promise<Map<string, string>> {
+  const rows = await db.selectFrom('agent_key_pins').select(['agent_id', 'public_key']).execute();
+  return new Map(rows.map((r) => [r.agent_id, r.public_key]));
+}
+
+/** Migration 007 flags views built under the old row-id scheme; the next apply rebuilds them. */
+async function takeRebuildFlag(trx: Trx): Promise<boolean> {
+  const row = await trx.selectFrom('replica_state').select('value').where('key', '=', 'needs_rebuild').executeTakeFirst();
+  if (!row) return false;
+  await trx.deleteFrom('replica_state').where('key', '=', 'needs_rebuild').execute();
+  return row.value === '1';
+}
+
 // ---- Entry points ---------------------------------------------------------------------------------
 
 /**
@@ -356,27 +406,33 @@ export async function applyOps(store: ReplayStore, ops: unknown[], opts: ApplyOp
   if (!Array.isArray(ops)) throw new TypeError('applyOps: ops must be an array');
   const nowMs = opts.nowMs ?? Date.now();
   const { ready, deferred } = deferFutureOps(ops, nowMs);
-  const { groups, unrecordable, copies } = groupCandidates(ready);
   const trx = await store.ctx.db.startTransaction().execute();
   try {
+    const { groups, unrecordable, copies } = groupCandidates(ready, await loadPins(trx));
     const known = await knownRows(trx, groups);
     const last = await lastEvaluated(trx);
     const fresh: Candidate[] = [];
     const newLosers: Candidate[] = [];
     let duplicates = copies;
-    let rebuild = false;
+    let backdated = 0;
+    let rebuild = await takeRebuildFlag(trx);
     for (const [key, group] of groups) {
       const rows = known.get(key);
       if (!rows) {
         fresh.push(group.winner);
         newLosers.push(...group.losers);
-        if (group.winner.valid && last !== null && compareOps(group.winner.op, last) <= 0) rebuild = true;
+        if (group.winner.valid && last !== null && compareOps(group.winner.op, last) <= 0) {
+          rebuild = true;
+          backdated++;
+        }
         continue;
       }
       const winnerRow = rows.find((r) => r.error !== REJECT.equivocation) ?? rows[0]!;
+      // A recorded winner's pin status is not stored: a pin-matching newcomer forces a rebuild (rare, converges).
+      const recorded = { valid: winnerRow.ts !== null, hash: winnerRow.hash, pinned: false };
       for (const c of [group.winner, ...group.losers]) {
         if (rows.some((r) => r.hash === c.hash)) duplicates++;
-        else if (rank(c, { valid: winnerRow.ts !== null, hash: winnerRow.hash }) < 0) rebuild = true;
+        else if (rank(c, recorded) < 0) rebuild = true;
         else newLosers.push(c);
       }
     }
@@ -384,13 +440,14 @@ export async function applyOps(store: ReplayStore, ops: unknown[], opts: ApplyOp
     let summary: ApplySummary;
     if (rebuild) {
       const all = [...(await opts.source.allOps()), ...ready];
-      summary = { ...(await replayAll(store, trx, all, { ...opts, nowMs })), duplicates, deferred: deferred.length };
+      summary = { ...(await replayAll(store, trx, all, { ...opts, nowMs })), duplicates, deferred: deferred.length, backdated };
     } else {
       const replayer = new Replayer(store, trx, opts);
       for (const c of sortForReplay(fresh)) await replayer.evaluate(c);
       for (const c of newLosers) await replayer.recordLoser(c);
       summary = {
-        applied: replayer.applied, rejected: replayer.rejected + unrecordable, duplicates, deferred: deferred.length, rebuilt: false,
+        applied: replayer.applied, rejected: replayer.rejected + unrecordable, duplicates, deferred: deferred.length, backdated,
+        rebuilt: false,
       };
     }
     await trx.commit().execute();
@@ -419,7 +476,8 @@ async function replayAll(
   store: ReplayStore, trx: Trx, raws: unknown[], opts: ApplyOptions & { nowMs: number },
 ): Promise<ApplySummary> {
   const { ready, deferred } = deferFutureOps(raws, opts.nowMs);
-  const { groups, unrecordable } = groupCandidates(ready);
+  const { groups, unrecordable } = groupCandidates(ready, await loadPins(trx));
+  await takeRebuildFlag(trx);
   await wipe(trx);
   await bumpRebuilds(trx);
   const replayer = new Replayer(store, trx, opts);
@@ -427,7 +485,8 @@ async function replayAll(
   for (const c of sortForReplay(all.map((g) => g.winner))) await replayer.evaluate(c);
   for (const g of all) for (const c of g.losers) await replayer.recordLoser(c);
   return {
-    applied: replayer.applied, rejected: replayer.rejected + unrecordable, duplicates: 0, deferred: deferred.length, rebuilt: true,
+    applied: replayer.applied, rejected: replayer.rejected + unrecordable, duplicates: 0, deferred: deferred.length, backdated: 0,
+    rebuilt: true,
   };
 }
 
@@ -465,6 +524,36 @@ export async function loadAgentKeys(store: ReplayStore): Promise<Map<string, str
   const pins = await store.ctx.db.selectFrom('agent_key_pins').select(['agent_id', 'public_key']).execute();
   for (const p of pins) keys.set(p.agent_id, p.public_key);
   return keys;
+}
+
+/**
+ * Pins a team's meta (its creator's agent id and public key) on first sight. Never replaces a pin.
+ * Returns 'pinned' when this call created it, 'match' when the creator id and key equal the pinned ones,
+ * else 'mismatch'. Other meta fields are stored with the pin but not compared.
+ */
+export async function pinTeamMeta(store: ReplayStore, teamId: string, meta: TeamMetaPin): Promise<PinResult> {
+  if (!AGENT_ID_RE.test(meta.agentId)) throw new Error('invalid creator agent id');
+  if (!isKeyString(meta.publicKey)) throw new Error('invalid creator public key');
+  const inserted = await store.ctx.db.insertInto('team_meta_pins')
+    .values({ team_id: teamId, meta_json: canonicalJson(meta), pinned_at: new Date().toISOString() })
+    .onConflict((oc) => oc.column('team_id').doNothing())
+    .executeTakeFirst();
+  if (Number(inserted.numInsertedOrUpdatedRows ?? 0) > 0) return 'pinned';
+  const pinned = await getPinnedTeamMeta(store, teamId);
+  return pinned && pinned.agentId === meta.agentId && pinned.publicKey === meta.publicKey ? 'match' : 'mismatch';
+}
+
+export async function getPinnedTeamMeta(store: ReplayStore, teamId: string): Promise<TeamMetaPin | undefined> {
+  const row = await store.ctx.db.selectFrom('team_meta_pins').select('meta_json').where('team_id', '=', teamId).executeTakeFirst();
+  return row ? (JSON.parse(row.meta_json) as TeamMetaPin) : undefined;
+}
+
+/** Agent name -> id over the current view, for captureOp (ops address agents by id). */
+export async function loadAgentDirectory(store: ReplayStore, teamId?: string): Promise<AgentDirectory> {
+  let query = store.ctx.db.selectFrom('agents').select(['id', 'name']);
+  if (teamId !== undefined) query = query.where('team_id', '=', teamId);
+  const byName = new Map((await query.execute()).map((r) => [r.name, r.id]));
+  return { idOf: (name) => byName.get(name) };
 }
 
 /** Returns this agent's undelivered notices, oldest first, and marks them delivered. */

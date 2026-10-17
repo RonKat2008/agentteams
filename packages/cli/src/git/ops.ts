@@ -20,7 +20,7 @@ import { z } from 'zod';
 import {
   AssignTaskInput, ClaimFilesInput, ClaimOverrideInput, ClaimTaskInput, CommitInput, CompleteTaskInput, CreateTaskInput,
   MarkMergedInput, MarkReadInput, ReleaseFilesInput, ReplicatedCreateTeamInput, ReplicatedJoinInput, SendMessageInput,
-  SetOrchestratorInput, UpdateTaskInput,
+  SetOrchestratorInput, Ulid, UpdateTaskInput,
 } from '@agentteams/shared';
 import type { Actor, HubContext } from '@agentteams/hub/core';
 import { parseHlc, type Hlc } from './hlc.js';
@@ -30,8 +30,11 @@ export type { Op } from './segment.js';
 
 type Core = typeof import('@agentteams/hub/core');
 
-/** Every op name the log may carry, with the zod schema its input must satisfy. */
-export const OP_SCHEMAS = {
+/**
+ * What callers pass to capture, per op: the same schemas the services and MCP tools use, so agents are
+ * addressed by name.
+ */
+export const CAPTURE_SCHEMAS = {
   createTeam: ReplicatedCreateTeamInput,
   join: ReplicatedJoinInput,
   sendMessage: SendMessageInput,
@@ -49,10 +52,39 @@ export const OP_SCHEMAS = {
   setOrchestrator: SetOrchestratorInput,
 } as const satisfies Record<string, z.ZodType>;
 
+/** An agent targeted by an op, on the wire: its id (names can be squatted or suffixed; ids cannot). */
+const AgentRef = Ulid;
+
+/**
+ * What the log carries, per op. Identical to CAPTURE_SCHEMAS except that every field naming an agent
+ * (TARGET_FIELDS) carries the agent id, resolved at capture time against the author's view.
+ */
+export const OP_SCHEMAS = {
+  ...CAPTURE_SCHEMAS,
+  sendMessage: SendMessageInput.extend({ to: z.union([z.literal('all'), AgentRef]) }),
+  createTask: CreateTaskInput.extend({ assignee: AgentRef.optional() }),
+  assignTask: AssignTaskInput.extend({ assignee: AgentRef }),
+  setOrchestrator: SetOrchestratorInput.extend({ agent: AgentRef }),
+} as const satisfies Record<keyof typeof CAPTURE_SCHEMAS, z.ZodType>;
+
+/** Input fields that name an agent: captured as names, carried and replayed as ids. */
+export const TARGET_FIELDS = {
+  sendMessage: 'to',
+  createTask: 'assignee',
+  assignTask: 'assignee',
+  setOrchestrator: 'agent',
+} as const satisfies Partial<Record<keyof typeof CAPTURE_SCHEMAS, string>>;
+
 export type OpName = keyof typeof OP_SCHEMAS;
 export type BootstrapOpName = 'createTeam' | 'join';
 export type RegularOpName = Exclude<OpName, BootstrapOpName>;
-export type OpInput<N extends OpName> = z.input<(typeof OP_SCHEMAS)[N]>;
+/** Capture-time input (agents by name). */
+export type OpInput<N extends OpName> = z.input<(typeof CAPTURE_SCHEMAS)[N]>;
+
+/** Name to id lookup over the author's current view (see replay.ts loadAgentDirectory). */
+export interface AgentDirectory {
+  idOf(name: string): string | undefined;
+}
 
 /** Ops that register their author's key. They must be the only op of the author's seq-0 segment. */
 export const BOOTSTRAP_OP_NAMES: ReadonlySet<string> = new Set<BootstrapOpName>(['createTeam', 'join']);
@@ -75,13 +107,29 @@ export type OpHandler = (ctx: HubContext, actor: Actor, input: unknown) => Promi
  * - reads (readInbox without its side effect, status, activity, changes, whoOwns, checkFiles).
  */
 export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
+  /** Replay adapter: the services address agents by name; the log carries ids. The view is deterministic. */
+  const nameOf = async (ctx: HubContext, actor: Actor, id: string): Promise<string> => {
+    const row = await ctx.db.selectFrom('agents').select('name')
+      .where('team_id', '=', actor.teamId).where('id', '=', id).executeTakeFirst();
+    if (!row) throw new core.DomainError('not_found', 'the target agent is not in this team');
+    return row.name;
+  };
+  const withName = <K extends string>(field: K) => async (ctx: HubContext, actor: Actor, input: unknown) => {
+    const i = (input ?? {}) as Record<string, unknown>;
+    const v = i[field];
+    if (typeof v !== 'string' || v === 'all') return i;
+    return { ...i, [field]: await nameOf(ctx, actor, v) };
+  };
+  const to = withName('to');
+  const assignee = withName('assignee');
+  const agent = withName('agent');
   return {
     createTeam: (ctx, actor, input) => core.createReplicatedTeam(ctx, actor.id, input as never),
     join: (ctx, actor, input) => core.registerReplicatedAgent(ctx, actor.id, input as never),
-    sendMessage: (ctx, actor, input) => core.sendMessage(ctx, actor, input as never),
+    sendMessage: async (ctx, actor, input) => core.sendMessage(ctx, actor, (await to(ctx, actor, input)) as never),
     markRead: (ctx, actor, input) => core.markRead(ctx, actor, input as never),
-    createTask: (ctx, actor, input) => core.createTask(ctx, actor, input as never),
-    assignTask: (ctx, actor, input) => core.assignTask(ctx, actor, input as never),
+    createTask: async (ctx, actor, input) => core.createTask(ctx, actor, (await assignee(ctx, actor, input)) as never),
+    assignTask: async (ctx, actor, input) => core.assignTask(ctx, actor, (await assignee(ctx, actor, input)) as never),
     claimTask: (ctx, actor, input) => core.claimTask(ctx, actor, input as never),
     updateTask: (ctx, actor, input) => core.updateTask(ctx, actor, input as never),
     completeTask: (ctx, actor, input) => core.completeTask(ctx, actor, input as never),
@@ -90,7 +138,7 @@ export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
     releaseFiles: (ctx, actor, input) => core.releaseFiles(ctx, actor, input as never),
     recordCommit: (ctx, actor, input) => core.recordCommit(ctx, actor, input as never),
     recordClaimOverride: (ctx, actor, input) => core.recordClaimOverride(ctx, actor, input as never),
-    setOrchestrator: (ctx, actor, input) => core.setOrchestrator(ctx, actor, input as never),
+    setOrchestrator: async (ctx, actor, input) => core.setOrchestrator(ctx, actor, (await agent(ctx, actor, input)) as never),
   };
 }
 
@@ -98,7 +146,12 @@ export function buildRegistry(core: Core): Readonly<Record<OpName, OpHandler>> {
  * Ops that can succeed without doing what their author wanted. The op stays applied (the outcome is part
  * of the deterministic view) but its author gets a local notice with the returned text.
  */
-export const OUTCOME_NOTICES: Partial<Record<OpName, (result: unknown) => string | null>> = {
+export const OUTCOME_NOTICES: Partial<Record<OpName, (result: unknown, input: unknown) => string | null>> = {
+  join: (result, input) => {
+    const got = (result as { agentName?: unknown } | null)?.agentName;
+    const wanted = (input as { agentName?: unknown } | null)?.agentName;
+    return typeof got === 'string' && got !== wanted ? `you joined as "${got}" because "${String(wanted)}" was already taken` : null;
+  },
   claimFiles: (result) => {
     const r = result as { granted?: boolean; conflicts?: Array<{ agent: string; glob: string }> } | null;
     if (!r || (r.granted !== false && (r.conflicts?.length ?? 0) === 0)) return null;
@@ -180,20 +233,35 @@ export function rowIdSequence(agent: string, opId: string, ts: string): () => st
 
 // ---- Capture --------------------------------------------------------------------------------------
 
-function validated<N extends OpName>(op: N, input: unknown): unknown {
-  const result = OP_SCHEMAS[op].safeParse(input ?? {});
+function validated(schema: z.ZodType, op: string, input: unknown): unknown {
+  const result = schema.safeParse(input ?? {});
   if (!result.success) throw new Error(`invalid ${op} input: ${z.prettifyError(result.error)}`);
   return result.data;
 }
 
+/** Replaces the agent name in the op's target field (if any) by that agent's id; 'all' stays. */
+function resolveTargets(op: OpName, input: unknown, directory: AgentDirectory): unknown {
+  const field = (TARGET_FIELDS as Partial<Record<OpName, string>>)[op];
+  const i = input as Record<string, unknown>;
+  if (!field || typeof i[field] !== 'string' || i[field] === 'all') return input;
+  const name = i[field] as string;
+  const id = directory.idOf(name);
+  if (!id) throw new Error(`no agent named "${name}" in this team`);
+  return { ...i, [field]: id };
+}
+
 /**
- * Captures a regular op by the given (already registered) agent: ticks the clock, mints the id from that
- * tick and stores the schema-validated input. Throws on invalid input or a bootstrap op name.
+ * Captures a regular op by the given (already registered) agent: validates the input with the service
+ * schema, resolves agent names to ids against `directory` (the author's current view; unknown names throw),
+ * ticks the clock and mints the id from that tick. Throws on invalid input or a bootstrap op name.
  */
-export function captureOp<N extends RegularOpName>(hlc: Pick<Hlc, 'tick'>, agentId: string, op: N, input: OpInput<N>): Op {
+export function captureOp<N extends RegularOpName>(
+  hlc: Pick<Hlc, 'tick'>, agentId: string, op: N, input: OpInput<N>, directory: AgentDirectory,
+): Op {
   if (!isOpName(op) || BOOTSTRAP_OP_NAMES.has(op)) throw new Error(`not a regular op: ${String(op)}`);
   if (!AGENT_ID_RE.test(agentId)) throw new Error('invalid agent id');
-  const data = validated(op, input);
+  const named = validated(CAPTURE_SCHEMAS[op], op, input);
+  const data = validated(OP_SCHEMAS[op], op, resolveTargets(op, named, directory));
   const ts = hlc.tick();
   return { v: 1, id: mintOpId(ts), ts, agent: agentId, op, input: data };
 }
@@ -207,7 +275,7 @@ export function captureBootstrapOp<N extends BootstrapOpName>(
 ): { agentId: string; op: Op } {
   const ts = hlc.tick();
   const id = mintOpId(ts);
-  const data = validated(op, { ...input, agentId: id });
+  const data = validated(OP_SCHEMAS[op], op, { ...input, agentId: id });
   return { agentId: id, op: { v: 1, id, ts, agent: id, op, input: data } };
 }
 

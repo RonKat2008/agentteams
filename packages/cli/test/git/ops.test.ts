@@ -57,11 +57,20 @@ describe('op ids', () => {
 describe('capture', () => {
   it('validates input with the service schema and stores the parsed form', () => {
     const hlc = createHlc(() => T);
-    const op = captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'Dylan-Claude', body: 'hi' });
-    expect(op).toMatchObject({ v: 1, agent: 'AGENT00000001', op: 'sendMessage', input: { to: 'dylan-claude', body: 'hi', kind: 'fyi' } });
+    const DYLAN = '01JABCDEFGHJKMNPQRSTVWXYZ1';
+    const dir = { idOf: (name: string) => (name === 'dylan-claude' ? DYLAN : undefined) };
+    const op = captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'Dylan-Claude', body: 'hi' }, dir);
+    expect(op).toMatchObject({ v: 1, agent: 'AGENT00000001', op: 'sendMessage', input: { to: DYLAN, body: 'hi', kind: 'fyi' } });
+    expect(captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'all', body: 'x' }, dir).input).toMatchObject({ to: 'all' });
+    expect(captureOp(hlc, 'AGENT00000001', 'createTask', { title: 't', assignee: 'dylan-claude' }, dir).input)
+      .toMatchObject({ assignee: DYLAN });
+    expect(captureOp(hlc, 'AGENT00000001', 'assignTask', { task: 1, assignee: 'dylan-claude' }, dir).input)
+      .toMatchObject({ assignee: DYLAN });
+    expect(captureOp(hlc, 'AGENT00000001', 'setOrchestrator', { agent: 'dylan-claude' }, dir).input).toEqual({ agent: DYLAN });
+    expect(() => captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'kai-cursor', body: 'x' }, dir)).toThrow(/no agent named "kai-cursor"/);
     expect(opIdMatchesTs(op.id, op.ts)).toBe(true);
-    expect(() => captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'all', body: '' })).toThrow(/invalid sendMessage input/);
-    expect(() => captureOp(hlc, 'AGENT00000001', 'join' as never, {} as never)).toThrow(/not a regular op/);
+    expect(() => captureOp(hlc, 'AGENT00000001', 'sendMessage', { to: 'all', body: '' }, dir)).toThrow(/invalid sendMessage input/);
+    expect(() => captureOp(hlc, 'AGENT00000001', 'join' as never, {} as never, dir)).toThrow(/not a regular op/);
   });
 
   it('mints the agent id for bootstrap ops from the op id', () => {
