@@ -49,7 +49,8 @@ function base32Encode(data: Buffer): string {
   return out;
 }
 
-function base32Decode(text: string): Buffer | null {
+/** null: a character outside the alphabet; 'partial': the text ends mid-byte (cut short or mistyped). */
+function base32Decode(text: string): Buffer | null | 'partial' {
   let bits = 0;
   let value = 0;
   const out: number[] = [];
@@ -64,7 +65,7 @@ function base32Decode(text: string): Buffer | null {
     }
   }
   // Canonical encoding: fewer than 5 leftover bits, all zero.
-  if (bits >= 5 || (value & ((1 << bits) - 1)) !== 0) return null;
+  if (bits >= 5 || (value & ((1 << bits) - 1)) !== 0) return 'partial';
   return Buffer.from(out);
 }
 
@@ -122,6 +123,7 @@ export function decodeInvite(code: string): Invite {
   if (body.length === 0) throw new InviteError('invite code is empty after the prefix');
   const payload = base32Decode(body);
   if (!payload) throw new InviteError('invite code contains invalid characters');
+  if (payload === 'partial') throw new InviteError('invite code is truncated or mistyped (copy the whole code)');
   if (payload.length < FIXED_LEN + 2) throw new InviteError('invite code is truncated');
   if (payload[0] !== PAYLOAD_VERSION) throw new InviteError('invite code is from an unsupported version of agentteams');
   const key = payload.subarray(1, 1 + KEY_LEN).toString('base64url');

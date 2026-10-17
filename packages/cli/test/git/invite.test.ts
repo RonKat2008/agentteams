@@ -61,6 +61,13 @@ describe('invite', () => {
     expect(() => decodeInvite('at1-' + good.slice(4).toUpperCase())).toThrow(/invalid characters/);
     expect(() => decodeInvite('at1-' + 'a'.repeat(5000))).toThrow(/too long/);
   });
+  it('calls a code cut short mid-character truncated, not "invalid characters"', () => {
+    const body = good.slice(4);
+    // A base32 length of 1, 3 or 6 (mod 8) cannot end a complete code.
+    for (const len of [body.length - 1, body.length - 2, body.length - 3].filter((n) => [1, 3, 6].includes(n % 8))) {
+      expect(() => decodeInvite(`at1-${body.slice(0, len)}`)).toThrow(/truncated or mistyped/);
+    }
+  });
   it('rejects bad schemes on encode', () => {
     const key = newTeamKey();
     for (const remote of ['http://example.com/r.git', 'ftp://x/y', 'relative/path', 'git@host', '--upload-pack=x', '']) {
