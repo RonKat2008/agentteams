@@ -125,7 +125,7 @@ describe('agentteams merge', () => {
     expect(await run('merge', '--test', 'exit 1')).toBe(1);
     const asks = await rebaseAsks();
     expect(asks).toHaveLength(1);
-    expect(asks[0]!.body).toContain(`Task #${t1} conflicts with changes on main`);
+    expect(asks[0]!.body).toContain(`Task #${t1} conflicts with changes on main. Rebase`);
   });
 
   it('removes the integration branch once the base has landed', async () => {
