@@ -135,6 +135,14 @@ export interface ReplicaNoticesTable {
 }
 
 /** Local trust-on-first-use pins of agent signing keys; never wiped, never replaced. */
+export interface ReplicaPendingTable {
+  agent_id: string;
+  op_id: string;
+  ts: string;
+  op_json: string;
+  created_at: string;
+}
+
 export interface AgentKeyPinsTable {
   agent_id: string;
   public_key: string;
@@ -163,6 +171,7 @@ export interface Database {
   replica_notices: ReplicaNoticesTable;
   agent_key_pins: AgentKeyPinsTable;
   team_meta_pins: TeamMetaPinsTable;
+  replica_pending: ReplicaPendingTable;
 }
 
 export type TeamRow = Selectable<TeamsTable>;

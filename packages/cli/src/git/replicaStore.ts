@@ -1,27 +1,31 @@
 /**
- * Durable local files of a git team's replica, in `<git-common-dir>/agentteams/replica/<teamId>/` (0700):
+ * Durable local state of a git team's replica.
  *
- *   pending/<opId>.json      this agent's ops not yet in its own log (written before they are applied locally,
- *                            so a crash never loses one; removed once a segment holding them is committed)
+ * In team.db (local tables that a rebuild never touches):
+ *   replica_pending          this agent's ops not yet in its published log, written in the SAME transaction as
+ *                            the op's local apply (view.ts), removed once a segment holding them is committed
+ *   agent_key_pins / team_meta_pins   TOFU pins (replay.ts pinAgentKey / pinTeamMeta)
+ *
+ * In `<git-common-dir>/agentteams/replica/<teamId>/` (0700), written only by a round under the sync lock:
  *   accepted/<agentId>.jsonl every verified segment, one `{"seq":n,"ops":[...]}` line each (append-only)
- *   log-state.json           per agent: last accepted commit (`head`) and the next expected seq; key pins
- *   deferred.json            verified ops held back from replay for now (future-dated), retried every round
- *
- * Only the sync round (under the sync lock) writes accepted/, log-state.json and deferred.json, and removes
- * pending files. Writers (GitTeamClient, any process) only add pending files.
+ *   log-state.json           per agent: the commit of its last accepted segment (`head`) and the next seq
+ *   deferred.json            verified ops held back from replay for now (future-dated), offered every round
  */
-import { randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Database, Kysely } from '@agentteams/hub/core';
 import type { Op } from './segment.js';
-import { readJson, writeJsonAtomic } from './syncState.js';
+import { readJson, syncDir, writeJsonAtomic } from './syncState.js';
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const OP_ID_FILE_RE = /^[0-9A-Z]{26}\.json$/;
+const AGENT_FILE_RE = /^([0-9A-Za-z]{10,40})\.jsonl$/;
+
+type Db = Kysely<Database>;
 
 export interface AgentLogState {
-  /** Last accepted commit of the agent's ref (fast-forward checks start from here). */
+  /** Commit of the agent's last accepted segment (fast-forward checks start from here). */
   head?: string;
   /** Next seq expected; every seq below it was accepted. */
   nextSeq: number;
@@ -29,8 +33,6 @@ export interface AgentLogState {
 
 export interface LogState {
   agents: Record<string, AgentLogState>;
-  /** TOFU signing-key pins (see compat.ts). */
-  pins: Record<string, string>;
 }
 
 export interface AcceptedSegment { seq: number; ops: Op[] }
@@ -38,31 +40,16 @@ export interface AcceptedSegment { seq: number; ops: Op[] }
 export interface ReplicaFiles {
   readonly dir: string;
   readLogState(): Promise<LogState>;
-  writeLogState(s: LogState): Promise<void>;
-  persistPending(op: Op): Promise<void>;
-  listPending(): Promise<Op[]>;
-  removePending(opIds: string[]): Promise<void>;
+  /** Updates one agent's entry (read-modify-write; callers hold the sync lock). */
+  setAgentState(agentId: string, s: AgentLogState): Promise<void>;
   appendAccepted(agentId: string, segments: AcceptedSegment[]): Promise<void>;
   readAccepted(agentId: string): Promise<AcceptedSegment[]>;
   acceptedAgents(): Promise<string[]>;
+  acceptedOps(): Promise<Op[]>;
   readDeferred(): Promise<Op[]>;
   writeDeferred(ops: Op[]): Promise<void>;
-  /** Pending ops first, then every accepted op: the order that is safe against a concurrent pending->log move. */
-  allOps(): Promise<Op[]>;
-}
-
-const AGENT_FILE_RE = /^([0-9A-Za-z]{10,40})\.jsonl$/;
-
-async function writeDurable(path: string, data: string): Promise<void> {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-  const fh = await open(tmp, 'w', FILE_MODE);
-  try {
-    await fh.writeFile(data);
-    await fh.sync();
-  } finally {
-    await fh.close();
-  }
-  await rename(tmp, path);
+  /** One-time migration from the first Task 7 layout: pins kept in log-state.json, pending ops as files. */
+  takeLegacy(): Promise<{ pins: Record<string, string>; pending: Op[] }>;
 }
 
 async function listDir(dir: string): Promise<string[]> {
@@ -77,37 +64,23 @@ async function listDir(dir: string): Promise<string[]> {
 export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFiles {
   if (!/^[0-9A-Za-z]{10,40}$/.test(teamId)) throw new Error(`invalid team id: ${JSON.stringify(teamId)}`);
   const dir = join(agentteamsDir, 'replica', teamId);
-  const pendingDir = join(dir, 'pending');
   const acceptedDir = join(dir, 'accepted');
+  const legacyPendingDir = join(dir, 'pending');
   const statePath = join(dir, 'log-state.json');
   const deferredPath = join(dir, 'deferred.json');
   const ensure = (d: string) => mkdir(d, { recursive: true, mode: DIR_MODE });
 
+  const readRaw = () => readJson<{ agents?: Record<string, AgentLogState>; pins?: Record<string, string> }>(statePath, {});
+
   const files: ReplicaFiles = {
     dir,
     async readLogState() {
-      const s = await readJson<Partial<LogState>>(statePath, {});
-      return { agents: s.agents ?? {}, pins: s.pins ?? {} };
+      return { agents: (await readRaw()).agents ?? {} };
     },
-    async writeLogState(s) {
+    async setAgentState(agentId, s) {
+      const raw = await readRaw();
       await ensure(dir);
-      await writeJsonAtomic(statePath, s);
-    },
-    async persistPending(op) {
-      await ensure(pendingDir);
-      await writeDurable(join(pendingDir, `${op.id}.json`), JSON.stringify(op));
-    },
-    async listPending() {
-      const ops: Op[] = [];
-      for (const name of (await listDir(pendingDir)).filter((n) => OP_ID_FILE_RE.test(n)).sort()) {
-        try {
-          ops.push(JSON.parse(await readFile(join(pendingDir, name), 'utf8')) as Op);
-        } catch { /* removed concurrently, or torn: a torn file was never acknowledged to the caller */ }
-      }
-      return ops.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    },
-    async removePending(opIds) {
-      for (const id of opIds) await unlink(join(pendingDir, `${id}.json`)).catch(() => undefined);
+      await writeJsonAtomic(statePath, { ...raw, agents: { ...(raw.agents ?? {}), [agentId]: s } });
     },
     async appendAccepted(agentId, segments) {
       if (segments.length === 0) return;
@@ -119,6 +92,7 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
       } finally {
         await fh.close();
       }
+      await syncDir(acceptedDir);
     },
     async readAccepted(agentId) {
       let text: string;
@@ -142,6 +116,13 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
     async acceptedAgents() {
       return (await listDir(acceptedDir)).map((n) => AGENT_FILE_RE.exec(n)?.[1]).filter((x): x is string => Boolean(x)).sort();
     },
+    async acceptedOps() {
+      const ops: Op[] = [];
+      for (const agent of await files.acceptedAgents()) {
+        for (const seg of await files.readAccepted(agent)) ops.push(...seg.ops);
+      }
+      return ops;
+    },
     async readDeferred() {
       try {
         const v: unknown = JSON.parse(await readFile(deferredPath, 'utf8'));
@@ -154,14 +135,53 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
       await ensure(dir);
       await writeJsonAtomic(deferredPath, ops);
     },
-    async allOps() {
-      const pending = await files.listPending();
-      const accepted: Op[] = [];
-      for (const agent of await files.acceptedAgents()) {
-        for (const seg of await files.readAccepted(agent)) accepted.push(...seg.ops);
+    async takeLegacy() {
+      const raw = await readRaw();
+      const pins = raw.pins ?? {};
+      const pending: Op[] = [];
+      const names = (await listDir(legacyPendingDir)).filter((n) => OP_ID_FILE_RE.test(n));
+      for (const name of names) {
+        try {
+          pending.push(JSON.parse(await readFile(join(legacyPendingDir, name), 'utf8')) as Op);
+        } catch { /* torn: never acknowledged */ }
       }
-      return [...pending, ...accepted];
+      return { pins, pending }; // the caller stores both in team.db, then calls dropLegacy
     },
   };
   return files;
 }
+
+/** Removes the legacy pins and pending files once they are stored in team.db. */
+export async function dropLegacy(files: ReplicaFiles, migratedPendingIds: string[]): Promise<void> {
+  const statePath = join(files.dir, 'log-state.json');
+  const raw = await readJson<{ agents?: Record<string, AgentLogState>; pins?: Record<string, string> }>(statePath, {});
+  if (raw.pins !== undefined) await writeJsonAtomic(statePath, { agents: raw.agents ?? {} });
+  for (const id of migratedPendingIds) await unlink(join(files.dir, 'pending', `${id}.json`)).catch(() => undefined);
+}
+
+// ---- Pending ops in team.db --------------------------------------------------------------------------
+
+export interface PendingKey { agent: string; id: string }
+
+export async function insertPending(db: Db, op: Op, nowIso: string): Promise<void> {
+  await db.insertInto('replica_pending')
+    .values({ agent_id: op.agent, op_id: op.id, ts: op.ts, op_json: JSON.stringify(op), created_at: nowIso })
+    .onConflict((oc) => oc.columns(['agent_id', 'op_id']).doNothing())
+    .execute();
+}
+
+/** Pending ops, oldest first (all local agents, or one). */
+export async function listPending(db: Db, agentId?: string): Promise<Op[]> {
+  let q = db.selectFrom('replica_pending').select('op_json').orderBy('ts').orderBy('agent_id').orderBy('op_id');
+  if (agentId !== undefined) q = q.where('agent_id', '=', agentId);
+  return (await q.execute()).map((r) => JSON.parse(r.op_json) as Op);
+}
+
+export async function removePending(db: Db, keys: PendingKey[]): Promise<void> {
+  for (const k of keys) {
+    await db.deleteFrom('replica_pending').where('agent_id', '=', k.agent).where('op_id', '=', k.id).execute();
+  }
+}
+
+/** Identity of an op is (agent, id). */
+export const opKey = (o: { agent: string; id: string }): string => `${o.agent}\0${o.id}`;

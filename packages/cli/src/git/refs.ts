@@ -311,15 +311,16 @@ export function listFetchedAgents(deps: GitDeps, repo: string, teamId: string): 
   return refNames(deps, repo, `refs/agentteams-remote/${teamId}/agents/`).then((ids) => ids.sort());
 }
 
+export const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
 /** True when `ancestor` is an ancestor of (or equal to) `descendant`. Throws when git cannot tell. */
 export async function isAncestor(deps: GitDeps, repo: string, ancestor: string, descendant: string): Promise<boolean> {
+  if (!SHA_RE.test(ancestor) || !SHA_RE.test(descendant)) throw new Error('isAncestor: invalid commit id');
   const r = await git(deps, repo, ['merge-base', '--is-ancestor', ancestor, descendant]);
   if (r.code === 0) return true;
   if (r.code === 1) return false;
   throw new Error(`git merge-base failed: ${r.stderr.trim()}`);
 }
-
-const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 async function setRef(deps: GitDeps, repo: string, ref: string, sha: string): Promise<void> {
   if (!SHA_RE.test(sha)) throw new Error(`invalid commit: ${JSON.stringify(sha)}`);
@@ -367,4 +368,91 @@ export async function hasFetchedMeta(deps: GitDeps, repo: string, teamId: string
 export async function hasLocalMeta(deps: GitDeps, repo: string, teamId: string): Promise<boolean> {
   assertId('team', teamId);
   return (await resolveRef(deps, repo, localMeta(teamId))) !== null;
+}
+
+/** Agents with a log written in this clone (`refs/agentteams-local`), sorted. */
+export function listLocalAgents(deps: GitDeps, repo: string, teamId: string): Promise<string[]> {
+  assertId('team', teamId);
+  return refNames(deps, repo, `refs/agentteams-local/${teamId}/agents/`).then((ids) => ids.sort());
+}
+
+/** One file change of a log commit, relative to its first parent. */
+export interface LogChange { status: string; path: string; blob: string }
+export interface LogCommit { sha: string; changes: LogChange[] }
+
+/**
+ * The first-parent commits after `from` (exclusive; null = from the root) up to `to`, oldest first, each with its
+ * raw changes. Each honest log commit adds exactly one `ops/<seq>.bin` or rewrites `presence.bin`.
+ * Throws on git errors (including output beyond the exec buffer: a hostile chain is isolated by the caller).
+ */
+export async function logCommits(deps: GitDeps, repo: string, from: string | null, to: string): Promise<LogCommit[]> {
+  if (!SHA_RE.test(to) || (from !== null && !SHA_RE.test(from))) throw new Error('logCommits: invalid commit id');
+  const range = from ? [`${from}..${to}`] : [to];
+  const r = await gitOk(deps, repo, [
+    'log', '--first-parent', '--reverse', '--root', '--no-renames', '--raw', '--no-abbrev', '--format=%x01%H', ...range, '--',
+  ]);
+  const commits: LogCommit[] = [];
+  for (const chunk of r.stdout.split('\x01').slice(1)) {
+    const lines = chunk.split('\n');
+    const sha = lines[0]!.trim();
+    if (!SHA_RE.test(sha)) throw new Error('git log: unexpected output');
+    const changes: LogChange[] = [];
+    for (const line of lines.slice(1)) {
+      const m = /^:\d{6} \d{6} [0-9a-f]+ ([0-9a-f]+) ([A-Z])\d*\t(.*)$/.exec(line);
+      if (m) changes.push({ blob: m[1]!, status: m[2]!, path: m[3]! });
+    }
+    commits.push({ sha, changes });
+  }
+  return commits;
+}
+
+/** Reads blobs whose sizes are already known to be within limits, in one `cat-file --batch`. */
+export async function readBlobs(deps: GitDeps, repo: string, shas: string[]): Promise<Buffer[]> {
+  if (shas.length === 0) return [];
+  if (!shas.every((x) => SHA_RE.test(x))) throw new Error('readBlobs: invalid object id');
+  const r = await gitOk(deps, repo, ['cat-file', '--batch'], { input: `${shas.join('\n')}\n`, binary: true });
+  return parseBatch(r.stdoutBuf ?? Buffer.alloc(0), shas.length);
+}
+
+/** Sizes of blobs (`cat-file --batch-check`), checked before any read. */
+export function sizesOf(deps: GitDeps, repo: string, shas: string[]): Promise<number[]> {
+  if (!shas.every((x) => SHA_RE.test(x))) return Promise.reject(new Error('sizesOf: invalid object id'));
+  return shas.length === 0 ? Promise.resolve([]) : blobSizes(deps, repo, shas);
+}
+
+/**
+ * Restores our own ref on the remote after vandalism: force-pushes our local log, but only if the remote still
+ * points at `observed` (`--force-with-lease`), so a concurrent legitimate update is never overwritten.
+ */
+export async function restoreOwn(
+  deps: GitDeps, repo: string, remote: string, teamId: string, agentId: string, observed: string,
+): Promise<PushResult> {
+  assertId('team', teamId); assertId('agent', agentId);
+  validateRemote(remote);
+  if (!SHA_RE.test(observed)) throw new Error('restoreOwn: invalid commit id');
+  const local = localAgent(teamId, agentId);
+  if (!(await resolveRef(deps, repo, local))) return { ok: false, error: 'nothing to restore' };
+  const dest = remoteAgent(teamId, agentId);
+  const r = await git(deps, repo, ['push', '--quiet', `--force-with-lease=${dest}:${observed}`, '--', remote, `${local}:${dest}`],
+    { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+  return r.code === 0 ? { ok: true } : failure(r);
+}
+
+/** The fetched meta (what the remote holds), size-checked; null when absent or oversized. */
+export async function readFetchedMeta(deps: GitDeps, repo: string, teamId: string, maxBytes: number): Promise<Buffer | null> {
+  assertId('team', teamId);
+  return readSmallFile(deps, repo, fetchedMeta(teamId), META_FILE, maxBytes);
+}
+
+/** The meta this clone wrote (it is the creator), size-checked; null when absent. */
+export async function readLocalMeta(deps: GitDeps, repo: string, teamId: string, maxBytes: number): Promise<Buffer | null> {
+  assertId('team', teamId);
+  return readSmallFile(deps, repo, localMeta(teamId), META_FILE, maxBytes);
+}
+
+async function readSmallFile(deps: GitDeps, repo: string, ref: string, path: string, maxBytes: number): Promise<Buffer | null> {
+  if (!(await resolveRef(deps, repo, ref))) return null;
+  const size = await git(deps, repo, ['cat-file', '-s', `${ref}:${path}`]);
+  if (size.code !== 0 || Number(size.stdout.trim()) > maxBytes) return null;
+  return readFileAt(deps, repo, ref, path);
 }

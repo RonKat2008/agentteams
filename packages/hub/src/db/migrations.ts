@@ -222,6 +222,20 @@ const migrations: Record<string, Migration> = {
         .columns(['team_id', 'agent_id', 'sha', 'branch']).execute();
     },
   },
+  '008_replica_pending': {
+    // Git transport: this agent's ops not yet in its published log. Local like the pins (a rebuild never touches it);
+    // written in the same transaction as the op's local apply, so an op is either applied and queued, or neither.
+    async up(db: Kysely<any>) {
+      await db.schema.createTable('replica_pending')
+        .addColumn('agent_id', 'text', (c) => c.notNull())
+        .addColumn('op_id', 'text', (c) => c.notNull())
+        .addColumn('ts', 'text', (c) => c.notNull())
+        .addColumn('op_json', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'text', (c) => c.notNull())
+        .addPrimaryKeyConstraint('replica_pending_pk', ['agent_id', 'op_id'])
+        .execute();
+    },
+  },
 };
 
 class InCodeMigrationProvider implements MigrationProvider {
