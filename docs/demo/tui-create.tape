@@ -1,8 +1,9 @@
 Source docs/demo/common.tape
 Output assets/tui-create.gif
-Set Height 760
+Set Width 1480
+Set Height 960
 Hide
-Type "export PORT=4747 && source docs/demo/prelude.zsh && docs/demo/setup.sh fresh >/dev/null && cd $R/shop-api && as alice && unfunction agentteams && clear" Enter
+Type "source docs/demo/prelude.zsh && docs/demo/setup.sh fresh >/dev/null && cd $R/alice/shop-api && as alice && unfunction agentteams && clear" Enter
 Sleep 3s
 Show
 Sleep 500ms
@@ -14,11 +15,9 @@ Type "shop-api" Sleep 500ms Enter
 Sleep 1.4s
 # Agent: installed ones are detected and listed first
 Sleep 1s Down Sleep 900ms Down Sleep 900ms Up Sleep 900ms Up Sleep 900ms Enter Sleep 1.2s
-# Repo: local only (no GitHub origin here)
-Enter Sleep 1.2s
-# Hub: local hub on this machine
-Down Sleep 500ms Enter
+# Who will be on this team: people on other computers, through this repo's git remote (the default)
+Sleep 1.4s Down Sleep 1s Up Sleep 900ms Enter
 Sleep 1.4s
 # Name is prefilled from $USER
 Enter
-Sleep 6s
+Sleep 7s

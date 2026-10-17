@@ -14,7 +14,7 @@
     "coverage": "vitest run --coverage",
     "test:pg": "HUB_TEST_DIALECT=pglite vitest run packages/hub --testTimeout=30000 --hookTimeout=30000",
     "test:pg-live": "vitest run packages/hub/test/postgres.live.test.ts",
-    "demo": "pnpm -r build && for t in create log status hook guard tui-create; do vhs docs/demo/$t.tape; done; pkill -f \"bin.js up --port 4790\" || true; docs/demo/tui-join.sh"
+    "demo": "pnpm -r build && for t in create local log status hook guard tui-create; do vhs docs/demo/$t.tape; done; docs/demo/tui-join.sh"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -1,8 +1,8 @@
 // usage: node mcp.mjs <person> <tool> <mcpTool> '<json>'
 import { spawn } from 'node:child_process';
 const [person, tool, name, args = '{}'] = process.argv.slice(2);
-const env = { ...process.env, AGENTTEAMS_HOME: `${process.env.R}/people/${person}` };
-const p = spawn('agentteams', ['mcp', '--tool', tool, '--repo', `${process.env.R}/shop-api`], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+const env = { ...process.env, AGENTTEAMS_HOME: `${process.env.R}/people/${person}`, HOME: `${process.env.R}/home/${person}` };
+const p = spawn('agentteams', ['mcp', '--tool', tool, '--repo', `${process.env.R}/${person}/shop-api`], { env, stdio: ['pipe', 'pipe', 'inherit'] });
 const send = (m) => p.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
 let buf = '';
 p.stdout.on('data', (d) => {
