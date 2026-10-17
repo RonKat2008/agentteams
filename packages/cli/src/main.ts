@@ -11,6 +11,7 @@ import { statusCommand } from './commands/status.js';
 import { syncCommand } from './commands/sync.js';
 import { doneCommand, mergedCommand, prCommand } from './commands/finish.js';
 import { worktreeCommand } from './commands/worktree.js';
+import type { MergeOpts } from './commands/merge.js';
 import type { RunEntryOpts } from './commands/run.js';
 import { realDeps, type CliDeps } from './deps.js';
 import { runPostCommit, runPreCommit } from './gitHooks.js';
@@ -133,6 +134,15 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
   sub('merged').description('Record that a task branch was merged (orchestrator only)')
     .addArgument(taskArg()).addOption(agentOpt()).option('--pr <url>', 'pull request URL')
     .action((task: number, o: { agent?: ToolKind; pr?: string }) => mergedCommand(deps, task, o));
+  sub('merge').description('Merge finished task branches, run the tests and land the result (orchestrator only)')
+    .addOption(agentOpt()).option('--into <branch>', 'branch to merge into (default: the branch checked out in the main checkout)')
+    .option('--test <cmd>', 'test command, run with sh -c (default: detected from package.json, Makefile, Cargo, Go or pytest)')
+    .option('--no-test', 'do not run tests')
+    .option('--no-notify', "do not ask a conflicting task's agent to rebase")
+    .option('--stop-on-conflict', 'stop at the first conflict and leave it in the integration worktree')
+    .option('--dry-run', 'merge and test without updating the branch or recording merges')
+    .option('--push', 'push the branch after landing')
+    .action(async (o: MergeOpts) => { exit.code = await (await import('./commands/merge.js')).mergeCommand(deps, o); });
   const access = sub('access').description('Manage repo access for teammates');
   access.command('grant').exitOverride().description('Invite a teammate\'s GitHub account to the repo with push access')
     .argument('<agent-or-login>').addOption(agentOpt()).option('--yes', 'skip the confirmation prompt (CI only)')
