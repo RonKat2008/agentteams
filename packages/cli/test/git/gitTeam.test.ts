@@ -14,7 +14,10 @@ import { newAgentKeyPair } from '../../src/git/crypto.js';
 import { decodeInvite, encodeInvite } from '../../src/git/invite.js';
 import { createGitMcpServer } from '../../src/git/mcp.js';
 import { inviteUrlOf } from '../../src/git/setup.js';
-import { normalizeRemote, stripCredentials } from '../../src/git/remoteUrl.js';
+import { normalizeRemote, pickRemote, repoNameOf, stripCredentials } from '../../src/git/remoteUrl.js';
+import { cloneProtocols } from '../../src/commands/join.js';
+import { linkFlow, type TuiCommands } from '../../src/tui/flows.js';
+import type { Prompter } from '../../src/tui/prompter.js';
 import { runPreCommit } from '../../src/gitHooks.js';
 import { runHook } from '../../src/hooks.js';
 import { openTeamStore } from '../../src/local/store.js';
@@ -272,5 +275,142 @@ describe('git team: invites and failures', () => {
     const a2 = cli(repoA, a);
     expect(await a2.run('create', 'other', '--agent', 'codex', '--no-install')).toBe(1);
     expect(a2.err.join('\n')).toContain('already has a team');
+  });
+});
+
+/** What a clone holds of a team after a refused join: must be nothing. */
+async function teamTraces(repo: string, teamId: string): Promise<{ refs: string; pins: number; teams: number; replica: boolean }> {
+  const { ctx } = await openTeamStore({ exec: realExec }, repo);
+  return {
+    refs: git(repo, 'for-each-ref', '--format=%(refname)', `refs/agentteams-remote/${teamId}/`, `refs/agentteams-local/${teamId}/`, `refs/agentteams-seen/${teamId}/`),
+    pins: (await ctx.db.selectFrom('team_meta_pins').selectAll().execute()).length,
+    teams: (await ctx.db.selectFrom('teams').selectAll().execute()).length,
+    replica: existsSync(join(repo, '.git', 'agentteams', 'replica', teamId)),
+  };
+}
+
+describe('git team: fix round 1', () => {
+  it('never overwrites a credential: the creator re-running join or create in its own clone is refused', async () => {
+    const { a, code } = await createTeam();
+    const before = await credOf(a);
+    a.err.length = 0;
+    expect(await a.run('join', code, '--no-install')).toBe(1);
+    expect(a.err.join('\n')).toMatch(/already has a claude agent: alice-claude on team "acme".*--agent codex/);
+    expect(await a.run('create', 'other', '--no-install')).toBe(1);
+    expect(await credOf(a)).toEqual(before);
+    expect(git(world.remote, 'for-each-ref', '--format=%(refname)', 'refs/agentteams/').split('\n')).toHaveLength(2); // meta + alice
+  });
+
+  it('a forged-invite join leaves nothing behind, and the real invite then joins in the same clone', async () => {
+    const { code } = await createTeam();
+    const real = decodeInvite(code);
+    const forged = encodeInvite({ ...real, creator: { ...real.creator, publicKey: newAgentKeyPair().publicKey } });
+    const repoB = world.clone('b');
+    const b = cli(repoB);
+    expect(await b.run('join', forged, '--agent', 'codex', '--as', 'bob', '--no-install')).toBe(1);
+    expect(b.err.join('\n')).toContain('does not match this invite code');
+    expect(await teamTraces(repoB, real.teamId)).toEqual({ refs: '', pins: 0, teams: 0, replica: false });
+    // Unrelated work in that clone is not blocked by a leftover pin.
+    expect(await b.run('join', code, '--agent', 'codex', '--as', 'bob', '--no-install')).toBe(0);
+    expect(b.out.at(-1)).toMatch(/^Joined team "acme" as bob-codex /);
+  });
+
+  it('a refused join removes the clone it made', async () => {
+    const { code } = await createTeam();
+    const real = decodeInvite(code);
+    const forged = encodeInvite({ ...real, creator: { ...real.creator, publicKey: newAgentKeyPair().publicKey } });
+    const parent = join(world.tmp, 'work');
+    mkdirSync(parent);
+    const b = cli(parent);
+    expect(await b.run('join', forged, '--agent', 'codex', '--no-install')).toBe(1);
+    expect(existsSync(join(parent, 'remote'))).toBe(false);
+  });
+
+  it('an unsupported team id is refused before anything is cloned', async () => {
+    const { code } = await createTeam();
+    const bad = encodeInvite({ ...decodeInvite(code), teamId: 'abc' });
+    const parent = join(world.tmp, 'work');
+    mkdirSync(parent);
+    const b = cli(parent);
+    expect(await b.run('join', bad, '--no-install')).toBe(1);
+    expect(b.err.join('\n')).toContain('unsupported team id');
+    expect(existsSync(join(parent, 'remote'))).toBe(false);
+  });
+
+  it('an upper-case code joins like the lower-case one', async () => {
+    const { code } = await createTeam();
+    const b = cli(world.clone('b'));
+    expect(await b.run('join', code.toUpperCase(), '--agent', 'codex', '--as', 'bob', '--no-install')).toBe(0);
+  });
+
+  it('the probe round writes nothing: after a join the remote holds the meta and the two real agents only', async () => {
+    const { a, code } = await createTeam();
+    const repoB = world.clone('b');
+    const b = cli(repoB);
+    expect(await b.run('join', code, '--agent', 'codex', '--as', 'bob', '--no-install')).toBe(0);
+    const ids = [(await credOf(a)).git!.agentId, (await credOf(b, 'codex')).git!.agentId].sort();
+    const teamId = (await credOf(a)).git!.teamId;
+    const agents = git(world.remote, 'for-each-ref', '--format=%(refname)', `refs/agentteams/${teamId}/agents/`).split('\n').map((r) => r.split('/').pop()).sort();
+    expect(agents).toEqual(ids);
+    expect(git(repoB, 'for-each-ref', '--format=%(refname)', `refs/agentteams-local/${teamId}/agents/`).split('\n')).toHaveLength(1);
+  });
+
+  it('guards: a local team in a git-team repo, a git join into a repo with another team', async () => {
+    const { a, repoA, code } = await createTeam();
+    const a2 = cli(repoA, a);
+    expect(await a2.run('create', 'solo', '--this-computer', '--agent', 'codex', '--no-install')).toBe(1);
+    expect(a2.err.join('\n')).toContain('already has a git team');
+    const repoC = world.clone('c');
+    const c = cli(repoC);
+    expect(await c.run('create', 'mine', '--this-computer', '--no-install')).toBe(0);
+    const c2 = cli(repoC, c);
+    expect(await c2.run('join', code, '--agent', 'codex', '--no-install')).toBe(1);
+    expect(c2.err.join('\n')).toContain('already has another team ("mine")');
+  });
+
+  it('option conflicts and remote selection', async () => {
+    const repo = seededClone('a');
+    const a = cli(repo);
+    expect(await a.run('create', 'x', '--this-computer', '--hub', 'local', '--no-install')).toBe(1);
+    expect(await a.run('create', 'x', '--this-computer', '--new-repo', '--no-install')).toBe(1);
+    expect(await a.run('create', 'x', '--this-computer', '--remote', 'origin', '--no-install')).toBe(1);
+    expect(a.err.join('\n')).toContain('--remote is for teams shared through git');
+    git(repo, 'remote', 'rename', 'origin', 'up');
+    git(repo, 'remote', 'add', 'fork', 'https://example.invalid/fork.git');
+    await expect(pickRemote({ exec: realExec }, repo)).rejects.toThrow(/several git remotes.*--remote <name>.*fork, up/);
+    await expect(pickRemote({ exec: realExec }, repo, 'nope')).rejects.toThrow(/no git remote named "nope"/);
+    expect(await pickRemote({ exec: realExec }, repo, 'up')).toBe('up');
+    expect(await a.run('create', 'acme', '--remote', 'up', '--no-install')).toBe(0);
+    expect((await credOf(a)).git!.remote).toBe('up');
+  });
+
+  it('repo names and clone protocols are safe', () => {
+    expect(repoNameOf('https://github.com/me/app.git')).toBe('app');
+    expect(repoNameOf('/srv/git/..')).toBeNull();
+    expect(repoNameOf('git@github.com:me/-x')).toBeNull();
+    expect(repoNameOf('/srv/.hidden.git')).toBeNull();
+    expect(cloneProtocols({})).toBe('file:https:ssh');
+    expect(cloneProtocols({ GIT_ALLOW_PROTOCOL: 'https:http' })).toBe('https');
+    expect(cloneProtocols({ GIT_ALLOW_PROTOCOL: 'git' })).toBe('');
+  });
+
+  it('the guided menu links another agent to a git team with the stored code (nothing to paste)', async () => {
+    const { a, code } = await createTeam();
+    const cred = await credOf(a);
+    const joins: Array<[string, unknown]> = [];
+    const asked: string[] = [];
+    const p = {
+      select: async (message: string, choices: Array<{ value: string }>) => { asked.push(message); return choices.find((c) => c.value === 'codex')!.value; },
+      text: async (message: string) => { asked.push(message); return ''; },
+      info: () => {}, success: () => {}, error: () => {}, line: () => {}, box: () => {}, intro: () => {}, outro: () => {}, cancelled: () => {},
+      confirm: async () => false,
+    } as unknown as Prompter;
+    const commands = { join: async (_d: CliDeps, c: string, o: unknown) => { joins.push([c, o]); } } as unknown as TuiCommands;
+    await linkFlow({
+      deps: a.deps, p, commands, tools: [{ tool: 'claude', detected: true }, { tool: 'codex', detected: true }],
+      hasGh: false, linked: [cred], localTeam: false,
+    });
+    expect(asked.some((m) => m.startsWith('Invite code'))).toBe(false);
+    expect(joins).toEqual([[code, { agent: 'codex', install: true, clone: false, as: 'alice' }]]);
   });
 });

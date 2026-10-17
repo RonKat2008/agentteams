@@ -83,6 +83,11 @@ export interface SyncOptions {
   coalesce?: boolean;
   /** Tests only: called right after a phase's assertOwned(). */
   onPhase?: (phase: SyncPhase) => Promise<void>;
+  /**
+   * Fetch, verify and apply only: no own-log check, meta repair, publish, presence write or push. For a joiner
+   * before it has an agent of its own (create/join).
+   */
+  ingestOnly?: boolean;
 }
 
 const emptySummary = (): SyncSummary => ({
@@ -389,16 +394,17 @@ async function runRound(
   if (f.ok) {
     status.lastFetchAt = new Date(now()).toISOString();
     summary.fetched = true;
-    restoreFrom = await checkOwnRemote(deps, repo, view, lock, summary);
+    if (!opts.ingestOnly) restoreFrom = await checkOwnRemote(deps, repo, view, lock, summary);
   } else {
     summary.errors.push(fromGit('fetch', f.error));
   }
   const meta = await checkMeta(deps, repo, view, summary);
-  if (!f.ok) meta.repair = null; // decide repairs only on fresh remote state
+  if (!f.ok || opts.ingestOnly) meta.repair = null; // decide repairs only on fresh remote state
   const ingested = await ingestAll(deps, repo, view, lock, summary);
   await lock.assertOwned();
   if (meta.creator) await applyIngested(view, ingested, meta.creator, meta.firstPin, now, summary);
   await applyPresence(view, now());
+  if (opts.ingestOnly) return;
   for (;;) {
     summary.published += await publishPending(deps, repo, view, lock, opts, summary);
     await writePresence(deps, repo, view, lock, status, now(), summary);

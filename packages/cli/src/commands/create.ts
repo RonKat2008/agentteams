@@ -12,7 +12,7 @@ import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
 import { checkTeamDir, detectGithubSlug, isGitRepo, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
-import { dateOnly } from './shared.js';
+import { dateOnly, refuseExistingCredential } from './shared.js';
 
 /** `inviteExpiresAt` is '' for git teams (their code does not expire); `remoteUrl` is set only for them. */
 export interface CreateResult { teamName: string; inviteCode: string; inviteExpiresAt: string; hubUrl: string; remoteUrl?: string }
@@ -202,6 +202,7 @@ export async function createCommand(deps: CliDeps, name: string, opts: CreateOpt
   if (local && !opts.newRepo && !(await isGitRepo(deps, deps.cwd))) {
     throw new Error('a local team lives in a git repository; run "git init" here first (or pass --hub <url> to use a hub)');
   }
+  if (!opts.newRepo) await refuseExistingCredential(deps, await repoRoot(deps, deps.cwd), opts.agent);
   // Before any side effect (repo creation); hosted hubs need the gh identity once. Local teams have no hub.
   const githubToken = local ? undefined : await githubTokenFor(deps, hubUrlFrom(opts.hub, deps.env), { trustHub: opts.trustHub });
   if (!opts.newRepo) {

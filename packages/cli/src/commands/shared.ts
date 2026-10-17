@@ -1,4 +1,5 @@
-import type { ToolKind } from '@agentteams/shared';
+import { realpath } from 'node:fs/promises';
+import { ToolKind } from '@agentteams/shared';
 import { loadCredentials, resolveCredentialForCwd, type Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { defaultBranch } from '../git.js';
@@ -45,4 +46,24 @@ export async function teamDefaultBranch(
   const recorded = team.repo.defaultBranch;
   const branch = recorded && (await refExists(deps, cwd, recorded)) ? recorded : await defaultBranch(deps, cwd, team.repo.slug);
   return { branch: await assertSafeBranch(deps, cwd, branch, 'default branch'), provider: team.repo.provider };
+}
+
+/**
+ * create/join never overwrite a credential: for a git team the private key in it is the agent's only identity.
+ * Throws when `repoPath` already has an agent for `tool`, naming it and suggesting a free tool.
+ */
+export async function refuseExistingCredential(deps: Pick<CliDeps, 'env' | 'homedir'>, repoPath: string, tool: ToolKind): Promise<void> {
+  const here = await realpath(repoPath).catch(() => repoPath);
+  // An unreadable credentials location (not a directory) holds nothing to overwrite; saving reports it later.
+  const all = await loadCredentials(deps).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOTDIR') return [];
+    throw err;
+  });
+  const inRepo = all.filter((c) => c.repoPath === here);
+  const hit = inRepo.find((c) => c.tool === tool);
+  if (!hit) return;
+  const free = ToolKind.options.find((t) => t !== 'other' && !inRepo.some((c) => c.tool === t)) ?? 'other';
+  throw new Error(
+    `this repo already has a ${tool} agent: ${hit.agentName} on team "${hit.teamName}" (${here}). ` +
+    `To add another agent here, pass --agent <other tool> (e.g. --agent ${free}); credentials are never overwritten`);
 }

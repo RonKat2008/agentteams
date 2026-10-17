@@ -1,17 +1,18 @@
-import { stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { defaultMemberName, MemberName, type InvitePreview, type ToolKind } from '@agentteams/shared';
 import { saveCredential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { decodeInvite, INVITE_PREFIX, InviteError } from '../git/invite.js';
 import { findRemoteFor, repoNameOf } from '../git/remoteUrl.js';
-import { joinGitTeam } from '../git/setup.js';
+import { assertGitTeamId, joinGitTeam } from '../git/setup.js';
 import { HubClient } from '../hubClient.js';
 import { joinLocalTeam, LOCAL_TEAM_LABEL, localInviteMatches } from '../local/team.js';
 import { githubTokenFor } from './hostedAuth.js';
 import { hubLabel, hubUrlFrom } from '../paths.js';
 import { checkTeamDir, detectGithubSlug, isGitRepo, real, repoRoot } from '../repo.js';
 import { printReport, runInstallers } from './install.js';
+import { refuseExistingCredential } from './shared.js';
 
 export interface JoinOpts { agent: ToolKind; as?: string; hub?: string; install: boolean; clone: boolean; dir?: string; trustHub?: boolean }
 
@@ -69,6 +70,7 @@ async function resolveRepoPath(deps: CliDeps, preview: InvitePreview, opts: Join
 async function joinLocally(deps: CliDeps, code: string, opts: JoinOpts): Promise<void> {
   const repoPath = await repoRoot(deps, deps.cwd);
   await checkTeamDir(deps, repoPath);
+  await refuseExistingCredential(deps, repoPath, opts.agent);
   const member = opts.as ?? defaultMemberName(deps.username);
   const res = await joinLocalTeam(deps, repoPath, { inviteCode: code, tool: opts.agent, member });
   const cred = {
@@ -88,20 +90,31 @@ export const UNKNOWN_CODE_HELP =
   '  abcd-efgh-jkmn-pqrs   a team on this computer: run the join inside that team\'s repo\n' +
   '  abcd-efgh-jkmn-pqrs   a team on a hub server: agentteams join <code> --hub <url>';
 
-const GIT_PROTOCOL_ENV = { GIT_ALLOW_PROTOCOL: 'file:git:http:https:ssh' };
+/** The transports an invite can carry (no plain http, so an https remote cannot redirect to it). */
+const CLONE_PROTOCOLS = ['file', 'https', 'ssh'];
+
+/** GIT_ALLOW_PROTOCOL for the clone: ours, narrowed further by a stricter setting of the user's. */
+export function cloneProtocols(env: NodeJS.ProcessEnv): string {
+  const user = env.GIT_ALLOW_PROTOCOL;
+  if (user === undefined) return CLONE_PROTOCOLS.join(':');
+  const allowed = new Set(user.split(':').map((p) => p.trim()).filter(Boolean));
+  return CLONE_PROTOCOLS.filter((p) => allowed.has(p)).join(':');
+}
 
 /** Clones the team's repo; the URL comes from an invite, so only safe transports and `--` before it. */
 async function cloneUrl(deps: CliDeps, url: string, target: string): Promise<void> {
   deps.out(`Cloning ${url} into ${target} (use --no-clone to use this directory instead)`);
-  const res = await deps.exec('git', ['clone', '--quiet', '--', url, target], { env: GIT_PROTOCOL_ENV });
+  const res = await deps.exec('git', ['clone', '--quiet', '--', url, target], { env: { GIT_ALLOW_PROTOCOL: cloneProtocols(deps.env) } });
   if (res.code !== 0) {
     const why = (firstLine(res.stderr) || firstLine(res.stdout) || 'unknown error').replace(/\/\/[^@/\s]+@/g, '//');
     throw new Error(`could not clone ${url} (${why}). Ask the team creator to give you access to the repo, then re-run this command.`);
   }
 }
 
-/** Where a git team's repo lives and which remote (name, or the invite's URL) it syncs through. */
-async function gitRepoFor(deps: CliDeps, url: string, opts: JoinOpts): Promise<{ repoPath: string; remote: string }> {
+/** Where a git team's repo lives, which remote (name, or the invite's URL) it syncs through, and whether we cloned it. */
+interface GitRepo { repoPath: string; remote: string; cloned?: boolean }
+
+async function gitRepoFor(deps: CliDeps, url: string, opts: JoinOpts): Promise<GitRepo> {
   if (await isGitRepo(deps, deps.cwd)) {
     const repoPath = await repoRoot(deps, deps.cwd);
     const remote = await findRemoteFor(deps, repoPath, url);
@@ -124,7 +137,7 @@ async function gitRepoFor(deps: CliDeps, url: string, opts: JoinOpts): Promise<{
     throw new Error(`${target} already exists and is not a clone of ${url}; pass --dir <path>`);
   }
   await cloneUrl(deps, url, target);
-  return { repoPath: await real(target), remote: 'origin' };
+  return { repoPath: await real(target), remote: 'origin', cloned: true };
 }
 
 /** `join at1-...`: a team shared through a git repo (no hub, no GitHub token). */
@@ -137,19 +150,30 @@ async function joinGit(deps: CliDeps, code: string, opts: JoinOpts): Promise<voi
     if (e instanceof InviteError) throw new Error(`invalid invite code: ${e.message}`);
     throw e;
   }
+  // Everything that can be checked without touching the disk, before any clone.
+  assertGitTeamId(invite.teamId);
   const member = MemberName.parse(opts.as ?? defaultMemberName(deps.username));
-  const { repoPath, remote } = await gitRepoFor(deps, invite.remote, opts);
-  await checkTeamDir(deps, repoPath);
-  const res = await joinGitTeam(deps, {
-    repoPath, remote, url: invite.remote, teamId: invite.teamId, teamKey: invite.key, creator: invite.creator, tool: opts.agent, member,
-  });
-  await saveCredential(deps, res.cred);
+  const { repoPath, remote, cloned } = await gitRepoFor(deps, invite.remote, opts);
+  let res;
+  try {
+    await checkTeamDir(deps, repoPath);
+    await refuseExistingCredential(deps, repoPath, opts.agent);
+    res = await joinGitTeam(deps, {
+      repoPath, remote, url: invite.remote, teamId: invite.teamId, teamKey: invite.key, creator: invite.creator, tool: opts.agent, member,
+    });
+    await saveCredential(deps, res.cred);
+  } catch (e) {
+    // A clone this call made holds nothing else: remove it, so a retry starts clean.
+    if (cloned) await rm(repoPath, { recursive: true, force: true }).catch(() => undefined);
+    throw e;
+  }
   deps.out(`Joined team "${res.teamName}" as ${res.cred.agentName} (shared through ${invite.remote}). Repo: ${repoPath}`);
   if (opts.install) printReport(deps, await runInstallers(deps, res.cred));
 }
 
 export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): Promise<void> {
-  if (code.trim().toLowerCase().startsWith(INVITE_PREFIX)) return joinGit(deps, code.trim(), opts);
+  // base32 is case-insensitive: route and decode the lower-case form.
+  if (code.trim().toLowerCase().startsWith(INVITE_PREFIX)) return joinGit(deps, code.trim().toLowerCase(), opts);
   // A code for the team in this repo's local database joins locally; an explicit --hub always means a hub.
   if (opts.hub === undefined && (await localInviteMatches(deps, deps.cwd, code))) return joinLocally(deps, code, opts);
   // No silent fallback to the public hub: a hub must be named (--hub or AGENTTEAMS_HUB).
@@ -160,6 +184,7 @@ export async function joinCommand(deps: CliDeps, code: string, opts: JoinOpts): 
   const githubToken = await githubTokenFor(deps, hubUrl, { trustHub: opts.trustHub }); // before cloning anything
   const repoPath = await resolveRepoPath(deps, preview, opts);
   await checkTeamDir(deps, repoPath);
+  await refuseExistingCredential(deps, repoPath, opts.agent);
   const identity = githubToken ? { githubToken } : { member: opts.as ?? defaultMemberName(deps.username) };
   const res = await client.joinTeam({ inviteCode: code, tool: opts.agent, ...identity });
   const cred = {

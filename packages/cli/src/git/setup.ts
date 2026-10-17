@@ -19,12 +19,12 @@ import { openTeamStore } from '../local/store.js';
 import { newAgentKeyPair, newTeamKey } from './crypto.js';
 import { createHlc } from './hlc.js';
 import { encodeInvite } from './invite.js';
-import { decodeMeta, MAX_META_BYTES, metaPin } from './meta.js';
+import { decodeMeta, MAX_META_BYTES } from './meta.js';
 import { captureBootstrapOp, mintOpId } from './ops.js';
 import { fetchTeam, readFetchedMeta } from './refs.js';
-import { pinTeamMeta, REPLICATED_TABLES, rebuildView, type TeamCreator } from './replay.js';
+import { REPLICATED_TABLES, rebuildView, type TeamCreator } from './replay.js';
 import { remoteFetchUrl, shareableUrl } from './remoteUrl.js';
-import { syncRound, writeBootstrap, type SyncSummary } from './sync.js';
+import { pinTeamMetaFromInvite, syncRound, writeBootstrap, type SyncSummary } from './sync.js';
 import { acquireLock } from './syncState.js';
 import { freeAgentName, openGitView, replayTarget, seededHlc, teamCreatorOf } from './view.js';
 
@@ -197,14 +197,9 @@ const MISMATCH = (url: string) =>
   `the team data shared through ${url} does not match this invite code (its creator differs); refusing to join. ` +
   'Ask the team creator for a fresh invite (agentteams invite show) and check the repo has not been tampered with';
 
-/** Fetches the team, verifies its meta against the invite, pins it and ingests the members (one round). */
+/** Fetches the team, verifies its meta against the invite's pinned creator and ingests the members (one round). */
 async function fetchAndVerify(deps: Deps, input: GitJoinInput, probe: Credential): Promise<{ teamName: string }> {
   const { repoPath, remote, url, teamId, teamKey, creator } = input;
-  const view = await openGitView(deps, probe);
-  // Trust comes from the invite, not from the meta ref on first sight.
-  if ((await pinTeamMeta(view.store, teamId, { agentId: creator.agentId, publicKey: creator.publicKey })) === 'mismatch') {
-    throw new Error(`this clone already trusts a different creator for team ${teamId}; ${MISMATCH(url)}`);
-  }
   const f = await fetchTeam(deps, repoPath, remote, teamId);
   if (!f.ok) throw new Error(`could not fetch the team from ${url}: ${redact((f.error ?? 'git failed').split('\n')[0]!)} (do you have access to the repo?)`);
   const buf = await readFetchedMeta(deps, repoPath, teamId, MAX_META_BYTES);
@@ -212,32 +207,78 @@ async function fetchAndVerify(deps: Deps, input: GitJoinInput, probe: Credential
   const meta = decodeMeta(buf, teamKey, teamId);
   if (!meta) throw new Error(`the team on ${url} does not match this invite code (wrong key, or the team data was altered)`);
   if (meta.agentId !== creator.agentId || meta.publicKey !== creator.publicKey) throw new Error(MISMATCH(url));
-  await pinTeamMeta(view.store, teamId, metaPin(meta));
-  const round = await syncRound(deps, repoPath, probe, { waitMs: LOCK_WAIT_MS });
+  // Ingest only: no agent of ours exists yet, so nothing is published, pushed or written as the probe identity.
+  const round = await syncRound(deps, repoPath, probe, { waitMs: LOCK_WAIT_MS, ingestOnly: true });
   if (!round.fetched) throw new Error(`could not sync with ${url}: ${firstError(round)}`);
+  const view = await openGitView(deps, probe);
   const team = await view.store.ctx.db.selectFrom('teams').select('name').where('id', '=', teamId).executeTakeFirst();
   if (!team) throw new Error(`the team's history on ${url} could not be read yet (${round.problems[0] ?? 'the creator\'s log is missing'})`);
   return { teamName: team.name };
 }
 
+/** Team ids appear in ref names; checked before anything is cloned or fetched. */
+export function assertGitTeamId(teamId: string): void {
+  if (!TEAM_ID_RE.test(teamId)) throw new Error('this invite code names an unsupported team id');
+}
+
+/**
+ * Undoes a join that failed before its push, in a clone that held no team before this call: the invite pin, the
+ * fetched team refs, the replica state and the view rows and key pins the ingest round added.
+ */
+async function discardFetchedTeam(deps: Deps, repo: string, probe: Credential, keyPinsBefore: ReadonlySet<string>): Promise<void> {
+  const { teamId } = probe.git!;
+  const view = await openGitView(deps, probe);
+  const lock = await acquireLock(view.paths.lock, { waitMs: LOCK_WAIT_MS });
+  try {
+    await deleteRefs(deps, repo, ['agentteams-local', 'agentteams-remote', 'agentteams-seen'].map((p) => `refs/${p}/${teamId}/`));
+    await rm(view.files.dir, { recursive: true, force: true });
+    const db = view.store.ctx.db;
+    const added = (await db.selectFrom('agent_key_pins').select('agent_id').execute()).map((r) => r.agent_id).filter((id) => !keyPinsBefore.has(id));
+    await db.transaction().execute(async (trx) => {
+      for (const table of REPLICATED_TABLES) await trx.deleteFrom(table).execute();
+      await trx.deleteFrom('team_meta_pins').where('team_id', '=', teamId).execute();
+      if (added.length > 0) await trx.deleteFrom('agent_key_pins').where('agent_id', 'in', added).execute();
+      await trx.deleteFrom('replica_notices').where('agent_id', '=', probe.git!.agentId).execute();
+    });
+  } finally {
+    await lock?.release();
+  }
+}
+
 export async function joinGitTeam(deps: Deps, input: GitJoinInput): Promise<GitSetupResult & { teamName: string }> {
   const { repoPath, remote, url, teamId, teamKey, creator, tool, member } = input;
-  if (!TEAM_ID_RE.test(teamId)) throw new Error('this invite code names an unsupported team id');
+  assertGitTeamId(teamId);
   const existing = await teamInRepo(deps, repoPath);
   if (existing && existing.id !== teamId) {
     throw new Error(`this repo already has another team ("${existing.name}"); a repo holds one team (clone the repo elsewhere with --dir)`);
   }
   const keys = newAgentKeyPair();
-  // The agent id is the join op's id, which needs the free name first: the pre-join round runs as a probe identity
-  // that never writes a log (a round only writes presence and pushes for an agent with a local log).
+  // The agent id is the join op's id, which needs the free name first: the pre-join round runs ingest-only under a
+  // probe identity that never writes anything.
   const probe: Credential = {
     repoPath, tool, hubUrl: '', teamName: '', agentName: '', apiKey: '', createdAt: new Date().toISOString(),
     transport: 'git', git: { teamId, agentId: mintOpId(createHlc().tick()), remote, teamKey, ...keys },
   };
-  const { teamName } = await fetchAndVerify(deps, input, probe);
-  const view = await openGitView(deps, probe);
-  const agentName = await freeAgentName(view.store, teamId, `${member}-${tool}`);
-  const { agentId, op } = captureBootstrapOp(await seededHlc(view), 'join', { teamId, member, tool, agentName, publicKey: keys.publicKey });
+  const probeView = await openGitView(deps, probe);
+  const keyPinsBefore = new Set((await probeView.store.ctx.db.selectFrom('agent_key_pins').select('agent_id').execute()).map((r) => r.agent_id));
+  // Trust comes from the invite, not from the meta ref on first sight.
+  const pinned = await pinTeamMetaFromInvite(probeView.store, teamId, creator);
+  if (pinned === 'mismatch') {
+    throw new Error(`this clone already trusts a different creator for team ${teamId}; ${MISMATCH(url)}. To join anyway, use a fresh clone`);
+  }
+  let teamName: string;
+  let agentName: string;
+  let op;
+  let agentId: string;
+  try {
+    ({ teamName } = await fetchAndVerify(deps, input, probe));
+    agentName = await freeAgentName(probeView.store, teamId, `${member}-${tool}`);
+    ({ agentId, op } = captureBootstrapOp(await seededHlc(probeView), 'join', { teamId, member, tool, agentName, publicKey: keys.publicKey }));
+  } catch (err) {
+    // Only a team this call brought into the clone is removed; an existing one (another agent here) stays.
+    if (pinned === 'pinned') await discardFetchedTeam(deps, repoPath, probe, keyPinsBefore).catch(() => undefined);
+    throw err;
+  }
   const cred: Credential = { ...probe, teamName, agentName, git: { ...probe.git!, agentId } };
   let summary: SyncSummary;
   try {
