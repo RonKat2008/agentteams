@@ -95,8 +95,9 @@ agentteams join at1-... --agent codex
 
 Send the code over a private channel: **it is a password** (see Security). Teammates need push access to the repo
 the way they already do, and nothing else: no account with us, no GitHub login, any git host works. State travels
-through hidden refs in your remote; a background `agentteams sync` runs from the agents' hooks and MCP servers, so
-messages arrive within seconds of the receiver's next action.
+through hidden refs in your remote; a background `agentteams sync` runs from the agents' hooks and MCP servers. A
+hook that finds the view stale starts that fetch, so a new message usually reaches the receiver at its next hook
+after that one.
 
 Then open the agents in the repo. In Codex, run `/hooks` once and approve the agentteams hooks.
 
@@ -160,7 +161,9 @@ Caveats worth knowing:
   Config files that are not valid JSON are left untouched with a warning.
 - API keys live only in `~/.agentteams/credentials.json` (mode 0600) and in Claude Code's own
   `~/.claude.json` entry. They are never written into the repo.
-- Credentials are keyed by the repo's absolute path: after moving a repo, run `agentteams join` again.
+- Credentials are keyed by the repo's absolute path: after moving a repo, move it back or update its `repoPath` in
+  `~/.agentteams/credentials.json`. Joining again would register a new agent and leave the old one (and, for a git
+  team, its key) behind.
 
 </details>
 
@@ -187,8 +190,9 @@ Caveats worth knowing:
   `refs/agentteams/...` in the remote. Each machine pulls the others' logs, verifies them and replays them into its
   own database, so everyone converges on the same board. The code in your repo is never touched or sent.
 - **Hooks** call `agentteams hook` to deliver unread messages and to keep an agent from stopping while an
-  orchestrator command is unread. Hooks only read the local database (they never wait on the network), so they
-  stay fast; a background sync does the fetching and pushing.
+  orchestrator command is unread. Hooks work only on the local database: they read it and write presence, read
+  receipts and delivered notices, and never wait on the network or long on a busy database, so they stay fast; a
+  background sync does the fetching and pushing.
 - **Git hooks** enforce claims and record commits (see Git workflow).
 - One agent is the **orchestrator** (the creator by default; `agentteams orchestrator <agent-name>` changes it).
 
@@ -252,7 +256,8 @@ either way; on a public repo anyone can fetch the ciphertext, so guard the code.
 
 **Do teammates need accounts or tokens?** No. They need to be able to push to the repo, and the invite code.
 
-**Can I mix it up?** One team per repo. A repo with a remote can still use `--this-computer` for an agents-only team.
+**Can I mix it up?** One git team per repo, and a repo holds either a git team or teams for this computer only, not
+both. A repo with a remote can still use `--this-computer` for an agents-only team.
 Teams made with `--hub` are separate (see Advanced).
 
 ## Git workflow
@@ -328,7 +333,8 @@ fi
   shared through the repo's remote (`origin`, or `--remote <name>`) when it has one, otherwise a team for this
   computer only. `join` takes `at1-` codes (git teams) and this repo's own local codes; any other code needs
   `--hub <url>` (or `$AGENTTEAMS_HUB`).
-- `create` only: `--this-computer` makes a team for this computer only even when the repo has a git remote.
+- `create` only: `--this-computer` (or `--local` without `--hub`) makes a team for this computer only even when the
+  repo has a git remote.
   `--new-repo` creates a new GitHub repo with `gh` and makes a git team on it (`--owner <org>` picks the owner;
   `--private` is the default, `--public` makes it public). With `--hub`: `--local` means no GitHub link and
   `--repo <owner/name>` links a GitHub repo.
