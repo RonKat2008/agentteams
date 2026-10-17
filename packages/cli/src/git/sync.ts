@@ -134,7 +134,8 @@ async function verifiedOwnTip(deps: Deps, repo: string, view: GitView, lock: Syn
   const { teamId, agentId } = view.git;
   const tip = await localAgentHead(deps, repo, teamId, agentId);
   if (!tip) return null;
-  const r = await ingestAgents(deps, repo, view, lock, [{ agent: agentId, tip, local: true }], null);
+  // Our own ops in this log were applied locally when they were written.
+  const r = await ingestAgents(deps, repo, view, lock, [{ agent: agentId, tip, local: true }], null, false);
   summary.problems.push(...r.problems);
   summary.ingested += r.ops.length;
   const state = (await view.files.readLogState()).agents[agentId];
@@ -225,14 +226,17 @@ async function checkMeta(deps: Deps, repo: string, view: GitView, summary: SyncS
 
 // ---- Apply and presence ------------------------------------------------------------------------------
 
-async function applyIngested(view: GitView, incoming: Op[], creator: TeamCreator, firstPin: boolean, now: () => number, summary: SyncSummary): Promise<void> {
+/**
+ * Applies the round's ops. `rebuild`: the view may lack accepted ops (the meta was just pinned, or an earlier apply
+ * failed after its ops were accepted), so everything is replayed once. Clears the `unapplied` marker on success.
+ */
+async function applyIngested(view: GitView, incoming: Op[], creator: TeamCreator, rebuild: boolean, now: () => number, summary: SyncSummary): Promise<void> {
   const { files } = view;
   const candidates = [...(await files.readDeferred()), ...incoming, ...(await listPending(view.store.ctx.db))];
   const { ready, deferred } = deferFutureOps(candidates, now());
   await files.writeDeferred(deferred);
   let r;
-  if (firstPin) {
-    // Ops ingested before the meta was pinned were stored but never applied: replay everything once.
+  if (rebuild) {
     const { store, source } = replayTarget(view);
     r = await rebuildView(store, { source, teamCreator: creator, localAgentId: view.git.agentId, teamId: view.git.teamId, nowMs: now() });
   } else {
@@ -242,6 +246,7 @@ async function applyIngested(view: GitView, incoming: Op[], creator: TeamCreator
   summary.rejected += r.rejected;
   summary.backdated += r.backdated;
   summary.rebuilt ||= r.rebuilt;
+  await files.setUnapplied(false);
 }
 
 /** Sets last_seen_at from each agent's last verified presence (never backwards, never in the future). */
@@ -395,6 +400,7 @@ async function runRound(
 ): Promise<void> {
   const { teamId, remote, agentId } = view.git;
   await migrateLegacy(view);
+  const unapplied = (await view.files.readLogState()).unapplied === true;
   // The creator named by our credential is pinned before anything is fetched (review L5).
   const creator = view.git.creator;
   if (creator && (await pinTeamMetaFromInvite(view.store, teamId, creator)) === 'mismatch') {
@@ -415,7 +421,7 @@ async function runRound(
   if (!f.ok || opts.ingestOnly) meta.repair = null; // decide repairs only on fresh remote state
   const ingested = await ingestAll(deps, repo, view, lock, opts, summary);
   await lock.assertOwned();
-  if (meta.creator) await applyIngested(view, ingested, meta.creator, meta.firstPin, now, summary);
+  if (meta.creator) await applyIngested(view, ingested, meta.creator, meta.firstPin || unapplied, now, summary);
   await applyPresence(view, now());
   if (opts.ingestOnly) return;
   for (;;) {
@@ -542,11 +548,12 @@ export async function writeBootstrap(deps: Deps, repo: string, cred: Credential,
     }
     await lock.assertOwned();
     const tip = await appendSegment(deps, repo, teamId, agentId, 0, encodeSegment({ teamId, agent: agentId, seq: 0, ops: [op] }, teamKey, privateKey), null);
+    const unapplied = (await view.files.readLogState()).unapplied === true;
     const r = await ingestAgents(deps, repo, view, lock, [{ agent: agentId, tip, local: true }], null);
     if (r.problems.length > 0) throw new Error(r.problems.join('; '));
     summary.ingested = r.ops.length;
     const creator = await teamCreatorOf(view);
-    if (creator) await applyIngested(view, r.ops, creator, false, now, summary);
+    if (creator) await applyIngested(view, r.ops, creator, unapplied, now, summary);
   } finally {
     await lock.release();
   }

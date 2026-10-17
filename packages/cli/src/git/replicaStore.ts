@@ -52,6 +52,11 @@ export interface LogState {
   rotation?: number;
   /** Unexpected remote team ref names already warned about (bounded). */
   ignoredRefs?: string[];
+  /**
+   * Set before a round records newly accepted ops, cleared once they are applied to team.db: still set at the start
+   * of a round means an apply failed or the process died in between, and that round rebuilds the view.
+   */
+  unapplied?: boolean;
 }
 
 export interface AcceptedSegment { seq: number; ops: Op[]; blob?: string; hash?: string }
@@ -66,6 +71,7 @@ export interface ReplicaFiles {
   setAgentState(agentId: string, s: AgentLogState, expected?: AgentLogState | null): Promise<void>;
   setRotation(n: number): Promise<void>;
   setIgnoredRefs(names: string[]): Promise<void>;
+  setUnapplied(on: boolean): Promise<void>;
   appendAccepted(agentId: string, segments: AcceptedSegment[]): Promise<void>;
   readAccepted(agentId: string): Promise<AcceptedSegment[]>;
   acceptedAgents(): Promise<string[]>;
@@ -95,7 +101,7 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
   const ensure = (d: string) => mkdir(d, { recursive: true, mode: DIR_MODE });
 
   const readRaw = () => readJson<{
-    agents?: Record<string, AgentLogState>; rotation?: number; ignoredRefs?: unknown[]; pins?: Record<string, string>;
+    agents?: Record<string, AgentLogState>; rotation?: number; ignoredRefs?: unknown[]; unapplied?: unknown; pins?: Record<string, string>;
   }>(statePath, {});
 
   const files: ReplicaFiles = {
@@ -105,6 +111,7 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
       return {
         agents: raw.agents ?? {}, rotation: Number.isSafeInteger(raw.rotation) ? raw.rotation : 0,
         ignoredRefs: Array.isArray(raw.ignoredRefs) ? raw.ignoredRefs.filter((x) => typeof x === 'string') : [],
+        unapplied: raw.unapplied === true,
       };
     },
     async setAgentState(agentId, s, expected) {
@@ -124,6 +131,12 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
       const raw = await readRaw();
       await ensure(dir);
       await writeJsonAtomic(statePath, { ...raw, ignoredRefs: names });
+    },
+    async setUnapplied(on) {
+      const raw = await readRaw();
+      if ((raw.unapplied === true) === on) return;
+      await ensure(dir);
+      await writeJsonAtomic(statePath, { ...raw, unapplied: on });
     },
     async appendAccepted(agentId, segments) {
       if (segments.length === 0) return;

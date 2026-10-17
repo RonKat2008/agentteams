@@ -259,9 +259,12 @@ async function isolated(c: Cursor, problems: string[], fn: () => Promise<void>):
 /**
  * Ingests every target whose tip was not fully processed yet. `budget` (shared and decremented) bounds remote
  * agents; null = unbounded (our own log after a write). Refusals are returned, never thrown.
+ * With `toApply`, the caller applies the returned ops: the `unapplied` marker is set before any of them is recorded
+ * (and cleared by the caller after the apply), so a failed apply is redone by a rebuild. Without it the ops are
+ * already in the view (our own log after a write).
  */
 export async function ingestAgents(
-  deps: Deps, repo: string, view: GitView, lock: SyncLock | null, targets: IngestTarget[], budget: Budget | null,
+  deps: Deps, repo: string, view: GitView, lock: SyncLock | null, targets: IngestTarget[], budget: Budget | null, toApply = true,
 ): Promise<IngestResult> {
   const { files } = view;
   const state = await files.readLogState();
@@ -300,6 +303,10 @@ export async function ingestAgents(
     if (!c.failed && c.tree) await isolated(c, problems, () => readPresence(deps, repo, view, c, problems));
   }
   const ops: Op[] = [];
+  if (toApply && cursors.some((c) => c.accepted.length > 0)) {
+    await lock?.assertOwned();
+    await files.setUnapplied(true);
+  }
   for (const c of cursors) {
     const done = !c.failed && c.segDone && c.presenceDone;
     if (!done && !c.failed) morePending = true;
