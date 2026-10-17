@@ -5,6 +5,7 @@ import { logCommand, type LogOpts } from '../commands/log.js';
 import { dateOnly } from '../commands/shared.js';
 import { statusCommand } from '../commands/status.js';
 import type { UpOptions } from '../commands/up.js';
+import type { WatchOpts } from '../commands/watch.js';
 import type { Credential } from '../credentials.js';
 import type { CliDeps } from '../deps.js';
 import { mkdir } from 'node:fs/promises';
@@ -27,6 +28,7 @@ export interface TuiCommands {
   join: (deps: CliDeps, code: string, opts: JoinOpts) => Promise<void>;
   status: (deps: CliDeps, opts: { agent?: ToolKind }) => Promise<void>;
   log: (deps: CliDeps, opts: LogOpts) => Promise<void>;
+  watch: (deps: CliDeps, opts: WatchOpts) => Promise<void>;
   up: (deps: CliDeps, opts: UpOptions) => Promise<void>;
 }
 
@@ -35,6 +37,7 @@ export const realCommands: TuiCommands = {
   join: joinCommand,
   status: statusCommand,
   log: logCommand,
+  watch: async (deps, opts) => (await import('../commands/watch.js')).watchCommand(deps, opts),
   // The hub (hono, sqlite, pg) loads only when a hub is actually started.
   up: async (deps, opts) => (await import('../commands/up.js')).upCommand(deps, opts),
 };
@@ -284,6 +287,10 @@ export async function statusFlow(ctx: TuiContext): Promise<void> {
 
 export async function logFlow(ctx: TuiContext): Promise<void> {
   await ctx.commands.log(ctx.deps, { agent: await pickLinked(ctx), follow: false, limit: LOG_LIMIT });
+}
+
+export async function watchFlow(ctx: TuiContext): Promise<void> {
+  await ctx.commands.watch(ctx.deps, { agent: await pickLinked(ctx) });
 }
 
 export async function upFlow(ctx: TuiContext): Promise<void> {
