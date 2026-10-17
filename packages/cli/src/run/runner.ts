@@ -7,6 +7,8 @@ export interface RunOpts {
   logPath: string;
   /** Start in the background (own process group, not waited for) instead of streaming to this terminal. */
   detach: boolean;
+  /** Foreground only: false writes the output to the log alone (a background supervisor's stdout already is the log). */
+  echo?: boolean;
 }
 /** `code` is null for a detached child (not waited for); `error` is set when it could not be started. */
 export interface RunResult { code: number | null; pid?: number; error?: string }
@@ -32,12 +34,13 @@ function startDetached(cmd: string, args: string[], opts: RunOpts): Promise<RunR
   }
 }
 
-/** Streams the child's output to this terminal and to the log, and resolves with its exit code. */
+/** Streams the child's output to the log (and, unless `echo` is false, this terminal); resolves with its exit code. */
 function startForeground(cmd: string, args: string[], opts: RunOpts): Promise<RunResult> {
   const log = createWriteStream(opts.logPath, { flags: 'a' });
+  const echo = opts.echo !== false;
   const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.on('data', (d: Buffer) => { process.stdout.write(d); log.write(d); });
-  child.stderr.on('data', (d: Buffer) => { process.stderr.write(d); log.write(d); });
+  child.stdout.on('data', (d: Buffer) => { if (echo) process.stdout.write(d); log.write(d); });
+  child.stderr.on('data', (d: Buffer) => { if (echo) process.stderr.write(d); log.write(d); });
   return new Promise((resolve) => {
     child.once('error', (e) => log.end(() => resolve({ code: COMMAND_NOT_FOUND, error: e.message })));
     child.once('close', (code) => log.end(() => resolve({ code: code ?? 1, ...(child.pid ? { pid: child.pid } : {}) })));

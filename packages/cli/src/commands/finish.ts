@@ -36,7 +36,11 @@ export async function doneCommand(deps: CliDeps, task: number, opts: DoneOpts): 
 }
 
 export async function prCommand(deps: CliDeps, task: number, opts: AgentOpts): Promise<void> {
-  const { cred } = (await readableTeams(deps, opts.agent))[0]!; // only reads the task
+  const teams = await readableTeams(deps, opts.agent); // only reads the task
+  if (teams.length > 1) {
+    throw new Error(`this repo is in ${teams.length} teams and task numbers are per team; pass --agent <tool> to pick the team`);
+  }
+  const { cred } = teams[0]!;
   const client = clientFor(deps, cred);
   const { branch: base, provider } = await teamDefaultBranch(deps, client, deps.cwd);
   if (provider !== 'github') throw new Error('pr needs a GitHub-linked team');

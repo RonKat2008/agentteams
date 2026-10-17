@@ -120,6 +120,7 @@ function buildProgram(deps: CliDeps, exit: { code: number }): Command {
     .option('--all', 'start every assigned, unfinished task whose agent is on this computer, in the background')
     .option('--watch', 'keep polling the task board and start runs for new assignments (Ctrl-C stops watching)')
     .option('--interval <seconds>', 'with --watch: seconds between polls', parsePositive('--interval'), DEFAULT_WATCH_INTERVAL_SEC)
+    .addOption(new Option('--supervise').hideHelp())
     .action(async (task: number | undefined, o: RunEntryOpts) => {
       exit.code = await (await import('./commands/run.js')).runEntry(deps, task, o);
     });
