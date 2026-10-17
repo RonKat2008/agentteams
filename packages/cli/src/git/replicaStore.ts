@@ -29,6 +29,8 @@ export interface AgentLogState {
   head?: string;
   /** Next seq expected; every seq below it was accepted. */
   nextSeq: number;
+  /** Time of the last accepted presence (ms); newer presence only. */
+  presenceMs?: number;
 }
 
 export interface LogState {
@@ -40,8 +42,11 @@ export interface AcceptedSegment { seq: number; ops: Op[] }
 export interface ReplicaFiles {
   readonly dir: string;
   readLogState(): Promise<LogState>;
-  /** Updates one agent's entry (read-modify-write; callers hold the sync lock). */
-  setAgentState(agentId: string, s: AgentLogState): Promise<void>;
+  /**
+   * Updates one agent's entry (read-modify-write under the sync lock). With `expectedHead`, a compare-and-swap:
+   * throws when the stored head is no longer that value (another round moved it).
+   */
+  setAgentState(agentId: string, s: AgentLogState, expectedHead?: string): Promise<void>;
   appendAccepted(agentId: string, segments: AcceptedSegment[]): Promise<void>;
   readAccepted(agentId: string): Promise<AcceptedSegment[]>;
   acceptedAgents(): Promise<string[]>;
@@ -77,8 +82,11 @@ export function replicaFiles(agentteamsDir: string, teamId: string): ReplicaFile
     async readLogState() {
       return { agents: (await readRaw()).agents ?? {} };
     },
-    async setAgentState(agentId, s) {
+    async setAgentState(agentId, s, expectedHead) {
       const raw = await readRaw();
+      if (arguments.length >= 3 && raw.agents?.[agentId]?.head !== expectedHead) {
+        throw Object.assign(new Error(`log state of ${agentId} moved unexpectedly; stopping`), { name: 'RefMovedError' });
+      }
       await ensure(dir);
       await writeJsonAtomic(statePath, { ...raw, agents: { ...(raw.agents ?? {}), [agentId]: s } });
     },

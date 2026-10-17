@@ -41,7 +41,7 @@ const fetchedAgent = (t: string, a: string) => `refs/agentteams-remote/${t}/agen
 const NETWORK_TIMEOUT_MS = 20_000;
 const ALLOWED_PROTOCOLS = 'file:git:http:https:ssh';
 
-interface RunOpts { input?: string | Buffer; binary?: boolean; env?: Record<string, string>; timeoutMs?: number }
+interface RunOpts { input?: string | Buffer; binary?: boolean; env?: Record<string, string>; timeoutMs?: number; maxBytes?: number }
 
 /** `remote` may come from an invite code, so it is attacker-controlled. */
 export function validateRemote(remote: string): void {
@@ -113,8 +113,19 @@ async function commitOn(deps: GitDeps, repo: string, ref: string, parent: string
 }
 
 /** Add or replace one file (optionally inside a subdirectory) in the log tree behind `ref`. */
-async function putFile(deps: GitDeps, repo: string, ref: string, dir: string | null, name: string, data: Buffer): Promise<void> {
+/** Thrown when a local ref moved under us (compare-and-swap failure): the caller must stop. */
+export class RefMovedError extends Error {
+  constructor(ref: string) {
+    super(`local ref ${ref} moved unexpectedly; stopping`);
+    this.name = 'RefMovedError';
+  }
+}
+
+async function putFile(
+  deps: GitDeps, repo: string, ref: string, dir: string | null, name: string, data: Buffer, expected?: string | null,
+): Promise<void> {
   const parent = await resolveRef(deps, repo, ref);
+  if (expected !== undefined && parent !== expected) throw new RefMovedError(ref);
   const root = parent ? await lsTree(deps, repo, parent, true) : [];
   const blob = blobEntry(name, await writeBlob(deps, repo, data));
   if (!dir) return commitOn(deps, repo, ref, parent, withEntry(root, blob));
@@ -127,14 +138,22 @@ async function putFile(deps: GitDeps, repo: string, ref: string, dir: string | n
 
 const segName = (seq: number) => `${String(seq).padStart(SEQ_PAD, '0')}.bin`;
 
-export async function appendSegment(deps: GitDeps, repo: string, teamId: string, agentId: string, seq: number, data: Buffer): Promise<void> {
+/**
+ * Appends a segment to our local log. With `expectedTip` (null = the log must not exist yet) the write is a
+ * compare-and-swap: RefMovedError if the log is not at that commit (the final update-ref is CAS on the parent too).
+ */
+export async function appendSegment(
+  deps: GitDeps, repo: string, teamId: string, agentId: string, seq: number, data: Buffer, expectedTip?: string | null,
+): Promise<void> {
   assertId('team', teamId); assertId('agent', agentId); assertSeq(seq);
-  await putFile(deps, repo, localAgent(teamId, agentId), OPS_DIR, segName(seq), data);
+  await putFile(deps, repo, localAgent(teamId, agentId), OPS_DIR, segName(seq), data, expectedTip);
 }
 
-export async function setPresence(deps: GitDeps, repo: string, teamId: string, agentId: string, data: Buffer): Promise<void> {
+export async function setPresence(
+  deps: GitDeps, repo: string, teamId: string, agentId: string, data: Buffer, expectedTip?: string | null,
+): Promise<void> {
   assertId('team', teamId); assertId('agent', agentId);
-  await putFile(deps, repo, localAgent(teamId, agentId), null, PRESENCE_FILE, data);
+  await putFile(deps, repo, localAgent(teamId, agentId), null, PRESENCE_FILE, data, expectedTip);
 }
 
 export async function writeMeta(deps: GitDeps, repo: string, teamId: string, data: Buffer): Promise<void> {
@@ -322,15 +341,25 @@ export async function isAncestor(deps: GitDeps, repo: string, ancestor: string, 
   throw new Error(`git merge-base failed: ${r.stderr.trim()}`);
 }
 
-async function setRef(deps: GitDeps, repo: string, ref: string, sha: string): Promise<void> {
-  if (!SHA_RE.test(sha)) throw new Error(`invalid commit: ${JSON.stringify(sha)}`);
-  await gitOk(deps, repo, ['update-ref', ref, sha]);
+const ZERO_SHA = '0'.repeat(40);
+
+/** `update-ref <ref> <new> [<old>]`; with `expected` (null = must not exist) it is a compare-and-swap. */
+async function setRef(deps: GitDeps, repo: string, ref: string, sha: string, expected?: string | null): Promise<void> {
+  if (!SHA_RE.test(sha) || (expected && !SHA_RE.test(expected))) throw new Error(`invalid commit: ${JSON.stringify(sha)}`);
+  const args = ['update-ref', ref, sha, ...(expected === undefined ? [] : [expected ?? ZERO_SHA])];
+  const r = await git(deps, repo, args);
+  if (r.code !== 0) {
+    if (expected !== undefined) throw new RefMovedError(ref);
+    throw new Error(`git update-ref failed: ${r.stderr.trim()}`);
+  }
 }
 
-/** Points our local log at `sha` (re-seeding it from the fetched copy, e.g. in a fresh clone). */
-export function setLocalAgentHead(deps: GitDeps, repo: string, teamId: string, agentId: string, sha: string): Promise<void> {
+/** Points our local log at `sha` (re-seeding it from the fetched copy), as a CAS from `expected` (null = absent). */
+export function setLocalAgentHead(
+  deps: GitDeps, repo: string, teamId: string, agentId: string, sha: string, expected: string | null,
+): Promise<void> {
   assertId('team', teamId); assertId('agent', agentId);
-  return setRef(deps, repo, localAgent(teamId, agentId), sha);
+  return setRef(deps, repo, localAgent(teamId, agentId), sha, expected);
 }
 
 /** Records that the remote now has `sha` for our ref (after a successful push), so the next round can skip pushing. */
@@ -378,33 +407,6 @@ export function listLocalAgents(deps: GitDeps, repo: string, teamId: string): Pr
 
 /** One file change of a log commit, relative to its first parent. */
 export interface LogChange { status: string; path: string; blob: string }
-export interface LogCommit { sha: string; changes: LogChange[] }
-
-/**
- * The first-parent commits after `from` (exclusive; null = from the root) up to `to`, oldest first, each with its
- * raw changes. Each honest log commit adds exactly one `ops/<seq>.bin` or rewrites `presence.bin`.
- * Throws on git errors (including output beyond the exec buffer: a hostile chain is isolated by the caller).
- */
-export async function logCommits(deps: GitDeps, repo: string, from: string | null, to: string): Promise<LogCommit[]> {
-  if (!SHA_RE.test(to) || (from !== null && !SHA_RE.test(from))) throw new Error('logCommits: invalid commit id');
-  const range = from ? [`${from}..${to}`] : [to];
-  const r = await gitOk(deps, repo, [
-    'log', '--first-parent', '--reverse', '--root', '--no-renames', '--raw', '--no-abbrev', '--format=%x01%H', ...range, '--',
-  ]);
-  const commits: LogCommit[] = [];
-  for (const chunk of r.stdout.split('\x01').slice(1)) {
-    const lines = chunk.split('\n');
-    const sha = lines[0]!.trim();
-    if (!SHA_RE.test(sha)) throw new Error('git log: unexpected output');
-    const changes: LogChange[] = [];
-    for (const line of lines.slice(1)) {
-      const m = /^:\d{6} \d{6} [0-9a-f]+ ([0-9a-f]+) ([A-Z])\d*\t(.*)$/.exec(line);
-      if (m) changes.push({ blob: m[1]!, status: m[2]!, path: m[3]! });
-    }
-    commits.push({ sha, changes });
-  }
-  return commits;
-}
 
 /** Reads blobs whose sizes are already known to be within limits, in one `cat-file --batch`. */
 export async function readBlobs(deps: GitDeps, repo: string, shas: string[]): Promise<Buffer[]> {
@@ -455,4 +457,107 @@ async function readSmallFile(deps: GitDeps, repo: string, ref: string, path: str
   const size = await git(deps, repo, ['cat-file', '-s', `${ref}:${path}`]);
   if (size.code !== 0 || Number(size.stdout.trim()) > maxBytes) return null;
   return readFileAt(deps, repo, ref, path);
+}
+
+// ---- Bounded chain inspection (fix round 2) -----------------------------------------------------------
+
+const rangeArgs = (from: string | null, to: string): string[] => {
+  if (!SHA_RE.test(to) || (from !== null && !SHA_RE.test(from))) throw new Error('invalid commit id');
+  return from ? [`${from}..${to}`] : [to];
+};
+
+/** Number of first-parent commits in `from..to` (output is one number, whatever the chain). */
+export async function countCommits(deps: GitDeps, repo: string, from: string | null, to: string): Promise<number> {
+  const r = await gitOk(deps, repo, ['rev-list', '--first-parent', '--count', ...rangeArgs(from, to), '--'], { maxBytes: 64 });
+  const n = Number(r.stdout.trim());
+  if (!Number.isSafeInteger(n)) throw new Error('git rev-list: unexpected output');
+  return n;
+}
+
+/** The OLDEST `take` first-parent commits of `from..to` (which has `total`), oldest first. Bounded output. */
+export async function oldestCommits(deps: GitDeps, repo: string, from: string | null, to: string, total: number, take: number): Promise<string[]> {
+  if (take <= 0) return [];
+  const skip = Math.max(0, total - take);
+  const r = await gitOk(deps, repo, [
+    'rev-list', '--first-parent', `--skip=${skip}`, `--max-count=${take}`, ...rangeArgs(from, to), '--',
+  ], { maxBytes: take * 42 + 64 });
+  const shas = r.stdout.split('\n').filter(Boolean);
+  if (!shas.every((x) => SHA_RE.test(x))) throw new Error('git rev-list: unexpected output');
+  return shas.reverse();
+}
+
+/** Per-commit diff output limit: an honest log commit changes one file (about 150 bytes). */
+const MAX_DIFF_BYTES = 4096;
+
+export type CommitChanges = LogChange[] | 'too-large';
+
+function parseDiffTree(out: string): Map<string, LogChange[]> {
+  const byCommit = new Map<string, LogChange[]>();
+  const tokens = out.split('\0');
+  let current: LogChange[] | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!.replace(/^\n/, '');
+    if (!t) continue;
+    if (SHA_RE.test(t)) { current = []; byCommit.set(t, current); continue; }
+    const m = /^:\d{6} \d{6} [0-9a-f]+ ([0-9a-f]+) ([A-Z])\d*$/.exec(t);
+    if (m && current) {
+      current.push({ blob: m[1]!, status: m[2]!, path: tokens[++i] ?? '' });
+      continue;
+    }
+    throw new Error('git diff-tree: unexpected output');
+  }
+  return byCommit;
+}
+
+/**
+ * The changes of each commit against its first parent (root commits against the empty tree), with bounded output:
+ * a commit whose diff exceeds MAX_DIFF_BYTES is reported as 'too-large' (never read in full). Empty commits map to [].
+ */
+export async function commitChanges(deps: GitDeps, repo: string, shas: string[]): Promise<Map<string, CommitChanges>> {
+  if (!shas.every((x) => SHA_RE.test(x))) throw new Error('commitChanges: invalid commit id');
+  const result = new Map<string, CommitChanges>(shas.map((x) => [x, []]));
+  const args = ['diff-tree', '--stdin', '-r', '--raw', '--no-abbrev', '--no-renames', '--root', '-m', '--first-parent', '-z'];
+  const all = await git(deps, repo, args, { input: `${shas.join('\n')}\n`, maxBytes: MAX_DIFF_BYTES * Math.max(1, shas.length) });
+  if (all.code === 0) {
+    for (const [sha, changes] of parseDiffTree(all.stdout)) if (result.has(sha)) result.set(sha, changes);
+    return result;
+  }
+  // Something is oversized (or odd): go commit by commit so the honest ones before it still count.
+  for (const sha of shas) {
+    const one = await git(deps, repo, args, { input: `${sha}\n`, maxBytes: MAX_DIFF_BYTES });
+    if (one.code !== 0) { result.set(sha, 'too-large'); break; }
+    result.set(sha, parseDiffTree(one.stdout).get(sha) ?? []);
+  }
+  return result;
+}
+
+/** Object id of the fetched meta ref, whatever its type (a non-commit meta is still "present"). */
+export async function fetchedMetaObject(deps: GitDeps, repo: string, teamId: string): Promise<string | null> {
+  assertId('team', teamId);
+  const r = await git(deps, repo, ['rev-parse', '--verify', '-q', fetchedMeta(teamId)]);
+  return r.code === 0 ? r.stdout.trim() : null;
+}
+
+/**
+ * Creator only: puts our (write-once) meta back on the remote when the remote copy is vandalised. Leased on the
+ * observed remote object, so a concurrent change makes it fail rather than overwrite.
+ */
+export async function restoreMeta(deps: GitDeps, repo: string, remote: string, teamId: string, observed: string): Promise<PushResult> {
+  assertId('team', teamId);
+  validateRemote(remote);
+  if (!SHA_RE.test(observed)) throw new Error('restoreMeta: invalid object id');
+  const local = localMeta(teamId);
+  if (!(await resolveRef(deps, repo, local))) return { ok: false, error: 'no local meta' };
+  const dest = remoteMeta(teamId);
+  const r = await git(deps, repo, ['push', '--quiet', `--force-with-lease=${dest}:${observed}`, '--', remote, `${local}:${dest}`],
+    { env: networkEnv(), timeoutMs: NETWORK_TIMEOUT_MS });
+  return r.code === 0 ? { ok: true } : failure(r);
+}
+
+/** A presence blob by object id, size-checked first; null when missing or over MAX_PRESENCE_BYTES. */
+export async function readPresenceBlob(deps: GitDeps, repo: string, blob: string): Promise<Buffer | null> {
+  if (!SHA_RE.test(blob)) return null;
+  const [size] = await sizesOf(deps, repo, [blob]).catch(() => [Infinity]);
+  if (size === undefined || size > MAX_PRESENCE_BYTES) return null;
+  return (await readBlobs(deps, repo, [blob]))[0] ?? null;
 }
